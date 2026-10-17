@@ -45,6 +45,8 @@ Re-read this first after a restart or context compaction. The session prompt is
   epoch_key, current_epoch, epoch_of, Transition.kind/seq) carry Wave 0 signatures; other lanes
   monkeypatch them in their own tests until the merge.
 
+- 16:00: demo tip moved to 4f1c29e (adds Crusoe Managed Inference as a second LLM provider); not needed by v2.
+
 ## Commands that work
 
 - Tests: `PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m pytest -q` from sv2.
@@ -53,7 +55,8 @@ Re-read this first after a restart or context compaction. The session prompt is
 
 | Milestone | Status |
 |---|---|
-| Wave 0 (bootstrap, contracts) | in progress |
+| Wave 0 (bootstrap, contracts) | done: f7e048c (Opus review: 10 fixes applied before commit) |
+| Wave 1 lanes | launched ~16:10 PDT. rules merged 6d9dfce (16:20). Pending: infra (live), bot, backends, life |
 | M0 open world | not started |
 | M1 natural-terrain actions | not started |
 | M2 life loop | not started |
