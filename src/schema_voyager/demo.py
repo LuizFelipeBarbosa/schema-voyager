@@ -46,17 +46,26 @@ class Runner:
         self.results: list[EpisodeResult] = _load_results(run_dir)
 
     def run(self, system: str, task: Task, seed: int, store: SchemaStore | None = None,
-            library: SkillLibrary | None = None) -> EpisodeResult:
-        world_id = TRAIN_WORLD if task.split == "train" else self._fresh_world_id(system, task, seed)
-        episode_id = f"{system}/{task.task_id}/L{seed}"
+            library: SkillLibrary | None = None, world_id: str | None = None,
+            label: str | None = None) -> EpisodeResult:
+        if world_id is not None and task.split == "train":
+            raise ValueError("world_id is only valid for holdout tasks")
+        episode_world = world_id
+        if episode_world is None:
+            episode_world = TRAIN_WORLD if task.split == "train" else self._fresh_world_id(system, task, seed)
+        suffix = f"/{label}" if label else ""
+        trace_suffix = f"_{label}" if label else ""
+        episode_id = f"{system}/{task.task_id}/L{seed}{suffix}"
+        trace_name = f"{system}_{task.task_id}_L{seed}{trace_suffix}.jsonl"
+        trace_label = f"{system} {task.task_id} L{seed}" + (f" {label}" if label else "")
         log = EpisodeLog(
-            self.run_dir / "episodes" / f"{system}_{task.task_id}_L{seed}.jsonl",
-            label=f"{system} {task.task_id} L{seed}",
+            self.run_dir / "episodes" / trace_name,
+            label=trace_label,
             say=self.backend.say,
         )
         observation = self.backend.reset(task, load_layout(seed, self.run_dir / "layouts"))
         episode = Episode(
-            episode_id=episode_id, system=system, task=task, layout_seed=seed, world_id=world_id,
+            episode_id=episode_id, system=system, task=task, layout_seed=seed, world_id=episode_world,
             backend=self.backend, llm=self.llm, log=log, inventory=observation.inventory,
         )
         if system == "D":
@@ -140,15 +149,16 @@ def run_episode(args: argparse.Namespace) -> None:
     _record_commit(run_dir)
     runner = Runner(make_backend(args.backend), LLM(mode=args.llm, cache_path=LLM_CACHE), run_dir)
     task = get_task(args.task)
+    label = _next_visit_label(runner.results, args.system, task, args.layout) if args.world else None
     if args.system == "D":
         store = SchemaStore.load(args.store) if args.store else SchemaStore()
         if not store.rules:
             seed_prior_rules(store, runner.llm)
-        runner.run("D", task, args.layout, store=store)
-        runner.snapshot(store, "after_episode")
+        runner.run("D", task, args.layout, store=store, world_id=args.world, label=label)
+        runner.snapshot(store, f"after_{label}" if label else "after_episode")
     else:
         library = SkillLibrary.load(args.skills) if args.skills else SkillLibrary()
-        runner.run(args.system, task, args.layout, library=library)
+        runner.run(args.system, task, args.layout, library=library, world_id=args.world, label=label)
         library.save(run_dir / f"skills_{args.system}_after_episode.json")
     print(summarize([r for r in runner.results if r.task_id == task.task_id]))
 
@@ -217,6 +227,15 @@ def _load_results(run_dir: Path) -> list[EpisodeResult]:
     return [EpisodeResult(**raw) for raw in json.loads(path.read_text(encoding="utf-8"))]
 
 
+def _next_visit_label(results: list[EpisodeResult], system: str, task: Task, seed: int) -> str:
+    visits = [
+        result
+        for result in results
+        if result.system == system and result.task_id == task.task_id and result.layout_seed == seed
+    ]
+    return f"visit{len(visits) + 1}"
+
+
 def _seeds(text: str) -> list[int]:
     return [int(part) for part in text.split(",") if part.strip()]
 
@@ -244,6 +263,7 @@ def main(argv: list[str] | None = None) -> None:
     episode.add_argument("--task", default="h3")
     episode.add_argument("--layout", type=int, default=6)
     episode.add_argument("--store", type=Path, help="D: saved store to start from")
+    episode.add_argument("--world", help="holdout world id to revisit")
     episode.add_argument("--skills", type=Path, help="B, B+: saved skill library to start from")
     episode.add_argument("--backend", choices=["sim", "mc"], default="mc")
     episode.add_argument("--llm", choices=["live", "replay", "fake"], default="live")

@@ -69,6 +69,8 @@ class EpisodeLog:
             return f"{tag} {self._c(_GREEN, 'certified')}: {', '.join(d['rules'])}" if d["rules"] else None
         if kind == "skill":
             return f"{tag} skill {d['skill']} cites {', '.join(d['rule_ids'])}"
+        if kind == "learned":
+            return "\n".join(f"{tag} {self._c(_GREEN, line)}" for line in d["lines"])
         if kind == "plan_failed":
             return f"{tag} {self._c(_RED, 'no plan')}: {d['reason']}"
         if kind == "episode_end":
