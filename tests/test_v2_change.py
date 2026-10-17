@@ -193,7 +193,7 @@ def test_the_datapacks_exist_for_1_21_1():
 
     recipe = json.loads((packs / "v2_stick2/data/minecraft/recipe/stick.json").read_text())
     assert recipe["result"] == {"id": "minecraft:stick", "count": 2}
-    assert recipe["pattern"] == ["#", "#"] and recipe["key"] == {"#": "#minecraft:planks"}
+    assert recipe["pattern"] == ["#", "#"] and recipe["key"] == {"#": {"tag": "minecraft:planks"}}
 
 
 # -- a whole simulated life per change ------------------------------------------------
