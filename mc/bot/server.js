@@ -6,7 +6,12 @@ const mineflayer = require('mineflayer')
 const { pathfinder, Movements } = require('mineflayer-pathfinder')
 const { mine } = require('./lib/mine')
 const { craft } = require('./lib/craft')
-const { explore, newSpiral } = require('./lib/explore')
+const { explore, newSpiral, trackWorldBorder } = require('./lib/explore')
+const { probe } = require('./lib/probe')
+const { smelt } = require('./lib/smelt')
+const { look } = require('./lib/targets')
+const { attachEventTracker, createEventLog } = require('./lib/events')
+const { DIRECTIONS } = require('./lib/geometry')
 const {
   inventoryCounts, positionOf, round, scanNearbyBlocks, sleepTicks, stopMoving
 } = require('./lib/world')
@@ -22,9 +27,16 @@ const config = {
 const RECONNECT_DELAY_MS = 3000
 const ACTION_TIMEOUT_MS = 120000
 const MAX_WALK_STEP = 2 // larger per-tick jumps are teleports, not walking
+const SMELT_TIMEOUT_BASE_MS = 30000
+const SMELT_TIMEOUT_PER_ITEM_MS = 12000
 
 let bot = null
 let connected = false
+// Events outlive reconnects (seq increases for the process's lifetime); the
+// tracker and the border follow the current bot.
+const eventLog = createEventLog()
+let tracker = null
+let worldBorder = null
 // skippedTargets: mine targets that failed as unreachable or dig_failed this episode.
 const episode = { origin: null, spiral: newSpiral(), walked: 0, skippedTargets: new Set() }
 
@@ -49,6 +61,8 @@ function connect () {
   })
   bot = current
   current.loadPlugin(pathfinder)
+  tracker = attachEventTracker(current, eventLog)
+  worldBorder = trackWorldBorder(current._client)
 
   current.once('spawn', () => {
     connected = true
@@ -159,19 +173,53 @@ function chat ({ message }) {
 // --- HTTP ------------------------------------------------------------------
 
 const isName = (value) => typeof value === 'string' && value.length > 0
+const isNameList = (value) => Array.isArray(value) && value.every(isName)
+const isPositiveNumber = (value) => typeof value === 'number' && Number.isFinite(value) && value > 0
+
+function validateDigOptions (body) {
+  if (body.dig_through != null && typeof body.dig_through !== 'boolean') return '"dig_through" must be a boolean'
+  if (body.scaffold != null && !isNameList(body.scaffold)) return '"scaffold" must be a list of item names'
+  return null
+}
 
 const validators = {
   none: () => null,
   mine: (body) => {
-    if (!isName(body.block)) return '"block" must be a non-empty string'
+    if (body.blocks != null) {
+      if (!isNameList(body.blocks) || body.blocks.length === 0) return '"blocks" must be a non-empty list of strings'
+    } else if (!isName(body.block)) {
+      return '"block" must be a non-empty string'
+    }
     if (body.tool != null && !isName(body.tool)) return '"tool" must be a string or null'
-    return null
+    return validateDigOptions(body) || (body.max_distance != null && !isPositiveNumber(body.max_distance)
+      ? '"max_distance" must be a positive number'
+      : null)
   },
   craft: (body) => {
     if (!isName(body.item)) return '"item" must be a non-empty string'
     if (body.times != null && !(Number.isInteger(body.times) && body.times > 0)) return '"times" must be a positive integer'
     return null
   },
+  explore: (body) => {
+    if (body.direction != null && !DIRECTIONS.includes(body.direction)) return `"direction" must be one of ${DIRECTIONS.join(', ')}`
+    if (body.distance != null && !isPositiveNumber(body.distance)) return '"distance" must be a positive number'
+    return validateDigOptions(body)
+  },
+  look: (body) => {
+    if (!isNameList(body.blocks) || body.blocks.length === 0) return '"blocks" must be a non-empty list of strings'
+    return body.radius != null && !isPositiveNumber(body.radius) ? '"radius" must be a positive number' : null
+  },
+  smelt: (body) => {
+    if (!isName(body.ingredient) || !isName(body.item) || !isName(body.fuel)) return '"ingredient", "item" and "fuel" must be non-empty strings'
+    return body.times != null && !(Number.isInteger(body.times) && body.times > 0) ? '"times" must be a positive integer' : null
+  },
+  probe: (body) => {
+    const { grid } = body
+    const isSquare = Array.isArray(grid) && (grid.length === 2 || grid.length === 3) && grid.every((row) => Array.isArray(row) && row.length === grid.length)
+    if (!isSquare) return '"grid" must be a 2x2 or 3x3 list of rows'
+    return grid.flat().every((cell) => cell === null || isName(cell)) ? null : 'grid cells must be item names or null'
+  },
+  status: (body) => (body.since != null && !Number.isInteger(body.since) ? '"since" must be an integer' : null),
   chat: (body) => (typeof body.message === 'string' ? null : '"message" must be a string')
 }
 
@@ -185,16 +233,24 @@ function withTimeout (promise, ms) {
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer))
 }
 
+// Answers `res` and writes the request's one log line.
+function responder (path, body, res) {
+  const startedAt = Date.now()
+  return (status, payload) => {
+    res.status(status).json(payload)
+    log(`POST ${path} ${JSON.stringify(body)} -> ${status} in ${Date.now() - startedAt} ms ${JSON.stringify(payload)}`)
+  }
+}
+
 // Registers a POST action: validation, one-at-a-time lock, connection check,
-// timeout, and one log line per request.
-function action (path, validate, handler) {
+// timeout (`timeoutMs`: a number, or a function of the body), the events of
+// the call added to the response, and one log line per request. The handler
+// gets the body and the session {episode, tracker, border}. A death during
+// the action ends it with `quarantined`.
+function action (path, validate, handler, { timeoutMs = ACTION_TIMEOUT_MS } = {}) {
   app.post(path, async (req, res) => {
-    const startedAt = Date.now()
     const body = req.body || {}
-    const respond = (status, payload) => {
-      res.status(status).json(payload)
-      log(`POST ${path} ${JSON.stringify(body)} -> ${status} in ${Date.now() - startedAt} ms ${JSON.stringify(payload)}`)
-    }
+    const respond = responder(path, body, res)
 
     const problem = validate(body)
     if (problem) return respond(400, { ok: false, error: 'bad_request', detail: problem })
@@ -202,18 +258,29 @@ function action (path, validate, handler) {
     if (!connected) return respond(200, { ok: false, error: 'not_connected' })
 
     busy = true
+    const startSeq = eventLog.lastSeq()
+    const respondWithEvents = (payload) => respond(200, { ...payload, events: eventLog.since(startSeq) })
+    tracker.beginAction()
+    const death = tracker.rejectOnDeath()
     try {
-      respond(200, await withTimeout(Promise.resolve().then(() => handler(body)), ACTION_TIMEOUT_MS))
+      const session = { episode, tracker, border: worldBorder }
+      const limitMs = typeof timeoutMs === 'function' ? timeoutMs(body) : timeoutMs
+      const running = Promise.resolve().then(() => handler(body, session))
+      respondWithEvents(await withTimeout(Promise.race([running, death.promise]), limitMs))
     } catch (err) {
       if (!connected) {
         respond(200, { ok: false, error: 'not_connected' })
+      } else if (err.code === 'quarantined') {
+        interruptBot()
+        respondWithEvents({ ok: false, error: 'quarantined', blocks_walked: walked() })
       } else if (err.code === 'timeout') {
         interruptBot()
-        respond(200, { ok: false, error: 'timeout', blocks_walked: walked() })
+        respondWithEvents({ ok: false, error: 'timeout', blocks_walked: walked() })
       } else {
         respond(500, { ok: false, error: 'internal', detail: err.stack })
       }
     } finally {
+      death.dispose()
       busy = false
     }
   })
@@ -226,10 +293,34 @@ app.get('/health', (req, res) => {
   res.json({ ok: true, connected, username: config.username, version: config.version })
 })
 
+// Answers while an action runs: it only reads.
+app.post('/status', (req, res) => {
+  const body = req.body || {}
+  const respond = responder('/status', body, res)
+  const problem = validators.status(body)
+  if (problem) return respond(400, { ok: false, error: 'bad_request', detail: problem })
+  const ready = connected && bot.entity
+  respond(200, {
+    ok: true,
+    connected,
+    alive: Boolean(ready) && bot.health > 0,
+    health: ready ? bot.health : null,
+    food: ready ? bot.food : null,
+    position: ready ? positionOf(bot) : null,
+    events: eventLog.since(body.since ?? 0),
+    last_seq: eventLog.lastSeq()
+  })
+})
+
 action('/observe', validators.none, () => observe())
-action('/mine', validators.mine, async (body) => ({ ...await mine(bot, body, episode.skippedTargets), blocks_walked: walked() }))
-action('/craft', validators.craft, async (body) => ({ ...await craft(bot, body), blocks_walked: walked() }))
-action('/explore', validators.none, async () => ({ ...await explore(bot, episode), blocks_walked: walked() }))
+action('/mine', validators.mine, async (body, session) => ({ ...await mine(bot, body, session), blocks_walked: walked() }))
+action('/craft', validators.craft, async (body, session) => ({ ...await craft(bot, body, session), blocks_walked: walked() }))
+action('/explore', validators.explore, async (body, session) => ({ ...await explore(bot, session, body), blocks_walked: walked() }))
+action('/look', validators.look, (body) => look(bot, body))
+action('/smelt', validators.smelt, async (body, session) => ({ ...await smelt(bot, body, session), blocks_walked: walked() }), {
+  timeoutMs: (body) => SMELT_TIMEOUT_BASE_MS + SMELT_TIMEOUT_PER_ITEM_MS * (body.times ?? 1)
+})
+action('/probe', validators.probe, (body, session) => probe(bot, body, session))
 action('/chat', validators.chat, (body) => chat(body))
 action('/reset_episode', validators.none, () => resetEpisode())
 
