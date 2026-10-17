@@ -225,10 +225,10 @@ class MineflayerBackend:
         inventory = self._known_inventory()
         try:
             request = {
-                "ingredient": normalize.resolve(action.ingredient or "", inventory),
+                "ingredient": _held_member(action.ingredient or "", inventory),
                 "item": normalize.resolve(action.target or "", inventory),
                 "times": action.times,
-                "fuel": normalize.resolve(action.fuel or "", inventory),
+                "fuel": _held_member(action.fuel or "", inventory),
             }
         except ValueError:
             return Outcome(ok=False, error="missing_ingredients", inventory=inventory)
@@ -314,3 +314,13 @@ def _merge_travel(travels: list[dict[str, Any]]) -> dict[str, Any]:
         for key in ("dug", "placed", "picked_up"):
             merged[key].update(travel.get(key) or {})
     return {key: dict(value) if isinstance(value, Counter) else value for key, value in merged.items()}
+
+
+def _held_member(name: str, inventory: dict[str, int]) -> str:
+    """A smelt's fuel or ingredient: for a group, the member held most (ties by name)."""
+    if not name.startswith("#"):
+        return name
+    held = {member: inventory.get(member, 0) for member in normalize.members(name) if inventory.get(member, 0) > 0}
+    if not held:
+        raise ValueError(f"cannot resolve {name}: no matching item is held")
+    return min(held, key=lambda member: (-held[member], member))

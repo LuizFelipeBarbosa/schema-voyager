@@ -57,8 +57,10 @@ def run_schemavoyager(episode: Episode, store: SchemaStore, before_step: BeforeS
 
     while not episode.goal_met and episode.can_act:
         try:
+            visible = normalize.counts(episode.backend.observe().nearby) if episode.natural else None
             plan = make_plan(
-                task.goal_item, task.goal_count, episode.counts, store.usable_rules(episode.world_id), store.skill_for
+                task.goal_item, task.goal_count, episode.counts, store.usable_rules(episode.world_id), store.skill_for,
+                visible=visible,
             )
         except PlanningError as error:
             episode.log.event("plan_failed", reason=str(error))

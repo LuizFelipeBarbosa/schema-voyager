@@ -12,6 +12,7 @@ from collections import Counter
 from dataclasses import dataclass
 from typing import Callable
 
+from . import normalize
 from .models import Action, Rule, Skill
 
 MAX_DEPTH = 12
@@ -41,19 +42,23 @@ def make_plan(
     inventory: dict[str, int],
     rules: list[Rule],
     skill_for: Callable[[str], Skill | None] = lambda item: None,
+    visible: dict[str, int] | None = None,
 ) -> list[PlanStep]:
-    planner = _Planner(rules, skill_for)
+    """`visible` (natural worlds): normalized counts of the block families the agent
+    sees now; among rules producing one item, those it can reach come first."""
+    planner = _Planner(rules, skill_for, visible)
     return planner.achieve(goal_item, goal_count, Counter(inventory), [])
 
 
 class _Planner:
-    def __init__(self, rules: list[Rule], skill_for: Callable[[str], Skill | None]):
+    def __init__(self, rules: list[Rule], skill_for: Callable[[str], Skill | None], visible: dict[str, int] | None):
         self.producers: dict[str, list[Rule]] = {}
         for rule in rules:
             for item, count in rule.yields().items():
                 if count > 0:
                     self.producers.setdefault(item, []).append(rule)
         self.skill_for = skill_for
+        self.visible = visible
 
     def achieve(self, item: str, count: int, inv: Counter, stack: list[str]) -> list[PlanStep]:
         if inv[item] >= count:
@@ -68,7 +73,9 @@ class _Planner:
         preferred = set(skill.rule_ids) if skill else set()
         candidates = sorted(
             candidates,
-            key=lambda r: (r.id not in preferred, r.status != "certified", r.rank, r.id),
+            key=lambda r: (
+                r.id not in preferred, self._sightings(r) == 0, r.status != "certified", -self._sightings(r), r.rank, r.id
+            ),
         )
 
         reasons = []
@@ -87,6 +94,15 @@ class _Planner:
             _replace(inv, trial)
             return steps
         raise PlanningError(f"cannot obtain {item} ({'; '.join(reasons)})")
+
+    def _sightings(self, rule: Rule) -> float:
+        """How many blocks of the rule's subject are in view; crafts and smelts are always
+        within reach. Without a view (v1) every rule ties."""
+        if self.visible is None:
+            return 1
+        if rule.kind != "mine":
+            return math.inf
+        return self.visible.get(normalize.family(rule.subject), 0)
 
     def _craft(self, rule: Rule, item: str, count: int, inv: Counter, stack: list[str]) -> list[PlanStep]:
         runs = math.ceil((count - inv[item]) / rule.yields()[item])
