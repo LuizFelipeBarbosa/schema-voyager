@@ -47,23 +47,44 @@ def _unexpected(step: dict[str, Any]) -> bool:
     return signature is not None and signature[-1] == "no_drop"
 
 
-def summarize(results: list[EpisodeResult]) -> str:
-    """Markdown table: one row per system and task, mean and sd over layouts."""
+def summary_rows(results: list[EpisodeResult]) -> list[dict[str, Any]]:
+    """One row per system and task, ordered by task then system. Each metric
+    is {"mean", "sd"} over layouts (sd is None for one layout, and the whole
+    metric is None when no episode has a value)."""
     groups: dict[tuple[str, str], list[EpisodeResult]] = {}
     for result in results:
         groups.setdefault((result.system, result.task_id), []).append(result)
 
+    rows = []
+    for (system, task_id), group in sorted(groups.items(), key=lambda item: (item[0][1], item[0][0])):
+        after = [r.actions_after_contradiction for r in group if r.actions_after_contradiction is not None]
+        rows.append({
+            "system": system,
+            "task": task_id,
+            "successes": sum(r.success for r in group),
+            "episodes": len(group),
+            "llm_tokens": _stats([r.llm_tokens for r in group]),
+            "llm_calls": _stats([r.llm_calls for r in group]),
+            "actions": _stats([r.actions for r in group]),
+            "blocks_walked": _stats([r.blocks_walked for r in group]),
+            "repeated_failures": _stats([r.repeated_failures for r in group]),
+            "actions_after_contradiction": _stats(after),
+        })
+    return rows
+
+
+def summarize(results: list[EpisodeResult]) -> str:
+    """Markdown table: one row per system and task, mean and sd over layouts."""
     lines = [
         "| System | Task | Success | LLM tokens | LLM calls | Actions | Blocks walked | Repeated failures | Actions after contradiction |",
         "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
-    for (system, task_id), group in sorted(groups.items(), key=lambda item: (item[0][1], item[0][0])):
-        after = [r.actions_after_contradiction for r in group if r.actions_after_contradiction is not None]
+    for row in summary_rows(results):
         lines.append(
-            f"| {system} | {task_id} | {sum(r.success for r in group)}/{len(group)} "
-            f"| {_mean_sd([r.llm_tokens for r in group])} | {_mean_sd([r.llm_calls for r in group])} "
-            f"| {_mean_sd([r.actions for r in group])} | {_mean_sd([r.blocks_walked for r in group])} "
-            f"| {_mean_sd([r.repeated_failures for r in group])} | {_mean_sd(after) if after else '-'} |"
+            f"| {row['system']} | {row['task']} | {row['successes']}/{row['episodes']} "
+            f"| {_mean_sd(row['llm_tokens'])} | {_mean_sd(row['llm_calls'])} "
+            f"| {_mean_sd(row['actions'])} | {_mean_sd(row['blocks_walked'])} "
+            f"| {_mean_sd(row['repeated_failures'])} | {_mean_sd(row['actions_after_contradiction'])} |"
         )
     lines += [
         "",
@@ -76,11 +97,16 @@ def summarize(results: list[EpisodeResult]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _mean_sd(values: list[float]) -> str:
+def _stats(values: list[float]) -> dict[str, float | None] | None:
     if not values:
+        return None
+    return {"mean": statistics.fmean(values), "sd": statistics.stdev(values) if len(values) > 1 else None}
+
+
+def _mean_sd(stats: dict[str, float | None] | None) -> str:
+    if stats is None:
         return "-"
-    mean = statistics.fmean(values)
-    if len(values) == 1:
+    mean, sd = stats["mean"], stats["sd"]
+    if sd is None:
         return f"{mean:.0f}" if mean >= 100 else f"{mean:.1f}"
-    sd = statistics.stdev(values)
     return f"{mean:.0f} ± {sd:.0f}" if mean >= 100 else f"{mean:.1f} ± {sd:.1f}"

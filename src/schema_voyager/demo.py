@@ -5,6 +5,8 @@
     schema-voyager arena --layout 6 --task h3   # build a layout on the server
     schema-voyager spectate <player>            # put your client in spectator mode
     schema-voyager report runs/<run>
+    schema-voyager panel                        # trace panel on http://127.0.0.1:8765
+    schema-voyager export runs/<run>            # results/ folder and the field guide's numbers
 """
 
 from __future__ import annotations
@@ -257,6 +259,13 @@ def main(argv: list[str] | None = None) -> None:
     report = sub.add_parser("report", help="print the results table of a run")
     report.add_argument("run_dir", type=Path)
 
+    panel = sub.add_parser("panel", help="serve the trace panel, which replays or follows episode traces")
+    panel.add_argument("--port", type=int, default=8765)
+
+    export = sub.add_parser("export", help="copy a finished run into results/ and update the field guide's numbers")
+    export.add_argument("run_dir", type=Path)
+    export.add_argument("--note", default="", help="shown with the results, e.g. why an episode was rerun")
+
     args = parser.parse_args(argv)
     try:
         if args.command == "demo":
@@ -277,6 +286,14 @@ def main(argv: list[str] | None = None) -> None:
             print("\n".join(Arena().spectate(args.player)))
         elif args.command == "report":
             print(summarize(_load_results(args.run_dir)))
+        elif args.command == "panel":
+            from .panel import serve_panel
+
+            serve_panel(args.port)
+        elif args.command == "export":
+            from .export import export_run
+
+            export_run(args.run_dir, args.note)
     except LLMError as error:
         sys.exit(f"LLM error: {error}")
 
