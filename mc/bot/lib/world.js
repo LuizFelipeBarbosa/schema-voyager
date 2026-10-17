@@ -3,6 +3,7 @@
 
 const { Vec3 } = require('vec3')
 const { goals } = require('mineflayer-pathfinder')
+const { isInCell } = require('./geometry')
 
 const TICK_MS = 50
 const SCAN_RADIUS = 16
@@ -44,6 +45,10 @@ function inventoryCounts (bot) {
   return counts
 }
 
+function addCount (counts, name, amount = 1) {
+  counts[name] = (counts[name] || 0) + amount
+}
+
 function countDelta (before, after) {
   const delta = {}
   for (const name of new Set([...Object.keys(before), ...Object.keys(after)])) {
@@ -59,6 +64,21 @@ function countGains (before, after) {
     if (diff > 0) gains[name] = diff
   }
   return gains
+}
+
+// A no-op click with a stale state id makes the server send the whole window
+// back (Mineflayer predicts crafting results client-side). Gives up after 2 s.
+async function resyncWindow (bot, window) {
+  if (!bot._syncWindow) return
+  let timer = null
+  const timeout = new Promise((resolve) => { timer = setTimeout(resolve, 2000) })
+  try {
+    await Promise.race([bot._syncWindow(window), timeout])
+  } catch (err) {
+    console.log(`warn: window resync failed: ${err.message}`)
+  } finally {
+    clearTimeout(timer)
+  }
 }
 
 function findInventoryItem (bot, name) {
@@ -196,18 +216,23 @@ function readDroppedStack (entity) {
   }
 }
 
-// Starts recording item entities that spawn within DROP_RADIUS of the centre
-// of `blockPos`. Each entity's stack is taken from its first item metadata
-// (later merges between drops would otherwise double count). stop() returns
-// {counts, entities}.
-function watchDrops (bot, blockPos) {
+// Starts recording item entities that spawn near `blockPos`: within
+// DROP_RADIUS of the block centre, or with `inCell` only those that spawn in
+// the block's own cell (so drops of neighbouring digs, leaf decay or gravel
+// are not counted). Each entity's stack is taken from its first item metadata
+// (later merges between drops would otherwise double count). `onDrop(entity)`
+// is called for every recorded entity as it spawns, `onLost(entity)` for those
+// whose stack could not be read. stop() returns {counts, entities}.
+function watchDrops (bot, blockPos, { inCell = false, onDrop = null, onLost = null } = {}) {
   const centre = blockPos.offset(0.5, 0.5, 0.5)
   const seen = new Map() // entity id -> {entity, stack}
 
   const onSpawn = (entity) => {
     if (entity.name !== 'item') return
-    if (entity.position.distanceTo(centre) > DROP_RADIUS) return
+    const belongs = inCell ? isInCell(entity.position, blockPos) : entity.position.distanceTo(centre) <= DROP_RADIUS
+    if (!belongs) return
     seen.set(entity.id, { entity, stack: readDroppedStack(entity) })
+    if (onDrop) onDrop(entity)
   }
   const onUpdate = (entity) => {
     const record = seen.get(entity.id)
@@ -226,9 +251,10 @@ function watchDrops (bot, blockPos) {
         const stack = record.stack || readDroppedStack(record.entity)
         if (!stack) {
           console.log(`warn: item entity ${record.entity.id} near ${blockPos} has no item metadata`)
+          if (onLost) onLost(record.entity)
           continue
         }
-        counts[stack.name] = (counts[stack.name] || 0) + stack.count
+        addCount(counts, stack.name, stack.count)
         entities.push(record.entity)
       }
       return { counts, entities }
@@ -286,15 +312,20 @@ async function pickUpEntities (bot, entities) {
 module.exports = {
   AIR_BLOCKS,
   TICK_MS,
+  addCount,
+  blockNameAt,
   countDelta,
   countGains,
   emptyHand,
   findInventoryItem,
   findNearestExposedBlock,
   gotoGoal,
+  hasAirNeighbour,
   inventoryCounts,
   pickUpEntities,
   positionOf,
+  readDroppedStack,
+  resyncWindow,
   round,
   scanNearbyBlocks,
   settleInventory,

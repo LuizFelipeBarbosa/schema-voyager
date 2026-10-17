@@ -1,21 +1,17 @@
 // POST /craft: pick an affordable recipe, get a crafting table if the recipe
 // needs one (placing and retrieving the bot's own if none is near), craft,
-// and report the inventory change once the server has confirmed it.
-// See contracts/bot_api.md.
+// and report the inventory change once the server has confirmed it. When only
+// a mix of tag variants can pay (planks of two kinds in one pickaxe), the bot
+// fills the grid itself. See contracts/bot_api.md.
 
-const { Vec3 } = require('vec3')
-const {
-  AIR_BLOCKS, countDelta, findInventoryItem, inventoryCounts, pickUpEntities,
-  settleInventory, sleepTicks, watchDrops
-} = require('./world')
+const { craftMixedOnce, planMixedGrid } = require('./grid')
+const { acquireTable, retrieveStation } = require('./station')
+const { emptyTravel } = require('./travel')
+const { countDelta, inventoryCounts, resyncWindow, settleInventory } = require('./world')
 
-const TABLE_SEARCH_RADIUS = 4
-const DROP_WINDOW_TICKS = 20
-const MAX_TABLE_CELLS = 6 // distinct cells tried before giving up on placing a table
-const TABLE_RETRY_TICKS = 5
-
-async function craft (bot, { item: itemName, times = 1 }) {
+async function craft (bot, { item: itemName, times = 1 }, { tracker }) {
   const before = inventoryCounts(bot)
+  tracker.log.setPhase('step') // a craft has no travel: its step starts now
   const result = { item: itemName, times, used_table: false, table_retrieved: null }
   const finish = (error, extra = {}) => {
     const inventory = inventoryCounts(bot)
@@ -25,43 +21,51 @@ async function craft (bot, { item: itemName, times = 1 }) {
       ...result,
       ...extra,
       inventory_delta: countDelta(before, inventory),
-      inventory
+      inventory,
+      travel: emptyTravel(),
+      inventory_before_step: before
     }
   }
 
   const itemInfo = bot.registry.itemsByName[itemName]
   if (!itemInfo) return finish('missing_ingredients', { missing: {}, detail: `unknown item ${itemName}` })
   const recipe = pickRecipe(bot, itemInfo.id, times)
-  if (!recipe) return finish('missing_ingredients', { missing: cheapestMissing(bot, itemInfo.id, times) })
+  const mixedPlan = recipe ? null : planMixedGrid(bot, itemInfo.id, times)
+  if (!recipe && !mixedPlan) return finish('missing_ingredients', { missing: cheapestMissing(bot, itemInfo.id, times) })
 
   let table = null
   let placedTablePos = null
-  if (recipe.requiresTable) {
+  if ((recipe || mixedPlan.recipe).requiresTable) {
     result.used_table = true
-    table = bot.findBlock({ matching: bot.registry.blocksByName.crafting_table.id, maxDistance: TABLE_SEARCH_RADIUS })
-    if (!table) {
-      if (!findInventoryItem(bot, 'crafting_table')) return finish('missing_crafting_table')
-      try {
-        table = await placeTable(bot)
-        placedTablePos = table.position
-      } catch (err) {
-        return finish('craft_failed', { detail: `could not place a crafting table: ${err.message}` })
-      }
-    }
+    const acquired = await acquireTable(bot)
+    if (acquired.error) return finish(acquired.error, acquired.detail ? { detail: acquired.detail } : {})
+    table = acquired.table
+    placedTablePos = acquired.placedPos
   }
 
   let craftError = null
   try {
-    await bot.craft(recipe, times, table)
+    if (recipe) {
+      await bot.craft(recipe, times, table)
+    } else {
+      for (let run = 0; run < times; run++) await craftMixedOnce(bot, table, itemName)
+    }
   } catch (err) {
     craftError = err.message
   }
-  await resyncInventory(bot)
+  await resyncWindow(bot, bot.inventory)
   if (placedTablePos) {
-    result.table_retrieved = await retrieveTable(bot, placedTablePos, before.crafting_table || 0)
+    result.table_retrieved = await retrieveStation(bot, placedTablePos, 'crafting_table', before.crafting_table || 0, {
+      onDrop: (entity) => tracker.ownDrops.add(entity.id)
+    })
   }
   await settleInventory(bot)
-  return craftError ? finish('craft_failed', { detail: craftError }) : finish(null)
+  if (!craftError) return finish(null)
+  if (!recipe) {
+    console.log(`warn: mixed-variant craft of ${itemName} failed: ${craftError}`)
+    return finish('missing_ingredients', { missing: {}, detail: 'mixed_species' })
+  }
+  return finish('craft_failed', { detail: craftError })
 }
 
 // --- Recipes ---------------------------------------------------------------
@@ -102,93 +106,6 @@ function cheapestMissing (bot, itemId, times) {
     }
   }
   return best ? best.missing : {}
-}
-
-// Mineflayer predicts craft results client-side. A no-op click with a stale
-// state id makes the server send the whole player inventory back.
-async function resyncInventory (bot) {
-  if (!bot._syncWindow) return
-  let timer = null
-  const timeout = new Promise((resolve) => { timer = setTimeout(resolve, 2000) })
-  try {
-    await Promise.race([bot._syncWindow(bot.inventory), timeout])
-  } catch (err) {
-    console.log(`warn: inventory resync failed: ${err.message}`)
-  } finally {
-    clearTimeout(timer)
-  }
-}
-
-// --- Crafting table --------------------------------------------------------
-
-// The server can refuse a cell that looks free here (say, an entity is in the
-// way), and asking again for the same cell gets the same answer. So each
-// refusal moves on to the next closest cell, a few ticks later.
-async function placeTable (bot) {
-  const spots = findTableSpots(bot).slice(0, MAX_TABLE_CELLS)
-  if (spots.length === 0) throw new Error('no free spot next to the bot')
-  let lastProblem = null
-  for (const spot of spots) {
-    lastProblem = await tryPlaceTable(bot, spot)
-    if (!lastProblem) return bot.blockAt(spot)
-    console.log(`warn: crafting table not placed at ${spot}: ${lastProblem}`)
-    await sleepTicks(TABLE_RETRY_TICKS)
-  }
-  throw new Error(`refused at ${spots.length} cells, last: ${lastProblem}`)
-}
-
-// Null when the table stands at `spot`, else what went wrong.
-async function tryPlaceTable (bot, spot) {
-  try {
-    await bot.equip(findInventoryItem(bot, 'crafting_table'), 'hand')
-    await bot.placeBlock(bot.blockAt(spot.offset(0, -1, 0)), new Vec3(0, 1, 0))
-  } catch (err) {
-    return err.message
-  }
-  const placed = bot.blockAt(spot)
-  return placed?.name === 'crafting_table' ? null : `found ${placed?.name} at ${spot} after placing`
-}
-
-// Air cells at the bot's feet level, on a full solid block, that do not
-// overlap the bot's hitbox; closest first, at most 2 blocks out.
-function findTableSpots (bot) {
-  const feet = bot.entity.position.floored()
-  const candidates = []
-  for (let dx = -2; dx <= 2; dx++) {
-    for (let dz = -2; dz <= 2; dz++) {
-      const pos = feet.offset(dx, 0, dz)
-      if (!AIR_BLOCKS.has(bot.blockAt(pos)?.name)) continue
-      if (bot.blockAt(pos.offset(0, -1, 0))?.boundingBox !== 'block') continue
-      if (overlapsBot(bot, pos)) continue
-      candidates.push(pos)
-    }
-  }
-  const botPos = bot.entity.position
-  candidates.sort((a, b) => botPos.distanceTo(a.offset(0.5, 0, 0.5)) - botPos.distanceTo(b.offset(0.5, 0, 0.5)))
-  return candidates
-}
-
-function overlapsBot (bot, cell) {
-  const { x, z } = bot.entity.position
-  const halfWidth = 0.3 + 0.05 // player hitbox plus a small margin
-  return cell.x < x + halfWidth && cell.x + 1 > x - halfWidth &&
-    cell.z < z + halfWidth && cell.z + 1 > z - halfWidth
-}
-
-// Digs the table the bot placed and picks it back up. True when the bot holds
-// as many crafting tables as before the call.
-async function retrieveTable (bot, pos, tablesBefore) {
-  const watcher = watchDrops(bot, pos)
-  try {
-    await bot.dig(bot.blockAt(pos), true)
-    await sleepTicks(DROP_WINDOW_TICKS)
-  } catch (err) {
-    console.log(`warn: could not dig the placed crafting table: ${err.message}`)
-  }
-  const { entities } = watcher.stop()
-  await pickUpEntities(bot, entities)
-  await settleInventory(bot)
-  return (inventoryCounts(bot).crafting_table || 0) >= tablesBefore
 }
 
 module.exports = { craft }
