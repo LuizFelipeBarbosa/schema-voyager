@@ -82,6 +82,6 @@ Re-read this first after a restart or context compaction. The session prompt is
 | Wave 3 offline lanes | worlds merged; change merged ca84dc0 (r2 fires on the first wooden coal mine whose rule has a confirmation) |
 | M0 open world | done: seed 1001 (snowy taiga, spruce), instance a up, snapshot `fresh`, restore 7-10 s |
 | M1 natural-terrain actions | GATE PASS live (logs/v2_iron-1.log, ~16:13): empty inventory -> wooden -> stone pickaxe, all exact checks MATCH; continued to iron_pickaxe (17/17 MATCH, 285 s) |
-| M2 life loop | sim done (see Evidence); live run started 16:16 in screen `sv2-a-life`, run dir runs/m2-live-1 |
+| M2 life loop | live run done (runs/m2-live-1, 16:16-16:51, 35 min unattended, stop wall_clock): 29 goals, 22 success, 14 certified (all T1-T3 + furnace, iron_ore, smelt_iron_ingot, iron_pickaxe, bucket), 69 exact MATCH, 0 contradictions, 2 quarantined (interference), $0.127. Stuck: after iron the bot was ~60 blocks underground; log goals (chest, stone_sword, stone_axe) failed 2x each on not_found -> skipped. Fix in lane `surface` (explore up, contract v2.1). Opus review pending |
 | M3 mid-run rule change | not started |
 | M4 generalization | seeds chosen by spawn-biome survey only (logs/survey-b.log, survey-b2.log): 2024 forest (birch+oak), 31337 grove (spruce), 22 savanna_plateau, 555 snowy_plains (hard); M3 rerun on 2024. Runs wait for M2/M3 review |
