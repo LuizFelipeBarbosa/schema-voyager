@@ -253,6 +253,9 @@ function applyEvent(state, event) {
     case 'skill':
       state.changes.push({ tone: 'info', title: `Compiled ${event.skill}`, detail: `Cites ${event.rule_ids.join(', ')}.` });
       break;
+    case 'learned':
+      for (const line of event.lines) state.changes.push({ tone: 'good', title: line, detail: 'Said in the game chat.' });
+      break;
     case 'plan_failed':
       state.changes.push({ tone: 'bad', title: 'No plan', detail: event.reason });
       break;
@@ -475,6 +478,8 @@ function logLine(event) {
       return event.rules.length ? ['good', `certified · ${event.rules.join(', ')}`] : ['', null];
     case 'skill':
       return ['', `skill · ${event.skill}`];
+    case 'learned':
+      return ['good', `chat · ${event.lines.join(' | ')}`];
     case 'plan_failed':
       return ['bad', `no plan · ${event.reason}`];
     case 'episode_end':

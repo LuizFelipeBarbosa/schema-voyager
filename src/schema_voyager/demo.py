@@ -1,6 +1,7 @@
 """Command line: run the demo sweep, single episodes, and arena helpers.
 
     schema-voyager demo --backend mc            # train T1-T3, then H3 for D and B
+    schema-voyager demo --from runs/<run> --second-visit   # that run's training, a fresh H3, D's revisit
     schema-voyager episode --system D --task h3 --layout 6 --store runs/<run>/store_D_2_after_training.json
     schema-voyager arena --layout 6 --task h3   # build a layout on the server
     schema-voyager spectate <player>            # put your client in spectator mode
@@ -14,6 +15,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import shutil
 import subprocess
 import sys
 import time
@@ -73,9 +75,14 @@ class Runner:
         else:
             fake = _fake_baseline_planner(task) if self.llm.mode == "fake" else None
             result = run_skill_only(episode, library, fake, report_effects=(system == "B+"))
-        self.results = [r for r in self.results if r.episode_id != result.episode_id] + [result]
-        self._write_results()
+        self.keep([result])
         return result
+
+    def keep(self, results: list[EpisodeResult]) -> None:
+        """Add results to this run's table, replacing earlier ones for the same episodes."""
+        replaced = {result.episode_id for result in results}
+        self.results = [r for r in self.results if r.episode_id not in replaced] + results
+        self._write_results()
 
     def snapshot(self, store: SchemaStore, label: str) -> Path:
         path = self.run_dir / f"store_D_{label}.json"
@@ -100,12 +107,39 @@ def run_demo(args: argparse.Namespace) -> None:
     _record_commit(run_dir)
     runner = Runner(make_backend(args.backend), LLM(mode=args.llm, cache_path=LLM_CACHE), run_dir)
     systems = args.systems.split(",")
-    train_seeds = _seeds(args.train_layouts)
     holdout_seeds = _seeds(args.holdout_layouts)
-    store = SchemaStore()
-    libraries = {system: SkillLibrary() for system in systems if system != "D"}
     print(f"SchemaVoyager demo: backend={args.backend} llm={args.llm} model={runner.llm.model} run_dir={run_dir}")
 
+    if args.from_run:
+        store, libraries = _reuse_training(runner, args.from_run, systems)
+    else:
+        store, libraries = _train(runner, systems, _seeds(args.train_layouts))
+
+    _banner(f"Holdout H3 (coal ore needs a stone-tier pickaxe; agents are not told), layouts {holdout_seeds}")
+    for seed in holdout_seeds:
+        for system in systems:
+            runner.run(system, get_task("h3"), seed, store=store, library=libraries.get(system))
+    if "D" in systems:
+        runner.snapshot(store, "3_after_holdout")
+    for system, library in libraries.items():
+        library.save(run_dir / f"skills_{system}_after_holdout.json")
+
+    if args.second_visit and "D" in systems:
+        seed = holdout_seeds[0]
+        first = next(r for r in runner.results if r.episode_id == f"D/h3/L{seed}")
+        _banner(f"Second visit: D in layout {seed}'s world {first.world_id} again")
+        runner.run("D", get_task("h3"), seed, store=store, world_id=first.world_id, label="visit2")
+        runner.snapshot(store, "4_after_visit2")
+
+    _banner("Results")
+    print(summarize([r for r in runner.results if r.task_id == "h3"]))
+    print(f"Full results: {run_dir / 'results.md'}  Episode traces: {run_dir / 'episodes'}")
+
+
+def _train(runner: Runner, systems: list[str], train_seeds: list[int]) -> tuple[SchemaStore, dict[str, SkillLibrary]]:
+    """D's prior rules and training on T1-T3, then each baseline's."""
+    store = SchemaStore()
+    libraries = {system: SkillLibrary() for system in systems if system != "D"}
     if "D" in systems:
         _banner("Prior rules proposed by the LLM (all hypotheses)")
         seed_prior_rules(store, runner.llm)
@@ -128,20 +162,38 @@ def run_demo(args: argparse.Namespace) -> None:
         for task in training_tasks():
             for seed in train_seeds:
                 runner.run(system, task, seed, library=library)
-        library.save(run_dir / f"skills_{system}_after_training.json")
+        library.save(runner.run_dir / f"skills_{system}_after_training.json")
+    return store, libraries
 
-    _banner(f"Holdout H3 (coal ore needs a stone-tier pickaxe; agents are not told), layouts {holdout_seeds}")
-    for seed in holdout_seeds:
-        for system in systems:
-            runner.run(system, get_task("h3"), seed, store=store, library=libraries.get(system))
+
+def _reuse_training(runner: Runner, source: Path, systems: list[str]) -> tuple[SchemaStore, dict[str, SkillLibrary]]:
+    """Skip training: copy another run's training results, traces and snapshots
+    into this run, so it is complete on its own, and start from its trained
+    store and skill libraries. TRAINED_IN records where they came from."""
+    run_dir = runner.run_dir
+    training = {task.task_id for task in training_tasks()}
+    results = [r for r in _load_results(source) if r.task_id in training and r.system in systems]
+    copied = [f"episodes/{r.system}_{r.task_id}_L{r.layout_seed}.jsonl" for r in results]
     if "D" in systems:
-        runner.snapshot(store, "3_after_holdout")
-    for system, library in libraries.items():
-        library.save(run_dir / f"skills_{system}_after_holdout.json")
+        copied += [f"store_D_{label}.json" for label in ("0_prior", "1_after_first_episode", "2_after_training")]
+    copied += [f"skills_{system}_after_training.json" for system in systems if system != "D"]
+    for name in copied:
+        (run_dir / name).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source / name, run_dir / name)
+    runner.keep(results)
+    commit_file = source / "COMMIT"
+    commit = commit_file.read_text(encoding="utf-8").strip() if commit_file.exists() else "unknown"
+    (run_dir / "TRAINED_IN").write_text(f"{source.name} {commit}\n", encoding="utf-8")
 
-    _banner("Results")
-    print(summarize([r for r in runner.results if r.task_id == "h3"]))
-    print(f"Full results: {run_dir / 'results.md'}  Episode traces: {run_dir / 'episodes'}")
+    store = SchemaStore.load(run_dir / "store_D_2_after_training.json") if "D" in systems else SchemaStore()
+    libraries = {
+        system: SkillLibrary.load(run_dir / f"skills_{system}_after_training.json")
+        for system in systems if system != "D"
+    }
+    _banner(f"Training reused from {source} (commit {commit}): {len(results)} episodes")
+    if "D" in systems:
+        print(describe_store(store))
+    return store, libraries
 
 
 def run_episode(args: argparse.Namespace) -> None:
@@ -257,6 +309,10 @@ def main(argv: list[str] | None = None) -> None:
     demo.add_argument("--train-layouts", default=",".join(map(str, TRAIN_LAYOUTS)))
     demo.add_argument("--holdout-layouts", default=",".join(map(str, HOLDOUT_LAYOUTS)))
     demo.add_argument("--run-dir", type=Path)
+    demo.add_argument("--from", dest="from_run", type=Path,
+                      help="skip training: start H3 from this run's trained store and skill libraries")
+    demo.add_argument("--second-visit", action="store_true",
+                      help="after the holdouts, run D again in the first holdout layout's world")
 
     episode = sub.add_parser("episode", help="run one episode, e.g. for recording")
     episode.add_argument("--system", choices=["D", "B", "B+"], default="D")

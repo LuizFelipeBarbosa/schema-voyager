@@ -34,12 +34,14 @@ def export_run(run_dir: Path, note: str = "", out_dir: Path = Path("results"), s
         "# Results",
         "",
         f"Copied from `runs/{run_dir.name}` (code commit `{commit}`) by `schema-voyager export` on {exported}.",
+        *_trained_in(run_dir),
         "",
         *([f"Note: {note}", ""] if note else []),
         "- `results.md`: the results table; `results.json`: one record per episode",
         "- `episodes/*.jsonl`: every plan, step, prediction, observation, contradiction and revision; "
         "replay them with `schema-voyager panel`",
-        "- `store_D_*.json`: D's schema store before training, after one episode, after training, and after the holdout",
+        "- `store_D_*.json`: D's schema store before training, after one episode, after training, after the holdout, "
+        "and after the second visit when there was one",
         "- `skills_*.json`: the baselines' skill libraries",
     ]
     (out_dir / "README.md").write_text("\n".join(readme) + "\n", encoding="utf-8")
@@ -60,6 +62,17 @@ def export_run(run_dir: Path, note: str = "", out_dir: Path = Path("results"), s
         encoding="utf-8",
     )
     print(f"Exported runs/{run_dir.name} (commit {commit}) to {out_dir}/ and {site_data}")
+
+
+def _trained_in(run_dir: Path) -> list[str]:
+    """A line naming the run whose training this run reused (`demo --from`), if any."""
+    path = run_dir / "TRAINED_IN"
+    if not path.exists():
+        return []
+    source, commit = path.read_text(encoding="utf-8").split()
+    return [f"Its training episodes, the store snapshots up to `store_D_2_after_training.json` and the "
+            f"`*_after_training` skill libraries come from `runs/{source}` (code commit `{commit}`); "
+            "the holdout started from that trained state."]
 
 
 def _run_commit(run_dir: Path) -> str:

@@ -48,12 +48,13 @@ def _unexpected(step: dict[str, Any]) -> bool:
 
 
 def summary_rows(results: list[EpisodeResult]) -> list[dict[str, Any]]:
-    """One row per system and task, ordered by task then system. Each metric
+    """One row per system and task, ordered by task then system. A revisit of
+    a holdout world gets its own row, such as task "h3 visit2". Each metric
     is {"mean", "sd"} over layouts (sd is None for one layout, and the whole
     metric is None when no episode has a value)."""
     groups: dict[tuple[str, str], list[EpisodeResult]] = {}
     for result in results:
-        groups.setdefault((result.system, result.task_id), []).append(result)
+        groups.setdefault((result.system, _row_task(result)), []).append(result)
 
     rows = []
     for (system, task_id), group in sorted(groups.items(), key=lambda item: (item[0][1], item[0][0])):
@@ -73,13 +74,20 @@ def summary_rows(results: list[EpisodeResult]) -> list[dict[str, Any]]:
     return rows
 
 
+def _row_task(result: EpisodeResult) -> str:
+    """The task id, plus the visit label of a revisit ("D/h3/L6/visit2" -> "h3 visit2")."""
+    parts = result.episode_id.split("/")
+    return f"{result.task_id} {parts[3]}" if len(parts) > 3 else result.task_id
+
+
 def summarize(results: list[EpisodeResult]) -> str:
     """Markdown table: one row per system and task, mean and sd over layouts."""
     lines = [
         "| System | Task | Success | LLM tokens | LLM calls | Actions | Blocks walked | Repeated failures | Actions after contradiction |",
         "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
-    for row in summary_rows(results):
+    rows = summary_rows(results)
+    for row in rows:
         lines.append(
             f"| {row['system']} | {row['task']} | {row['successes']}/{row['episodes']} "
             f"| {_mean_sd(row['llm_tokens'])} | {_mean_sd(row['llm_calls'])} "
@@ -95,6 +103,9 @@ def summarize(results: list[EpisodeResult]) -> str:
         "more than once, including the shared policy's retries after an explore (`not_found`, `unreachable`, "
         "`craft_failed`, `dig_failed`, `timeout`); every attempt and explore counts as an action.",
     ]
+    if any(" visit" in row["task"] for row in rows):
+        lines.append("")
+        lines.append("A `visit2` row is D back in a holdout world it has already seen, with the store it left there.")
     return "\n".join(lines) + "\n"
 
 

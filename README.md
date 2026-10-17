@@ -47,8 +47,10 @@ reuses recorded Claude responses from `runs/llm_cache.jsonl`.
 | Command | What it does |
 | --- | --- |
 | `schema-voyager demo [--backend mc\|sim] [--llm live\|replay\|fake] [--systems D,B]` | Full sweep: prior rules, training, H3 holdouts, results table |
+| `schema-voyager demo --from runs/<run> --second-visit --systems D,B,B+` | Reuse that run's training (copied into the new run), run H3 again, then D once more in layout 6's world |
 | `schema-voyager episode --system D --task h3 --layout 6 --store runs/<run>/store_D_2_after_training.json` | One episode from a saved store, e.g. to record footage |
 | `schema-voyager episode --system B --task h3 --layout 6 --skills runs/<run>/skills_B_after_training.json` | Same for the baseline |
+| `schema-voyager episode --system D --task h3 --layout 6 --store <store> --world <world id>` | Revisit a holdout world as `visit2`, `visit3`, ... with the store D left there |
 | `schema-voyager arena --layout 6 --task h3` | Build a layout on the server and switch its world rules |
 | `schema-voyager spectate <player>` | Spectator mode above the arena |
 | `schema-voyager report runs/<run>` | Print a run's results table |
