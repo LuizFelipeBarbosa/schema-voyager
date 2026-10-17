@@ -51,3 +51,16 @@ def test_export_says_where_reused_training_came_from(tmp_path):
     data = json.loads(site_data.read_text().split(" = ", 1)[1].rstrip().rstrip(";"))
     assert {row["task"] for row in data["rows"]} >= {"h3", "h3 visit2"}
     assert data["trace"]["layout"] == 6
+
+
+def test_a_d_episode_prints_the_store_before_and_after(tmp_path, capsys):
+    main(["episode", "--system", "D", "--task", "t1", "--layout", "1", "--backend", "sim", "--llm", "fake",
+          "--run-dir", str(tmp_path)])
+    out = capsys.readouterr().out
+    before, after = out.split("=== Store after the episode ===")
+    assert "Store: empty" in before and "hypothesis mine_oak_log" in before and "0 confirmations" in before
+    assert "skill skill_wooden_pickaxe" in after
+
+    main(["store", str(tmp_path / "store_D_after_episode.json")])
+    printed = capsys.readouterr().out
+    assert "hypothesis mine_oak_log" in printed and "3 confirmations / 1 episodes" in printed

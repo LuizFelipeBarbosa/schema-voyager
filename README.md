@@ -54,6 +54,7 @@ reuses recorded Claude responses from `runs/llm_cache.jsonl`.
 | `schema-voyager arena --layout 6 --task h3` | Build a layout on the server and switch its world rules |
 | `schema-voyager spectate <player>` | Spectator mode above the arena |
 | `schema-voyager report runs/<run>` | Print a run's results table |
+| `schema-voyager store runs/<run>/store_D_2_after_training.json` | Print a saved schema store: each rule's status and evidence, and the skills (`episode` prints D's store before and after, too) |
 | `schema-voyager panel` | Trace panel on http://127.0.0.1:8765: replays an episode trace, or follows the newest one live (`?viewer=1` embeds the 3D viewer) |
 | `schema-voyager export runs/<run> [--note ...]` | Copy a finished run to the tracked `results/` folder and update the field guide's numbers |
 | `python scripts/eval_revision.py --n 5` | Live check that Claude ranks the stone-tier rule in its top 3 |

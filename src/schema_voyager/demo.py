@@ -6,6 +6,7 @@
     schema-voyager arena --layout 6 --task h3   # build a layout on the server
     schema-voyager spectate <player>            # put your client in spectator mode
     schema-voyager report runs/<run>
+    schema-voyager store runs/<run>/store_D_2_after_training.json   # print a saved store
     schema-voyager panel                        # trace panel on http://127.0.0.1:8765
     schema-voyager export runs/<run>            # results/ folder and the field guide's numbers
 """
@@ -204,10 +205,16 @@ def run_episode(args: argparse.Namespace) -> None:
     label = _next_visit_label(runner.results, args.system, task, args.layout) if args.world else None
     if args.system == "D":
         store = SchemaStore.load(args.store) if args.store else SchemaStore()
-        if not store.rules:
+        if store.rules:
+            _banner(f"Store from {args.store}")
+        else:
+            _banner("Store: empty. Prior rules proposed by the LLM (all hypotheses)")
             seed_prior_rules(store, runner.llm)
+        print(describe_store(store))
         runner.run("D", task, args.layout, store=store, world_id=args.world, label=label)
         runner.snapshot(store, f"after_{label}" if label else "after_episode")
+        _banner("Store after the episode")
+        print(describe_store(store))
     else:
         library = SkillLibrary.load(args.skills) if args.skills else SkillLibrary()
         runner.run(args.system, task, args.layout, library=library, world_id=args.world, label=label)
@@ -335,6 +342,9 @@ def main(argv: list[str] | None = None) -> None:
     report = sub.add_parser("report", help="print the results table of a run")
     report.add_argument("run_dir", type=Path)
 
+    store = sub.add_parser("store", help="print a saved schema store: rules, their evidence, and skills")
+    store.add_argument("path", type=Path)
+
     panel = sub.add_parser("panel", help="serve the trace panel, which replays or follows episode traces")
     panel.add_argument("--port", type=int, default=8765)
 
@@ -362,6 +372,8 @@ def main(argv: list[str] | None = None) -> None:
             print("\n".join(Arena().spectate(args.player)))
         elif args.command == "report":
             print(summarize(_load_results(args.run_dir)))
+        elif args.command == "store":
+            print(describe_store(SchemaStore.load(args.path)))
         elif args.command == "panel":
             from .panel import serve_panel
 
