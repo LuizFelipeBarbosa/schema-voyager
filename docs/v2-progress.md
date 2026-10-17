@@ -57,12 +57,21 @@ Re-read this first after a restart or context compaction. The session prompt is
   (all four ports, since .env holds instance a's).
 - Screens: `sv2-a-mc`, `sv2-a-bot`; logs in sv2/logs/, pids in sv2/run/.
 
+## Evidence so far
+
+- Sim M2 (fake LLM, sim seed 1, 25 goals): 70 steps, all match, 0 contradictions; certified 15 rules incl.
+  mine #log, coal_ore, craft #planks, stick, crafting_table, wooden/stone pickaxe, torch; NOT mine stone
+  (planner tie-break picks mine_deepslate for #cobblestone -> integration fix). `runs/sim-m2/`.
+- Sim M3 preview (`runs/sim-m3-r2`, `runs/sim-m3-stick2`): change caught at the exact step, 1 revision call,
+  revision certified in its epoch, next goal using it 0 LLM calls.
+- Live LLM check in sim (`runs/sim-live-check`): v2 prior call OK, 15 well-formed rules, $0.024.
+
 ## Milestones
 
 | Milestone | Status |
 |---|---|
 | Wave 0 (bootstrap, contracts) | done: f7e048c (Opus review: 10 fixes applied before commit) |
-| Wave 1 lanes | launched ~16:10 PDT. rules merged 6d9dfce (16:20). infra done e233f04 (16:25, merge after life). Pending: bot, backends, life |
+| Wave 1 lanes | rules, backends, life, infra merged (e60ec9e + infra merge, ~16:05 PDT). Pending: bot |
 | M0 open world | infra lane done: seed 1001 (snowy taiga, spruce), instance a up, snapshot `fresh`, restore 10 s; merge pending |
 | M1 natural-terrain actions | not started |
 | M2 life loop | not started |
