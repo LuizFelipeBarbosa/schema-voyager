@@ -135,7 +135,23 @@ async function resetEpisode () {
   return observe()
 }
 
+// Vanilla kicks a non-op player for chat spam once a score reaches 200: +20
+// per message, -1 per tick. A kick mid-episode reconnects the bot with a
+// broken inventory view, so narration that would take the score past
+// CHAT_SCORE_LIMIT is dropped instead (as in a fast replan loop).
+const CHAT_SCORE_PER_MESSAGE = 20
+const CHAT_SCORE_LIMIT = 160
+const chatScore = { value: 0, at: Date.now() }
+
 function chat ({ message }) {
+  const now = Date.now()
+  chatScore.value = Math.max(0, chatScore.value - (now - chatScore.at) / 50)
+  chatScore.at = now
+  if (chatScore.value + CHAT_SCORE_PER_MESSAGE > CHAT_SCORE_LIMIT) {
+    log(`chat dropped to stay under the spam kick: ${message}`)
+    return { ok: true, dropped: true }
+  }
+  chatScore.value += CHAT_SCORE_PER_MESSAGE
   bot.chat(message.slice(0, 250))
   return { ok: true }
 }

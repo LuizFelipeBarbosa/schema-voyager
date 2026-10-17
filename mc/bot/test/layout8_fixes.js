@@ -5,6 +5,8 @@
 //   mine:  a log out of reach fails as unreachable once, the next /mine
 //          mines the next nearest log, and /reset_episode clears the skip
 //          list so the out-of-reach log is the target again.
+//   chat:  a burst of narration (D's instant replans sent one line each and
+//          got the bot kicked for spam) is cut short instead of kicking it.
 //
 // Starts its own bot (FixBot on 3102, viewer off), clears the arena interior
 // and works 12 blocks from spawn, away from SchemaBot. Run it only while no
@@ -25,6 +27,7 @@ const TAG = 'layout8_fixes'
 const NEXT_TO_BOT = [[1, 0], [-1, 0], [0, 1], [0, -1]]
 const OUT_OF_REACH_LOG = [CX + 1, -55, CZ] // 5 blocks up, nothing to stand on: 5.6 blocks from the bot
 const GROUND_LOG = [CX + 6, -60, CZ] // reachable, 6.0 blocks from the bot
+const CHAT_BURST = 20 // vanilla would kick after 10 in quick succession
 
 function clearArena () {
   rcon(`kill @e[type=armor_stand,tag=${TAG}]`)
@@ -82,18 +85,32 @@ async function mineCase (checker) {
   return { first: first.error, second: second.error, third: third.error, targets: [first.target, second.target, third.target] }
 }
 
+async function chatCase (checker, kicks) {
+  const burst = []
+  for (let i = 1; i <= CHAT_BURST; i++) burst.push((await post(API_PORT, '/chat', { message: `layout8_fixes chat ${i}/${CHAT_BURST}` })).body)
+  await sleep(2000)
+  const dropped = burst.filter((body) => body.dropped).length
+  const health = await (await fetch(`http://127.0.0.1:${API_PORT}/health`)).json()
+  checker.check('chat: the burst was cut short', dropped >= CHAT_BURST / 2, dropped)
+  checker.check('chat: not kicked', health.connected === true && kicks.length === 0, { health, kicks })
+  return { sent: CHAT_BURST - dropped, dropped }
+}
+
 async function main () {
   const checker = createChecker()
   const results = {}
   const refusals = []
+  const kicks = []
   const server = startServer({ username: USERNAME, apiPort: API_PORT })
   readline.createInterface({ input: server.stdout }).on('line', (line) => {
     if (line.includes('crafting table not placed')) refusals.push(line)
+    if (line.includes('kicked:')) kicks.push(line)
   })
   try {
     await waitForConnected(API_PORT)
     results.table = await tableCase(checker, refusals)
     results.mine = await mineCase(checker)
+    results.chat = await chatCase(checker, kicks)
   } catch (err) {
     checker.check('no exceptions', false, err.stack)
   } finally {

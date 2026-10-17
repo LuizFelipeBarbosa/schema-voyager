@@ -53,5 +53,5 @@ Run them only while no episode is running.
 ```bash
 node mc/bot/test/r2_spike.js              # gate G1: R2 loot table drops; leaves R2 enabled
 node mc/bot/test/scripted_t1.js --runs 3  # gate G2: logs -> planks -> stick -> table -> wooden pickaxe
-node mc/bot/test/layout8_fixes.js         # refused table cells and the /mine skip list
+node mc/bot/test/layout8_fixes.js         # refused table cells, the /mine skip list, the chat spam guard
 ```

@@ -141,6 +141,11 @@ start position. Stops early at barriers or after 30 s.
 `bot.chat(message)`, truncated to 250 characters. Used to narrate the plan and
 mismatches in game. `{"ok": true}`.
 
+Vanilla kicks a non-op player whose chat spam score reaches 200 (+20 per
+message, -1 per tick). A message that would take the bot's score past 160 is
+not sent: `{"ok": true, "dropped": true}`, and the bot logs it. That allows a
+burst of 8 messages, then about one a second.
+
 ## POST /reset_episode  `{}`
 
 Call after Python has rebuilt the arena and teleported the bot. Stops the
