@@ -27,9 +27,8 @@ def seed_prior_rules(store: SchemaStore, llm: LLM) -> list[Rule]:
     return rules
 
 
-def run_schemavoyager(episode: Episode, store: SchemaStore, verify: bool = True) -> EpisodeResult:
-    """Run one episode. With verify=False this is system C: same plans, but
-    it only replans when an action fails outright or the plan runs out."""
+def run_schemavoyager(episode: Episode, store: SchemaStore) -> EpisodeResult:
+    """Run one episode, replanning from the current state after any step that fails or surprises."""
     task = episode.task
     episode.log.event(
         "episode_start", system=episode.system, task=task.task_id, description=task.description,
@@ -51,7 +50,7 @@ def run_schemavoyager(episode: Episode, store: SchemaStore, verify: bool = True)
             if episode.budget_left <= 0:
                 break
             verdict: dict[str, Check] = {}
-            outcome = episode.act(step.action, annotate=lambda o, s=step: _annotate(s, o, verdict, verify))
+            outcome = episode.act(step.action, annotate=lambda o, s=step: _annotate(s, o, verdict))
             result = verdict["check"]
             if result.status == "failed":
                 break  # tolerant: replan from the current state
@@ -60,11 +59,11 @@ def run_schemavoyager(episode: Episode, store: SchemaStore, verify: bool = True)
             store.record_transition(
                 Transition(transition_id, episode.episode_id, episode.world_id, step.action, result.observed)
             )
-            if verify and result.status == "mismatch":
+            if result.status == "mismatch":
                 _revise(episode, store, step, result, transition_id)
                 break
             completed.append((step.action, step.rule.id))
-            if outcome.inventory != step.expected_inventory and verify:
+            if outcome.inventory != step.expected_inventory:
                 break  # a drop rolled out of reach; replan without revising anything
 
     result = episode.finish()
@@ -76,13 +75,13 @@ def run_schemavoyager(episode: Episode, store: SchemaStore, verify: bool = True)
     return result
 
 
-def _annotate(step: PlanStep, outcome: Outcome, verdict: dict[str, Check], verify: bool) -> dict:
+def _annotate(step: PlanStep, outcome: Outcome, verdict: dict[str, Check]) -> dict:
     result = check(step.rule, step.action, outcome)
     verdict["check"] = result
-    annotations = {"rule": step.rule.id, "experimental": step.experimental, "predicted": result.predicted}
-    if verify:
-        annotations.update(check=result.status, observed=result.observed, check_detail=result.detail)
-    return annotations
+    return {
+        "rule": step.rule.id, "experimental": step.experimental, "predicted": result.predicted,
+        "check": result.status, "observed": result.observed, "check_detail": result.detail,
+    }
 
 
 def _log_plan(episode: Episode, store: SchemaStore, plan: list[PlanStep]) -> None:
@@ -141,7 +140,7 @@ def _summarize(rule: Rule) -> str:
         tools = rule.preconditions.get("tool_any", [])
         drops = rule.yields()
         what = ", ".join(f"{n} {item}" for item, n in drops.items()) or "nothing"
-        how = f"with {' / '.join(tools)}" if tools else "with any tool"
+        how = f"with {' / '.join(tools)}" if tools else "with any tool or bare hand"
         return f"mine {rule.subject} {how} -> drops {what}. {rule.rationale}"
     gains = ", ".join(f"{n} {item}" for item, n in rule.yields().items())
     return f"craft {rule.subject} -> {gains}. {rule.rationale}"

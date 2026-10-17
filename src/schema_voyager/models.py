@@ -67,7 +67,7 @@ class Task:
 class Rule:
     """A STRIPS-style operator with the evidence for it.
 
-    Mine rules: preconditions {"tool_any": [...]} (empty list = bare hand),
+    Mine rules: preconditions {"tool_any": [...]} (empty list = any tool or bare hand),
     effects {"block_removed": true, "drops": {...}}.
     Craft rules: preconditions {"consumes": {...}, "station": "crafting_table" | None},
     effects {"gains": {...}} per recipe run.
