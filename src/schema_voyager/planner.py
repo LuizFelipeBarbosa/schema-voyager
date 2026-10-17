@@ -15,6 +15,8 @@ from typing import Callable
 from .models import Action, Rule, Skill
 
 MAX_DEPTH = 12
+ITEMS_PER_BATCH_FUEL = 8  # coal and charcoal smelt 8 items each; any other fuel, 1
+BATCH_FUELS = frozenset({"coal", "charcoal"})
 
 
 class PlanningError(Exception):
@@ -75,6 +77,8 @@ class _Planner:
             try:
                 if rule.kind == "craft":
                     steps = self._craft(rule, item, count, trial, stack + [item])
+                elif rule.kind == "smelt":
+                    steps = self._smelt(rule, item, count, trial, stack + [item])
                 else:
                     steps = self._mine(rule, item, count, trial, stack + [item])
             except PlanningError as error:
@@ -93,16 +97,7 @@ class _Planner:
         else:
             needs_with_station = needs
 
-        # Gathering one ingredient can spend another (sticks spend planks), so
-        # repeat until every need holds at once.
-        steps: list[PlanStep] = []
-        for _ in range(4):
-            for ingredient in sorted(needs_with_station, key=self._depth, reverse=True):
-                steps += self.achieve(ingredient, needs_with_station[ingredient], inv, stack)
-            if all(inv[i] >= n for i, n in needs_with_station.items()):
-                break
-        else:
-            raise PlanningError(f"could not hold every ingredient for {item} at once")
+        steps = self._gather(needs_with_station, inv, stack, f"could not hold every ingredient for {item} at once")
 
         for ingredient, n in needs.items():
             inv[ingredient] -= n
@@ -110,6 +105,55 @@ class _Planner:
             inv[gained] += n * runs
         steps.append(PlanStep(Action("craft", rule.subject, times=runs), rule, _snapshot(inv)))
         return steps
+
+    def _gather(self, needs: dict[str, int], inv: Counter, stack: list[str], failure: str) -> list[PlanStep]:
+        """Steps that leave every need held at once. Gathering one need can spend
+        another (sticks spend planks), so repeat until they all hold."""
+        steps: list[PlanStep] = []
+        for _ in range(4):
+            for ingredient in sorted(needs, key=self._depth, reverse=True):
+                steps += self.achieve(ingredient, needs[ingredient], inv, stack)
+            if all(inv[i] >= n for i, n in needs.items()):
+                return steps
+        raise PlanningError(failure)
+
+    def _smelt(self, rule: Rule, item: str, count: int, inv: Counter, stack: list[str]) -> list[PlanStep]:
+        runs = math.ceil((count - inv[item]) / rule.yields()[item])
+        needs = {ingredient: n * runs for ingredient, n in rule.preconditions.get("consumes", {}).items()}
+        station = rule.preconditions.get("station")
+        steps = self._gather(
+            {station: 1, **needs} if station else needs, inv, stack, f"could not hold every ingredient for {item} at once"
+        )
+        fuel, fuel_steps = self._cheapest_fuel(rule.preconditions.get("fuel_any", []), runs, inv, stack)
+        steps += fuel_steps
+
+        inv[fuel] -= _fuel_units(fuel, runs)
+        for ingredient, n in needs.items():
+            inv[ingredient] -= n
+        for gained, n in rule.yields().items():
+            inv[gained] += n * runs
+        action = Action("smelt", rule.subject, times=runs, fuel=fuel, ingredient=next(iter(needs)))
+        steps.append(PlanStep(action, rule, _snapshot(inv)))
+        return steps
+
+    def _cheapest_fuel(self, fuels: list[str], items: int, inv: Counter, stack: list[str]) -> tuple[str, list[PlanStep]]:
+        """A fuel already held enough of, else the one with the shortest plan to obtain."""
+        held = next((fuel for fuel in fuels if inv[fuel] >= _fuel_units(fuel, items)), None)
+        if held is not None:
+            return held, []
+        best: tuple[str, list[PlanStep], Counter] | None = None
+        for fuel in fuels:
+            trial = inv.copy()
+            try:
+                steps = self.achieve(fuel, _fuel_units(fuel, items), trial, stack)
+            except PlanningError:
+                continue
+            if best is None or len(steps) < len(best[1]):
+                best = (fuel, steps, trial)
+        if best is None:
+            raise PlanningError(f"no obtainable fuel among {fuels}")
+        _replace(inv, best[2])
+        return best[0], best[1]
 
     def _mine(self, rule: Rule, item: str, count: int, inv: Counter, stack: list[str]) -> list[PlanStep]:
         tools = rule.preconditions.get("tool_any", [])
@@ -144,11 +188,16 @@ class _Planner:
 
     def _depth(self, item: str, seen: frozenset[str] = frozenset()) -> int:
         """How many crafts deep an item is; gathered first when deeper."""
-        crafts = [r for r in self.producers.get(item, []) if r.kind == "craft"]
+        crafts = [r for r in self.producers.get(item, []) if r.kind in ("craft", "smelt")]
         if not crafts or item in seen:
             return 0
         ingredients = crafts[0].preconditions.get("consumes", {})
         return 1 + max((self._depth(i, seen | {item}) for i in ingredients), default=0)
+
+
+def _fuel_units(fuel: str, items: int) -> int:
+    """Fuel items needed to smelt `items` items."""
+    return math.ceil(items / ITEMS_PER_BATCH_FUEL) if fuel in BATCH_FUELS else items
 
 
 def _replace(target: Counter, source: Counter) -> None:

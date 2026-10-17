@@ -3,16 +3,20 @@ tolerant explore-and-retry policy, logging it, and building the result."""
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
-from .adapter import Backend
+from . import normalize
+from .adapter import DIRECTIONS, Backend
 from .evaluator import actions_after_contradiction, repeated_failures
 from .llm import LLM
 from .models import Action, EpisodeResult, Outcome, Task
 from .trace import EpisodeLog
 
 MAX_EXPLORES_PER_TARGET = 3
+MAX_NATURAL_EXPLORES_PER_TARGET = 4
+LOOK_RADIUS = 64
 # Failures of pathing, digging or the bot itself, which say nothing about the
 # world's rules: retried after an explore, so the bot tries from somewhere else.
 RETRIED_ERRORS = frozenset({"unreachable", "craft_failed", "dig_failed", "timeout"})
@@ -37,6 +41,11 @@ class Episode:
     inventory: dict[str, int] = field(default_factory=dict)
     used_skills: list[str] = field(default_factory=list)
     revisions: int = 0
+    # v2: a natural world (backend.look exists, rules use normalized names) and
+    # the time.monotonic() moment after which the episode may not act.
+    natural: bool = False
+    deadline: float | None = None
+    _next_direction: int = 0
     _tokens_at_start: int = 0
     _calls_at_start: int = 0
 
@@ -49,8 +58,21 @@ class Episode:
         return self.task.budget - self.actions
 
     @property
+    def out_of_time(self) -> bool:
+        return self.deadline is not None and time.monotonic() >= self.deadline
+
+    @property
+    def can_act(self) -> bool:
+        return self.budget_left > 0 and not self.out_of_time
+
+    @property
+    def counts(self) -> dict[str, int]:
+        """The inventory in the names rules use: normalized in a natural world."""
+        return normalize.counts(self.inventory) if self.natural else self.inventory
+
+    @property
     def goal_met(self) -> bool:
-        return self.inventory.get(self.task.goal_item, 0) >= self.task.goal_count
+        return self.counts.get(self.task.goal_item, 0) >= self.task.goal_count
 
     @property
     def llm_tokens(self) -> int:
@@ -64,22 +86,48 @@ class Episode:
         (such as the verifier's verdict) to each attempt's step."""
         outcome = self._act_once(action, annotate)
         explores = retries = 0
-        while not outcome.ok and self.budget_left >= 2:
-            if outcome.error == "not_found" and explores < MAX_EXPLORES_PER_TARGET:
+        max_explores = MAX_NATURAL_EXPLORES_PER_TARGET if self.natural else MAX_EXPLORES_PER_TARGET
+        while not outcome.ok and self.budget_left >= 2 and not self.out_of_time:
+            # A natural world's hazard (lava or water next to the target) means "look elsewhere" too.
+            searching = outcome.error == "not_found" or (self.natural and outcome.error == "hazard")
+            if searching and explores < max_explores:
                 explores += 1
+                explore = self._explore_toward(action.target) if self.natural and action.kind == "mine" else Action("explore")
             elif outcome.error in RETRIED_ERRORS and retries < MAX_RETRIES:
                 retries += 1
+                explore = Action("explore")
             else:
                 break
-            self._act_once(Action("explore"), None)
+            self._act_once(explore, None)
             outcome = self._act_once(action, annotate)
         return outcome
+
+    def _explore_toward(self, target: str | None) -> Action:
+        """Natural mode: look for the target's raw ids and explore toward the nearest
+        hit; with none in sight, try the next compass direction."""
+        hits = self.backend.look(normalize.members(target), LOOK_RADIUS)  # type: ignore[attr-defined]
+        nearest = min(
+            ((found["distance"], direction) for direction, blocks in hits.items() for found in blocks.values()),
+            default=None,
+        )
+        if nearest is not None:
+            direction = nearest[1]
+        else:
+            direction = DIRECTIONS[self._next_direction % len(DIRECTIONS)]
+            self._next_direction += 1
+        self.log.event("look", target=target, direction=direction, seen=nearest is not None)
+        return Action("explore", direction=direction)
 
     def _act_once(self, action: Action, annotate: Annotator | None) -> Outcome:
         outcome = self.backend.act(action)
         self.actions += 1
         self.inventory = outcome.inventory
         annotations = annotate(outcome) if annotate else {}
+        natural_fields: dict[str, Any] = {}
+        if self.natural:
+            natural_fields = {"travel": outcome.travel, "events": outcome.events}
+            if _moved(outcome.travel):
+                self.log.event("travel", index=self.actions, action=action.describe(), **outcome.travel)
         self.log.event(
             "step",
             index=self.actions,
@@ -94,6 +142,7 @@ class Episode:
             inventory=outcome.inventory,
             blocks_walked=outcome.blocks_walked,
             detail=outcome.detail,
+            **natural_fields,
             **annotations,
         )
         return outcome
@@ -124,3 +173,8 @@ class Episode:
         if result.success:
             self.backend.say(f"Goal reached: {self.task.goal_count} {self.task.goal_item}.")
         return result
+
+
+def _moved(travel: dict[str, Any]) -> bool:
+    """Whether getting into position walked, dug or placed anything."""
+    return bool(travel.get("distance") or travel.get("dug") or travel.get("placed"))
