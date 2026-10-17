@@ -78,10 +78,10 @@ Re-read this first after a restart or context compaction. The session prompt is
 | Milestone | Status |
 |---|---|
 | Wave 0 (bootstrap, contracts) | done: f7e048c (Opus review: 10 fixes applied before commit) |
-| Wave 1 lanes | all merged: rules, backends, life, infra, integ, bot (b23cacb, 16:35) |
+| Wave 1 lanes | all merged: rules, backends, life, infra, integ, bot (b23cacb, ~16:12) |
 | Wave 3 offline lanes | worlds merged; change merged ca84dc0 (r2 fires on the first wooden coal mine whose rule has a confirmation) |
 | M0 open world | done: seed 1001 (snowy taiga, spruce), instance a up, snapshot `fresh`, restore 7-10 s |
-| M1 natural-terrain actions | GATE PASS live (logs/v2_iron-1.log, 16:45): empty inventory -> wooden -> stone pickaxe, all exact checks MATCH; continued to iron_pickaxe (17/17 MATCH, 285 s) |
-| M2 life loop | sim done (see Evidence); live run starting 16:50 in screen `sv2-a-life`, run dir runs/m2-live-1 |
+| M1 natural-terrain actions | GATE PASS live (logs/v2_iron-1.log, ~16:13): empty inventory -> wooden -> stone pickaxe, all exact checks MATCH; continued to iron_pickaxe (17/17 MATCH, 285 s) |
+| M2 life loop | sim done (see Evidence); live run started 16:16 in screen `sv2-a-life`, run dir runs/m2-live-1 |
 | M3 mid-run rule change | not started |
 | M4 generalization | not started |
