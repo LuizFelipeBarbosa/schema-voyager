@@ -9,8 +9,9 @@ into a world where **coal ore only drops coal when mined with a stone-tier
 pickaxe** (a loot-table datapack the client can never see). SchemaVoyager (D)
 catches the missing drop at the mine step, demotes the rule, asks Claude for
 ranked alternatives, tests "needs a stone pickaxe", and finishes the task. A
-Voyager-style skill-only baseline (B) with the same model and actions replays
-its torch skill and keeps mining coal with a wooden pickaxe.
+Voyager-style skill-only baseline (B) with the same model, actions and hint
+replays its torch skill and keeps mining coal with a wooden pickaxe; it works
+the change out only some of the time, after several replans.
 
 ## Quick start
 
@@ -51,9 +52,14 @@ reuses recorded Claude responses from `runs/llm_cache.jsonl`.
 | `schema-voyager arena --layout 6 --task h3` | Build a layout on the server and switch its world rules |
 | `schema-voyager spectate <player>` | Spectator mode above the arena |
 | `schema-voyager report runs/<run>` | Print a run's results table |
+| `schema-voyager panel` | Trace panel on http://127.0.0.1:8765: replays an episode trace, or follows the newest one live (`?viewer=1` embeds the 3D viewer) |
+| `schema-voyager export runs/<run> [--note ...]` | Copy a finished run to the tracked `results/` folder and update the field guide's numbers |
 | `python scripts/eval_revision.py --n 5` | Live check that Claude ranks the stone-tier rule in its top 3 |
 
-Each run writes to `runs/<run>/`: `episodes/*.jsonl` (every plan, step,
+The talk, mapped to exact commands with fallbacks, is in [RUNBOOK.md](RUNBOOK.md).
+The final results, with every trace and store snapshot, are in [results/](results/).
+
+Each run writes to `runs/<run>/`: `COMMIT` (the code it ran), `episodes/*.jsonl` (every plan, step,
 prediction, observation, contradiction and revision), store snapshots
 (`store_D_0_prior.json`, `_1_after_first_episode`, `_2_after_training`,
 `_3_after_holdout`), the baseline's skill library, and `results.md`.
@@ -113,5 +119,9 @@ src/schema_voyager/
   llm.py            Claude calls, token metering, record/replay
   evaluator.py      metrics and results table
   demo.py           CLI
+  panel.py          local server for the trace panel
+  export.py         run -> results/ and site/dist/results.js
+site/dist/          field guide (index.html) and trace panel (trace.html)
+results/            final run: table, traces, store snapshots (written by export)
 tests/              offline tests (pytest); live bot tests: node mc/bot/test/*.js
 ```
