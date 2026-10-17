@@ -18,7 +18,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from .episode import Episode
-from .llm import LLMError
+from .llm import WORLD_MAY_DIFFER, LLMError
 from .models import Action, EpisodeResult, Outcome
 
 MAX_REPLANS = 3
@@ -139,7 +139,10 @@ def _render_prompt(episode: Episode, nearby: dict[str, int], skills: list[Baseli
             steps = "; ".join(Action(**a).describe() for a in skill.actions)
             lines.append(f"- {skill.name}: {skill.description}\n  {steps}")
     if feedback:
-        lines.append(f"\nYour previous plan did not reach the goal.\n{feedback}\nWrite the actions to run next, from the current state.")
+        lines.append(
+            f"\nYour previous plan did not reach the goal. {WORLD_MAY_DIFFER}\n{feedback}\n"
+            "Write the actions to run next, from the current state."
+        )
     return "\n".join(lines)
 
 

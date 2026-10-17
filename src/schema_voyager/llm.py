@@ -31,7 +31,11 @@ Rule format:
 - Use item and block ids without the "minecraft:" prefix. Wood is always oak (oak_log, oak_planks).
 - rationale is one short sentence."""
 
-REVISION_INSTRUCTIONS = """A rule the agent relied on just made a wrong prediction in a world it has not seen before. This world's rules may differ from vanilla Minecraft, and nobody will tell the agent how.
+# Every system gets this after its first surprise (D) or failed plan (B, B+),
+# so the comparison is between architectures, not prompts.
+WORLD_MAY_DIFFER = "This world's rules may differ from vanilla Minecraft, and nobody will tell the agent how."
+
+REVISION_INSTRUCTIONS = f"""A rule the agent relied on just made a wrong prediction in a world it has not seen before. {WORLD_MAY_DIFFER}
 
 Propose up to 3 alternative rules for the same action and subject, ranked from most to least likely, each of which explains the counterexample. Each must be a complete rule in the same format. Prefer alternatives the agent can test with items it knows how to obtain."""
 

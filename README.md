@@ -88,6 +88,9 @@ prediction, observation, contradiction and revision), store snapshots
   demoting a rule flags them.
 - **LLM use**: D calls Claude only to propose prior rules (once) and to revise
   a contradicted rule. B calls it to write every plan and replan.
+- **Same hint for every system**: D's revision prompt and B's replan prompt
+  both say "This world's rules may differ from vanilla Minecraft" (one shared
+  constant in `llm.py`), so B is not missing a clue D gets.
 
 Model: `claude-sonnet-5-5` for every system (override with
 `SCHEMA_VOYAGER_MODEL`). Token counts come from API usage.

@@ -5,7 +5,7 @@ from schema_voyager.agent import run_schemavoyager, seed_prior_rules
 from schema_voyager.baseline import SkillLibrary, run_skill_only
 from schema_voyager.demo import Runner, _fake_baseline_planner
 from schema_voyager.environment import SimulatedWorld
-from schema_voyager.llm import LLM, fixture_prior_rules
+from schema_voyager.llm import LLM, REVISION_INSTRUCTIONS, WORLD_MAY_DIFFER, fixture_prior_rules
 from schema_voyager.models import Action, Outcome
 from schema_voyager.planner import make_plan
 from schema_voyager.schema_store import SchemaStore, Transition
@@ -110,6 +110,21 @@ def test_b_plus_feedback_reports_each_actions_inventory_change(tmp_path):
     feedback = [e["summary"] for e in _events(tmp_path, "B+_h3_L6") if e["kind"] == "feedback"]
     assert not result.success
     assert "mine coal_ore with wooden_pickaxe (inventory change: none)" in feedback[0]
+
+
+def test_baseline_replans_get_the_same_changed_world_hint_as_d(tmp_path):
+    prompts = []
+
+    class RecordingLLM(LLM):
+        def baseline_plan(self, prompt, fake_plan=None):
+            prompts.append(prompt)
+            return super().baseline_plan(prompt, fake_plan)
+
+    runner = Runner(SimulatedWorld(), RecordingLLM(mode="fake"), tmp_path)
+    runner.run("B", get_task("h3"), 6, library=SkillLibrary())
+    assert WORLD_MAY_DIFFER in REVISION_INSTRUCTIONS
+    assert WORLD_MAY_DIFFER not in prompts[0]
+    assert all(WORLD_MAY_DIFFER in prompt for prompt in prompts[1:])
 
 
 def _events(run_dir, name):

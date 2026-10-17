@@ -16,6 +16,9 @@ from pathlib import Path
 GROUND_Y = -60
 ARENA_RADIUS = 24
 SPAWN = (0, 0)
+# Enough that a baseline which wastes ore on a wooden pickaxe in H3 still has
+# some left to test a better tool on.
+COAL_ORES = 5
 
 
 @dataclass
@@ -69,10 +72,10 @@ def _add_tree(layout: Layout, x: int, z: int) -> None:
 
 
 def _add_stone_patch(layout: Layout, rng: random.Random, cx: int, cz: int) -> None:
-    """A 4x3 patch, two blocks high. Three coal ores replace top-layer edge blocks."""
+    """A 4x3 patch, two blocks high. Coal ores replace some of the 8 top-layer edge blocks."""
     cells = [(cx + dx, cz + dz) for dx in range(-2, 2) for dz in range(-1, 2)]
     edge_cells = [cell for cell in cells if cell[1] != cz]
-    coal_cells = set(rng.sample(edge_cells, 3))
+    coal_cells = set(rng.sample(edge_cells, COAL_ORES))
     for x, z in cells:
         layout.blocks.append({"x": x, "y": GROUND_Y, "z": z, "block": "stone"})
         top = "coal_ore" if (x, z) in coal_cells else "stone"

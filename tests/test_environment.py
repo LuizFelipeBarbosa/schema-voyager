@@ -1,5 +1,5 @@
 from schema_voyager.environment import SimulatedWorld
-from schema_voyager.layouts import make_layout
+from schema_voyager.layouts import COAL_ORES, make_layout
 from schema_voyager.models import Action
 from schema_voyager.tasks import get_task
 
@@ -21,7 +21,7 @@ def test_everything_is_in_view_from_spawn():
     for seed in range(1, 11):
         nearby = _world_with_layout(seed).observe().nearby
         assert nearby.get("oak_log", 0) >= 9, seed
-        assert nearby.get("coal_ore", 0) == 3, seed
+        assert nearby.get("coal_ore", 0) == COAL_ORES, seed
 
 
 def _world_with_layout(seed: int) -> SimulatedWorld:
