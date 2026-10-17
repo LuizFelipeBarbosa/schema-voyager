@@ -47,6 +47,9 @@ Re-read this first after a restart or context compaction. The session prompt is
 
 - 16:00: demo tip moved to 4f1c29e (adds Crusoe Managed Inference as a second LLM provider); not needed by v2.
 
+- Interface added by the orchestrator for M3/M4 wiring: `runs/<run>/changes.jsonl` lines
+  `{t, change, action, subject, goal}`; `SV2_M3_CHANGE=r2` env (or `life --change r2`) arms the trigger.
+
 ## Commands that work
 
 - Tests: `PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m pytest -q` from sv2.
@@ -62,6 +65,8 @@ Re-read this first after a restart or context compaction. The session prompt is
 - Sim M2 (fake LLM, sim seed 1, 25 goals): 70 steps, all match, 0 contradictions; certified 15 rules incl.
   mine #log, coal_ore, craft #planks, stick, crafting_table, wooden/stone pickaxe, torch; NOT mine stone
   (planner tie-break picks mine_deepslate for #cobblestone -> integration fix). `runs/sim-m2/`.
+  After integ (planner prefers visible producers): sim seeds 2 and 3 certify all 9 T1-T3 rules; seed 1
+  certifies mine_deepslate in place of mine_stone (that sim world shows more deepslate than stone).
 - Sim M3 preview (`runs/sim-m3-r2`, `runs/sim-m3-stick2`): change caught at the exact step, 1 revision call,
   revision certified in its epoch, next goal using it 0 LLM calls.
 - Live LLM check in sim (`runs/sim-live-check`): v2 prior call OK, 15 well-formed rules, $0.024.
@@ -71,7 +76,8 @@ Re-read this first after a restart or context compaction. The session prompt is
 | Milestone | Status |
 |---|---|
 | Wave 0 (bootstrap, contracts) | done: f7e048c (Opus review: 10 fixes applied before commit) |
-| Wave 1 lanes | rules, backends, life, infra merged (e60ec9e + infra merge, ~16:05 PDT). Pending: bot |
+| Wave 1 lanes | rules, backends, life, infra merged (~16:05 PDT); integ fix merged 396e7fa (16:15). Pending: bot |
+| Wave 3 offline lanes | worlds (launched 16:08), change (launched 16:16) |
 | M0 open world | infra lane done: seed 1001 (snowy taiga, spruce), instance a up, snapshot `fresh`, restore 10 s; merge pending |
 | M1 natural-terrain actions | not started |
 | M2 life loop | not started |
