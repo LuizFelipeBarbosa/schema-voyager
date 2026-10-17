@@ -10,10 +10,11 @@ same world. Design: docs/v2-interfaces.md, "The life loop".
 from __future__ import annotations
 
 import json
+import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, ContextManager, Protocol
 
 from . import normalize
 from .adapter import LifeBackend
@@ -47,6 +48,103 @@ class LifeConfig:
 class LifeHooks:
     before_step: Callable[[Episode, PlanStep, list[PlanStep]], None] | None = None
     after_goal: Callable[[dict[str, Any]], None] | None = None
+
+
+# -- the M3 trigger -----------------------------------------------------------
+
+# Each rule change, with the planned step it first bites: (action kind, subject) in a plan step.
+CHANGE_STEPS = {"r2": ("mine", "coal_ore"), "stick2": ("craft", "stick")}
+CHANGE_PACKS = {"r2": "file/v2_coal_tool", "stick2": "file/v2_stick2"}
+DEMO_RCON_PORT = 25575
+PACK_POLL_TIMEOUT_S = 10.0
+
+
+class RconClient(Protocol):
+    def run(self, command: str) -> str: ...
+
+
+RconFactory = Callable[[], ContextManager[RconClient]]
+
+
+def rcon_factory(port: int) -> RconFactory:
+    """Opens a client on this instance's RCON port; never the live demo's."""
+    if port == DEMO_RCON_PORT:
+        raise ValueError(f"RCON port {DEMO_RCON_PORT} belongs to the live demo")
+    from rcon.source import Client
+
+    return lambda: Client("127.0.0.1", port, passwd=os.environ["RCON_PASSWORD"], timeout=10)
+
+
+def check_pack_ready(change: str, connect: RconFactory) -> None:
+    """The pack must exist and still be disabled, or the trigger has nothing to switch on."""
+    pack = f"[{CHANGE_PACKS[change]}]"
+    with connect() as client:
+        enabled, available = client.run("datapack list enabled"), client.run("datapack list available")
+    hint = "run scripts/v2-change.sh install"
+    if pack in enabled:
+        raise ValueError(f"datapack {pack} is already enabled; {hint} to reset it")
+    if pack not in available:
+        raise ValueError(f"datapack {pack} is not installed; {hint}")
+
+
+def rcon_switch(connect: RconFactory, settle_s: float = 1.0) -> Callable[[str], None]:
+    """A `switch_on(change)` that enables the change's datapack, waits until the server
+    lists it as enabled, then lets the reload settle."""
+
+    def switch_on(change: str) -> None:
+        pack = CHANGE_PACKS[change]
+        with connect() as client:
+            client.run(f'datapack enable "{pack}"')
+            deadline = time.monotonic() + PACK_POLL_TIMEOUT_S
+            while f"[{pack}]" not in client.run("datapack list enabled"):
+                if time.monotonic() > deadline:
+                    raise TimeoutError(f"datapack {pack} not enabled after {PACK_POLL_TIMEOUT_S:.0f} s")
+                time.sleep(0.5)
+        time.sleep(settle_s)
+
+    return switch_on
+
+
+class ChangeTrigger:
+    """A `LifeHooks.before_step` that switches one rule change on right before the first
+    planned step it changes, once per life, and logs it to changes.jsonl. The agent is not told.
+
+    Both bite only through a certified rule (a contradicted certified rule opens the epoch):
+    r2: mining coal ore with a wooden pickaxe. stick2: crafting sticks."""
+
+    def __init__(self, change: str, run_dir: Path, switch_on: Callable[[str], None], resume: bool = False):
+        self.change, self.switch_on = change, switch_on
+        self.log_path = run_dir / "changes.jsonl"
+        if not resume:
+            self.log_path.unlink(missing_ok=True)
+        self.fired = self._logged()
+
+    def __call__(self, episode: Episode, step: PlanStep, plan: list[PlanStep]) -> None:
+        if self.fired or not self._bites(step):
+            return
+        self.fired = True
+        self.switch_on(self.change)
+        kind, subject = CHANGE_STEPS[self.change]
+        line = {"t": time.time(), "change": self.change, "action": kind, "subject": subject, "goal": episode.task.task_id}
+        self.log_path.parent.mkdir(parents=True, exist_ok=True)
+        with self.log_path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(line) + "\n")
+        episode.log.event("world_change", **{k: v for k, v in line.items() if k != "t"})
+
+    def _bites(self, step: PlanStep) -> bool:
+        kind, subject = CHANGE_STEPS[self.change]
+        action = step.action
+        if action.kind != kind or normalize.family(action.target or "") != subject:
+            return False
+        if self.change == "r2":
+            return action.tool == "wooden_pickaxe" and step.rule.status == "certified"
+        return step.rule.status == "certified"
+
+    def _logged(self) -> bool:
+        if not self.log_path.exists():
+            return False
+        lines = self.log_path.read_text(encoding="utf-8").splitlines()
+        return any(json.loads(line)["change"] == self.change for line in lines if line.strip())
 
 
 def run_life(
