@@ -77,13 +77,13 @@ def rcon_factory(port: int) -> RconFactory:
 
 def check_pack_ready(change: str, connect: RconFactory) -> None:
     """The pack must exist and still be disabled, or the trigger has nothing to switch on."""
-    pack = f"[{CHANGE_PACKS[change]}]"
+    pack = CHANGE_PACKS[change]
     with connect() as client:
         enabled, available = client.run("datapack list enabled"), client.run("datapack list available")
     hint = "run scripts/v2-change.sh install"
-    if pack in enabled:
+    if _listed(pack, enabled):
         raise ValueError(f"datapack {pack} is already enabled; {hint} to reset it")
-    if pack not in available:
+    if not _listed(pack, available):
         raise ValueError(f"datapack {pack} is not installed; {hint}")
 
 
@@ -96,13 +96,19 @@ def rcon_switch(connect: RconFactory, settle_s: float = 1.0) -> Callable[[str], 
         with connect() as client:
             client.run(f'datapack enable "{pack}"')
             deadline = time.monotonic() + PACK_POLL_TIMEOUT_S
-            while f"[{pack}]" not in client.run("datapack list enabled"):
+            while not _listed(pack, client.run("datapack list enabled")):
                 if time.monotonic() > deadline:
                     raise TimeoutError(f"datapack {pack} not enabled after {PACK_POLL_TIMEOUT_S:.0f} s")
                 time.sleep(0.5)
         time.sleep(settle_s)
 
     return switch_on
+
+
+def _listed(pack: str, reply: str) -> bool:
+    """Whether a `datapack list` reply names the pack: the server prints world packs
+    as "[file/v2_coal_tool (world)]" and built-in ones as "[vanilla (built-in)]"."""
+    return f"[{pack} (" in reply or f"[{pack}]" in reply
 
 
 class ChangeTrigger:

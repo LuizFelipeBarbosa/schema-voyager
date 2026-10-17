@@ -113,9 +113,9 @@ class FakeRcon:
                 self.enabled.append(self.pending)
                 self.pending = None
             self.lag_polls = max(self.lag_polls - 1, 0)
-            return "There are %d data pack(s) enabled: %s" % (len(self.enabled), ", ".join(f"[{p}]" for p in self.enabled))
+            return "There are %d data pack(s) enabled: %s" % (len(self.enabled), ", ".join(f"[{p} (world)]" for p in self.enabled))
         if command == "datapack list available":
-            return "There are %d data pack(s) available: %s" % (len(self.available), ", ".join(f"[{p}]" for p in self.available))
+            return "There are %d data pack(s) available: %s" % (len(self.available), ", ".join(f"[{p} (world)]" for p in self.available))
         raise AssertionError(command)
 
     def factory(self):
