@@ -1,8 +1,8 @@
 // POST /mine: find the nearest exposed block, equip, path, dig, then measure
 // what the server dropped (exact) separately from what the bot picked up
 // (tolerant). A target the bot could not reach or dig is skipped for the rest
-// of the episode, so the next call picks the next nearest one instead of the
-// same block again. See contracts/bot_api.md.
+// of the episode while another is in view, so the next call picks the next
+// nearest one instead of the same block again. See contracts/bot_api.md.
 
 const { goals } = require('mineflayer-pathfinder')
 const {
@@ -31,7 +31,9 @@ async function mine (bot, { block: blockName, tool = null }, skipped) {
     return body
   }
 
-  const targetPos = findNearestExposedBlock(bot, blockName, skipped)
+  // When every visible target has failed once (say, the bot was wedged and
+  // could path nowhere), try them again: not_found means none is in view.
+  const targetPos = findNearestExposedBlock(bot, blockName, skipped) || findNearestExposedBlock(bot, blockName)
   if (!targetPos) return finish('not_found')
   result.target = { x: targetPos.x, y: targetPos.y, z: targetPos.z }
   const giveUpOnTarget = (error, detail) => {

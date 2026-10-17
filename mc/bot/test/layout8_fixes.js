@@ -3,8 +3,9 @@
 //          (armor stands stand in the four cells next to the bot), /craft
 //          places it at another cell, crafts, and picks the table back up.
 //   mine:  a log out of reach fails as unreachable once, the next /mine
-//          mines the next nearest log, and /reset_episode clears the skip
-//          list so the out-of-reach log is the target again.
+//          mines the next nearest log, /reset_episode clears the skip list,
+//          and once the skipped log is the only one left it is tried again
+//          rather than reported not_found.
 //   chat:  a burst of narration (D's instant replans sent one line each and
 //          got the bot kicked for spam) is queued and all of it is sent,
 //          paced so that vanilla does not kick the bot.
@@ -28,6 +29,7 @@ const TAG = 'layout8_fixes'
 const NEXT_TO_BOT = [[1, 0], [-1, 0], [0, 1], [0, -1]]
 const OUT_OF_REACH_LOG = [CX + 1, -55, CZ] // 5 blocks up, nothing to stand on: 5.6 blocks from the bot
 const GROUND_LOG = [CX + 6, -60, CZ] // reachable, 6.0 blocks from the bot
+const FAR_LOG = [CX - 7, -60, CZ] // reachable, the farthest
 const CHAT_BURST = 20 // vanilla would kick after 10 in quick succession
 
 function clearArena () {
@@ -68,6 +70,7 @@ async function mineCase (checker) {
   clearArena()
   rcon(`setblock ${OUT_OF_REACH_LOG.join(' ')} minecraft:oak_log`)
   rcon(`setblock ${GROUND_LOG.join(' ')} minecraft:oak_log`)
+  rcon(`setblock ${FAR_LOG.join(' ')} minecraft:oak_log`)
   resetBot({})
   await sleep(500)
   await post(API_PORT, '/reset_episode')
@@ -83,7 +86,13 @@ async function mineCase (checker) {
   const third = (await post(API_PORT, '/mine', { block: 'oak_log', tool: null })).body
   checker.check('mine: after /reset_episode the out-of-reach log is a target again',
     samePos(third.target, OUT_OF_REACH_LOG), third)
-  return { first: first.error, second: second.error, third: third.error, targets: [first.target, second.target, third.target] }
+  const fourth = (await post(API_PORT, '/mine', { block: 'oak_log', tool: null })).body
+  checker.check('mine: then the far log', fourth.ok === true && samePos(fourth.target, FAR_LOG), fourth)
+  const fifth = (await post(API_PORT, '/mine', { block: 'oak_log', tool: null })).body
+  checker.check('mine: with only the skipped log left, it is tried again, not reported not_found',
+    fifth.error === 'unreachable' && samePos(fifth.target, OUT_OF_REACH_LOG), fifth)
+  const calls = [first, second, third, fourth, fifth]
+  return { errors: calls.map((call) => call.error), targets: calls.map((call) => call.target) }
 }
 
 async function chatCase (checker, kicks) {

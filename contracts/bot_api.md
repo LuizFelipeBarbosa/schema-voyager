@@ -57,8 +57,8 @@ RCON from Python, not through this API.
 ## POST /mine  `{"block": "coal_ore", "tool": "wooden_pickaxe" | null}`
 
 1. Find the nearest `block` within 16 blocks that has an air neighbour,
-   skipping positions that already failed this episode (below).
-   None: `ok: false, error: "not_found"`.
+   skipping positions that already failed this episode (below) unless only
+   those are left. None: `ok: false, error: "not_found"`.
 2. If `tool` is set and not in the inventory: `ok: false, error: "missing_tool"`.
    Equip `tool`, or empty the hand if `tool` is null.
 3. Path to within reach (30 s timeout): `error: "unreachable"` on failure.
