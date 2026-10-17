@@ -115,8 +115,8 @@ def _learning_lines(
         for rule in store.rules.values():
             if rule.scope != episode.world_id or rule.source != "revision" or rule.status != "hypothesis":
                 continue
-            confirmed, _ = store.replay(rule)
-            if not confirmed:
+            confirmed, contradicted = store.replay(rule)
+            if not confirmed or contradicted:
                 continue
             count = len(confirmed)
             confirmation = "once" if count == 1 else f"{count} times"
@@ -145,7 +145,13 @@ def _skill_learning_line(store: SchemaStore, skill: Skill) -> str:
 def _revision_description(rule: Rule) -> str:
     tools = rule.preconditions.get("tool_any", [])
     if rule.kind == "mine":
-        return f"{rule.subject} needs {', '.join(tools) if tools else 'no special tool'}"
+        if not tools:
+            tool_text = "no special tool"
+        elif len(tools) <= 2:
+            tool_text = ", ".join(tools)
+        else:
+            tool_text = f"{tools[0]} (+{len(tools) - 1} more)"
+        return f"{rule.subject} needs {tool_text}"
     return f"craft {rule.subject}"
 
 

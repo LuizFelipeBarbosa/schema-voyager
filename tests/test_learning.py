@@ -57,6 +57,12 @@ def test_holdout_learning_mentions_revision_and_skill_dependency(tmp_path):
     runner.run("D", get_task("h3"), 6, store=store)
     kept = [message for message in world.messages if message.startswith("Kept for this world:")]
     assert kept and "mine_coal_ore.rev1" in kept[0] and "@" not in kept[0]
+    h3_chat = " ".join(world.messages)
+    assert "rev3" not in h3_chat
+    for rule in store.rules.values():
+        _, contradicted = store.replay(rule)
+        if rule.source == "revision" and contradicted:
+            assert rule.id.split("@", 1)[0] not in h3_chat
 
 
 def test_holdout_revisit_reuses_revision_without_llm(tmp_path):
