@@ -50,14 +50,20 @@ Re-read this first after a restart or context compaction. The session prompt is
 ## Commands that work
 
 - Tests: `PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m pytest -q` from sv2.
+- Instance a (bash only; from sv2 after the infra merge, else from ../sv2-wt/infra with SV2_HOME=sv2):
+  `scripts/v2-up.sh [--no-bot]`, `scripts/v2-down.sh`, `scripts/world-snapshot.sh <name>`,
+  `scripts/world-restore.sh <name>` (snapshot `fresh` = seed 1001 right after generation).
+  Instance b: prefix `SV2_INSTANCE=b SV2_MC_PORT=25567 SV2_RCON_PORT=25577 SV2_BOT_PORT=3210 SV2_VIEWER_PORT=3217`
+  (all four ports, since .env holds instance a's).
+- Screens: `sv2-a-mc`, `sv2-a-bot`; logs in sv2/logs/, pids in sv2/run/.
 
 ## Milestones
 
 | Milestone | Status |
 |---|---|
 | Wave 0 (bootstrap, contracts) | done: f7e048c (Opus review: 10 fixes applied before commit) |
-| Wave 1 lanes | launched ~16:10 PDT. rules merged 6d9dfce (16:20). Pending: infra (live), bot, backends, life |
-| M0 open world | not started |
+| Wave 1 lanes | launched ~16:10 PDT. rules merged 6d9dfce (16:20). infra done e233f04 (16:25, merge after life). Pending: bot, backends, life |
+| M0 open world | infra lane done: seed 1001 (snowy taiga, spruce), instance a up, snapshot `fresh`, restore 10 s; merge pending |
 | M1 natural-terrain actions | not started |
 | M2 life loop | not started |
 | M3 mid-run rule change | not started |
