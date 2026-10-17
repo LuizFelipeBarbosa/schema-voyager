@@ -1,75 +1,177 @@
 from __future__ import annotations
 
 import json
-from dataclasses import asdict
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .models import Episode, Skill, WorldRule
+from .models import Action, Rule, Skill
+from .verifier import predict
+
+TRAIN_WORLD = "train"
+MIN_CONFIRMATIONS = 2
+MIN_EPISODES = 2
 
 
+@dataclass
+class Transition:
+    """One exact-checkable step, kept for replay."""
+
+    id: str
+    episode_id: str
+    world_id: str
+    action: Action
+    observed: dict[str, Any]
+
+
+@dataclass
 class SchemaStore:
-    """Persistent, inspectable workspace for rules, skills, and evidence.
+    """Rules, skills and the transitions that are evidence for them.
 
-    Passing ``root=None`` keeps the store in memory, which is useful in tests.
-    A filesystem-backed store writes small JSON files so a demo can show the
-    agent's learned state without introducing a database dependency.
+    Rules are usable in their own scope (the training world, or the holdout
+    world whose revision proposed them) unless they were demoted there.
+    Certification only gates what becomes a reusable skill and what is saved.
     """
 
-    def __init__(self, root: Path | None = None):
-        self.root = root
-        self.rules: dict[str, WorldRule] = {}
-        self._skills: dict[str, Skill] = {}
-        self.episodes: list[dict[str, Any]] = []
-        if root is not None:
-            root.mkdir(parents=True, exist_ok=True)
+    rules: dict[str, Rule] = field(default_factory=dict)
+    skills: dict[str, Skill] = field(default_factory=dict)
+    transitions: list[Transition] = field(default_factory=list)
+    demoted_in: dict[str, dict[str, str]] = field(default_factory=dict)  # world -> rule -> transition
 
-    @property
-    def skills(self) -> list[Skill]:
-        return list(self._skills.values())
+    def add_rule(self, rule: Rule) -> None:
+        self.rules[rule.id] = rule
 
-    def has_skill(self, goal_item: str) -> bool:
-        return any(skill.goal_item == goal_item for skill in self._skills.values())
+    def usable_rules(self, world_id: str) -> list[Rule]:
+        demoted_here = self.demoted_in.get(world_id, {})
+        return [
+            rule
+            for rule in self.rules.values()
+            if rule.scope in (TRAIN_WORLD, world_id) and rule.status != "demoted" and rule.id not in demoted_here
+        ]
 
-    def get_skill_for_goal(self, goal_item: str) -> Skill | None:
-        return next(
-            (skill for skill in self._skills.values() if skill.goal_item == goal_item),
-            None,
+    def record_transition(self, transition: Transition) -> None:
+        self.transitions.append(transition)
+
+    def demote(self, rule_id: str, transition_id: str, world_id: str) -> list[str]:
+        """Demote a rule in one world and flag every skill that cites it."""
+        rule = self.rules[rule_id]
+        self.demoted_in.setdefault(world_id, {})[rule_id] = transition_id
+        if rule.scope == world_id:
+            rule.status = "demoted"
+        else:
+            rule.evidence.setdefault("counterexamples", []).append(transition_id)
+
+        flagged = []
+        for skill in self.skills.values():
+            if rule_id in skill.rule_ids and skill.status == "ok":
+                skill.status = "flagged"
+                skill.flagged_by = rule_id
+                flagged.append(skill.id)
+        return flagged
+
+    def certify(self) -> list[str]:
+        """Replay in scope and promote hypotheses that pass all three tests:
+        zero contradictions, enough confirmations, and confirmations from
+        more than one episode."""
+        newly_certified = []
+        for rule in self.rules.values():
+            confirmed, contradicted = self.replay(rule)
+            rule.evidence["confirmed"] = [t.id for t in confirmed]
+            rule.evidence["contradicted"] = [t.id for t in contradicted]
+            if rule.status != "hypothesis" or contradicted:
+                continue
+            episodes = {t.episode_id for t in confirmed}
+            if len(confirmed) >= MIN_CONFIRMATIONS and len(episodes) >= MIN_EPISODES:
+                rule.status = "certified"
+                newly_certified.append(rule.id)
+        return newly_certified
+
+    def replay(self, rule: Rule) -> tuple[list[Transition], list[Transition]]:
+        confirmed, contradicted = [], []
+        for transition in self.transitions:
+            if transition.world_id != rule.scope or not applies(rule, transition.action):
+                continue
+            if transition.observed == predict(rule, transition.action):
+                confirmed.append(transition)
+            else:
+                contradicted.append(transition)
+        return confirmed, contradicted
+
+    def evidence_summary(self, rule: Rule) -> str:
+        confirmed, _ = self.replay(rule)
+        if not confirmed:
+            return "No confirming observations yet; this rule comes from prior knowledge."
+        episodes = sorted({t.episode_id for t in confirmed})
+        lines = [f"Confirmed {len(confirmed)} times across {len(episodes)} training episodes, e.g.:"]
+        for transition in confirmed[:3]:
+            lines.append(f"- {transition.action.describe()} -> {json.dumps(transition.observed)}")
+        return "\n".join(lines)
+
+    def compile_skill(self, goal_item: str, goal_count: int, steps: list[tuple[Action, str]], episode_id: str) -> Skill:
+        rule_ids = list(dict.fromkeys(rule_id for _, rule_id in steps))
+        skill_id = f"skill_{goal_item}"
+        existing = self.skills.get(skill_id)
+        if existing is not None and existing.rule_ids == rule_ids:
+            existing.evidence.append(episode_id)
+            return existing
+        skill = Skill(
+            id=skill_id,
+            goal_item=goal_item,
+            goal_count=goal_count,
+            rule_ids=rule_ids,
+            steps=[action.to_dict() for action, _ in steps],
+            evidence=[episode_id],
+        )
+        self.skills[skill_id] = skill
+        return skill
+
+    def skill_for(self, item: str) -> Skill | None:
+        skill = self.skills.get(f"skill_{item}")
+        if skill is None or skill.status != "ok":
+            return None
+        return skill
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "rules": [rule.to_dict() for rule in self.rules.values()],
+            "skills": [skill.to_dict() for skill in self.skills.values()],
+            "demoted_in": self.demoted_in,
+            "transitions": [
+                {
+                    "id": t.id,
+                    "episode_id": t.episode_id,
+                    "world_id": t.world_id,
+                    "action": t.action.to_dict(),
+                    "observed": t.observed,
+                }
+                for t in self.transitions
+            ],
+        }
+
+    def save(self, path: Path) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(self.to_dict(), indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    @classmethod
+    def load(cls, path: Path) -> "SchemaStore":
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        return cls(
+            rules={r["id"]: Rule.from_dict(r) for r in payload["rules"]},
+            skills={s["id"]: Skill.from_dict(s) for s in payload["skills"]},
+            transitions=[
+                Transition(t["id"], t["episode_id"], t["world_id"], Action(**t["action"]), t["observed"])
+                for t in payload["transitions"]
+            ],
+            demoted_in=payload["demoted_in"],
         )
 
-    def upsert_rule(self, rule: WorldRule) -> None:
-        existing = self.rules.get(rule.rule_id)
-        if existing is not None:
-            existing.confidence = min(5, max(existing.confidence, rule.confidence) + 1)
-            for evidence in rule.evidence:
-                if evidence not in existing.evidence:
-                    existing.evidence.append(evidence)
-            self._write_json("world_model.json", [asdict(item) for item in self.rules.values()])
-            return
-        self.rules[rule.rule_id] = rule
-        self._write_json("world_model.json", [asdict(item) for item in self.rules.values()])
 
-    def upsert_skill(self, skill: Skill) -> None:
-        previous = self._skills.get(skill.skill_id)
-        if previous is not None:
-            skill.version = previous.version + 1
-            skill.evidence = list(dict.fromkeys(previous.evidence + skill.evidence))
-        self._skills[skill.skill_id] = skill
-        self._write_json("skills.json", [asdict(item) for item in self._skills.values()])
-
-    def record_episode(self, episode: Episode) -> None:
-        payload = asdict(episode)
-        payload["final_observation"]["position"] = asdict(episode.final_observation.position)
-        for serialized_step, step in zip(payload["steps"], episode.steps):
-            serialized_step["action"] = asdict(step.action)
-        self.episodes.append(payload)
-        self._write_json("episodes.json", self.episodes)
-
-    def _write_json(self, filename: str, payload: Any) -> None:
-        if self.root is None:
-            return
-        (self.root / filename).write_text(
-            json.dumps(payload, indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
-        )
-
+def applies(rule: Rule, action: Action) -> bool:
+    """Whether a rule makes a prediction for this action: same action and
+    subject, and for mining, a tool the rule's preconditions allow."""
+    if action.kind != rule.kind or action.target != rule.subject:
+        return False
+    if rule.kind == "mine":
+        tools = rule.preconditions.get("tool_any", [])
+        return not tools or action.tool in tools
+    return True

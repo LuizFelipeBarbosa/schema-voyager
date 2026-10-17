@@ -1,32 +1,24 @@
 from __future__ import annotations
 
-from collections import Counter
 from typing import Protocol
 
-from .models import Action, ActionResult, Observation, Position, TaskSpec
+from .layouts import Layout
+from .models import Action, Observation, Outcome, Task
 
 
-class MinecraftAdapter(Protocol):
-    """Runtime surface required by the agent loop.
+class Backend(Protocol):
+    """The action surface every system uses, in the simulator or on a real server.
 
-    A MineDojo, Mineflayer, or Voyager-backed implementation can satisfy this
-    protocol without changing planning, schema persistence, or evaluation.
+    Agents only see observations and outcomes. They never read the world's
+    recipe or loot tables.
     """
 
-    task: TaskSpec
-    position: Position
-    inventory: Counter
+    name: str
 
-    @property
-    def is_done(self) -> bool: ...
-
-    @property
-    def is_success(self) -> bool: ...
-
-    def reset(self) -> Observation: ...
+    def reset(self, task: Task, layout: Layout) -> Observation: ...
 
     def observe(self) -> Observation: ...
 
-    def step(self, action: Action) -> ActionResult: ...
+    def act(self, action: Action) -> Outcome: ...
 
-    def nearest_block(self, block: str) -> Position | None: ...
+    def say(self, message: str) -> None: ...

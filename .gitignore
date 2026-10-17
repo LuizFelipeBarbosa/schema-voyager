@@ -3,3 +3,7 @@ __pycache__/
 *.egg-info/
 .demo_artifacts/
 .pytest_cache/
+.env
+node_modules/
+mc/server-data/
+runs/
