@@ -84,4 +84,4 @@ Re-read this first after a restart or context compaction. The session prompt is
 | M1 natural-terrain actions | GATE PASS live (logs/v2_iron-1.log, ~16:13): empty inventory -> wooden -> stone pickaxe, all exact checks MATCH; continued to iron_pickaxe (17/17 MATCH, 285 s) |
 | M2 life loop | sim done (see Evidence); live run started 16:16 in screen `sv2-a-life`, run dir runs/m2-live-1 |
 | M3 mid-run rule change | not started |
-| M4 generalization | not started |
+| M4 generalization | seeds chosen by spawn-biome survey only (logs/survey-b.log, survey-b2.log): 2024 forest (birch+oak), 31337 grove (spruce), 22 savanna_plateau, 555 snowy_plains (hard); M3 rerun on 2024. Runs wait for M2/M3 review |
