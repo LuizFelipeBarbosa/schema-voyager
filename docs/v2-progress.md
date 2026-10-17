@@ -59,6 +59,8 @@ Re-read this first after a restart or context compaction. The session prompt is
   Instance b: prefix `SV2_INSTANCE=b SV2_MC_PORT=25567 SV2_RCON_PORT=25577 SV2_BOT_PORT=3210 SV2_VIEWER_PORT=3217`
   (all four ports, since .env holds instance a's).
 - Screens: `sv2-a-mc`, `sv2-a-bot`; logs in sv2/logs/, pids in sv2/run/.
+- M1 gate: `node mc/bot/test/v2_iron.js` from sv2 (after `scripts/world-restore.sh fresh`).
+- Live life: `screen -dmS sv2-a-life bash -c 'cd sv2 && PYTHONPATH=src .venv/bin/python -m schema_voyager.demo life --backend mc --llm live --minutes 35 --run-dir runs/<run> > logs/life-<run>.log 2>&1'`
 
 ## Evidence so far
 
@@ -76,10 +78,10 @@ Re-read this first after a restart or context compaction. The session prompt is
 | Milestone | Status |
 |---|---|
 | Wave 0 (bootstrap, contracts) | done: f7e048c (Opus review: 10 fixes applied before commit) |
-| Wave 1 lanes | rules, backends, life, infra merged (~16:05 PDT); integ fix merged 396e7fa (16:15). Pending: bot |
-| Wave 3 offline lanes | worlds (launched 16:08), change (launched 16:16) |
-| M0 open world | infra lane done: seed 1001 (snowy taiga, spruce), instance a up, snapshot `fresh`, restore 10 s; merge pending |
-| M1 natural-terrain actions | not started |
-| M2 life loop | not started |
+| Wave 1 lanes | all merged: rules, backends, life, infra, integ, bot (b23cacb, 16:35) |
+| Wave 3 offline lanes | worlds merged; change merged ca84dc0 (r2 fires on the first wooden coal mine whose rule has a confirmation) |
+| M0 open world | done: seed 1001 (snowy taiga, spruce), instance a up, snapshot `fresh`, restore 7-10 s |
+| M1 natural-terrain actions | GATE PASS live (logs/v2_iron-1.log, 16:45): empty inventory -> wooden -> stone pickaxe, all exact checks MATCH; continued to iron_pickaxe (17/17 MATCH, 285 s) |
+| M2 life loop | sim done (see Evidence); live run starting 16:50 in screen `sv2-a-life`, run dir runs/m2-live-1 |
 | M3 mid-run rule change | not started |
 | M4 generalization | not started |
