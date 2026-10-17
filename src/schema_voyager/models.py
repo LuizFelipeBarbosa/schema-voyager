@@ -4,8 +4,9 @@ from dataclasses import asdict, dataclass, field
 from typing import Any, Literal
 
 
-ActionKind = Literal["mine", "craft", "explore"]
+ActionKind = Literal["mine", "craft", "explore", "smelt"]
 RuleStatus = Literal["hypothesis", "certified", "demoted"]
+RuleCheck = Literal["exact", "stochastic"]
 
 
 @dataclass(frozen=True)
@@ -13,19 +14,36 @@ class Action:
     """One adapter call. A walk to the target is part of the action."""
 
     kind: ActionKind
-    target: str | None = None  # block for mine, item for craft
+    # mine: a block, or (v2) a group or variant family such as "#log" or "coal_ore";
+    # craft and smelt: the output item, which may be a group such as "#planks".
+    target: str | None = None
     tool: str | None = None  # mine only; None means bare hand
-    times: int = 1  # craft only: how many times the recipe runs
+    times: int = 1  # craft and smelt: how many times the recipe runs
+    fuel: str | None = None  # smelt only; may be a group
+    ingredient: str | None = None  # smelt only: the input item; may be a group
+    direction: str | None = None  # explore only: N, NE, E, SE, S, SW, W, NW; None is the v1 spiral
 
     def describe(self) -> str:
         if self.kind == "mine":
             return f"mine {self.target} with {self.tool or 'hand'}"
         if self.kind == "craft":
             return f"craft {self.target}" + (f" x{self.times}" if self.times > 1 else "")
-        return "explore"
+        if self.kind == "smelt":
+            times = f" x{self.times}" if self.times > 1 else ""
+            return f"smelt {self.ingredient} -> {self.target}{times} with {self.fuel}"
+        return f"explore {self.direction}" if self.direction else "explore"
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        """v2 fields are left out while unset, so v1 actions serialise (and key
+        the recorded LLM responses) exactly as before."""
+        payload = asdict(self)
+        for name in _V2_ACTION_FIELDS:
+            if payload[name] is None:
+                del payload[name]
+        return payload
+
+
+_V2_ACTION_FIELDS = ("fuel", "ingredient", "direction")
 
 
 @dataclass
@@ -49,6 +67,23 @@ class Outcome:
     inventory: dict[str, int] = field(default_factory=dict)
     blocks_walked: float = 0.0
     detail: dict[str, Any] = field(default_factory=dict)
+    # v2: getting into position before the step itself (tolerant):
+    # {"distance": float, "dug": {...}, "placed": {...}, "picked_up": {...}}
+    travel: dict[str, Any] = field(default_factory=dict)
+    # v2: bot events during the call, e.g. {"seq": 41, "type": "damage", "amount": 2.0}
+    events: list[dict[str, Any]] = field(default_factory=list)
+
+
+@dataclass
+class Status:
+    """The bot's condition (v2 /status) and its events after a given seq."""
+
+    health: float
+    food: int
+    position: tuple[float, float, float]
+    alive: bool = True
+    events: list[dict[str, Any]] = field(default_factory=list)
+    last_seq: int = 0
 
 
 @dataclass
@@ -71,6 +106,9 @@ class Rule:
     effects {"block_removed": true, "drops": {...}}.
     Craft rules: preconditions {"consumes": {...}, "station": "crafting_table" | None},
     effects {"gains": {...}} per recipe run.
+    Smelt rules (v2): preconditions {"consumes": {...}, "station": "furnace",
+    "fuel_any": [...]}, effects {"gains": {...}} per item smelted.
+    v2 rules use normalized names ("#planks", "coal_ore"); see docs/v2-interfaces.md.
     """
 
     id: str
@@ -88,6 +126,10 @@ class Rule:
     evidence: dict[str, list[str]] = field(
         default_factory=lambda: {"confirmed": [], "contradicted": [], "counterexamples": []}
     )
+    # v2: the declared kind of check (verifier.py's whitelists take precedence),
+    # and the epoch of its (world, action, family) key it was proposed in.
+    check: RuleCheck = "exact"
+    epoch: int = 0
 
     @property
     def kind(self) -> str:

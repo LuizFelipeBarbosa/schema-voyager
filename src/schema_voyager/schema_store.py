@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from .models import Action, Rule, Skill
-from .verifier import predict
+from .verifier import CheckKind, predict
 
 TRAIN_WORLD = "train"
 MIN_CONFIRMATIONS = 2
@@ -22,6 +22,24 @@ class Transition:
     world_id: str
     action: Action
     observed: dict[str, Any]
+    kind: CheckKind = "exact"  # "exact" or "stochastic"; quarantined steps are never recorded
+    seq: int = -1  # assigned by record_transition: its position in the log
+
+
+@dataclass
+class Epoch:
+    """From `start_seq` on, a rule key's earlier evidence can neither confirm nor
+    contradict rules proposed in this epoch. See docs/v2-interfaces.md."""
+
+    key: str  # epoch_key(world_id, action type, subject)
+    number: int  # 1, 2, ...; epoch 0 is implicit, from the start of the log
+    start_seq: int  # seq of the transition that opened it, which belongs to it
+    opened_by: str  # that transition's id
+    rule_id: str  # the rule whose contradiction opened it
+
+
+def epoch_key(world_id: str, kind: str, subject: str) -> str:
+    raise NotImplementedError("schema_store.epoch_key: rules lane")
 
 
 @dataclass
@@ -37,6 +55,13 @@ class SchemaStore:
     skills: dict[str, Skill] = field(default_factory=dict)
     transitions: list[Transition] = field(default_factory=list)
     demoted_in: dict[str, dict[str, str]] = field(default_factory=dict)  # world -> rule -> transition
+    epochs: dict[str, list[Epoch]] = field(default_factory=dict)  # epoch key -> opened epochs, in order
+
+    def current_epoch(self, key: str) -> int:
+        raise NotImplementedError("SchemaStore.current_epoch: rules lane")
+
+    def epoch_of(self, transition: Transition) -> int:
+        raise NotImplementedError("SchemaStore.epoch_of: rules lane")
 
     def add_rule(self, rule: Rule) -> None:
         self.rules[rule.id] = rule

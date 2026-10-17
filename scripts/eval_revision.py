@@ -17,7 +17,7 @@ import sys
 
 from dotenv import load_dotenv
 
-from schema_voyager.agent import CRAFTABLE_ITEMS, MINEABLE_BLOCKS
+from schema_voyager.tasks import CRAFTABLE_ITEMS, MINEABLE_BLOCKS
 from schema_voyager.llm import LLM, fixture_prior_rules
 from schema_voyager.models import Action
 from schema_voyager.schema_store import applies

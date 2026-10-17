@@ -13,7 +13,16 @@ from typing import Any, Literal
 
 from .models import Action, Outcome, Rule
 
-CheckStatus = Literal["match", "mismatch", "failed"]
+# v2 vocabulary (docs/v2-interfaces.md): quarantined steps are never evidence;
+# stochastic steps count toward a rule's allowed set only, never as a contradiction.
+CheckStatus = Literal["match", "mismatch", "failed", "quarantined", "stochastic"]
+CheckKind = Literal["exact", "stochastic", "tolerant", "quarantined"]
+Verdict = Literal["confirm", "contradict", "neutral"]
+
+# Wave 0 stubs, filled in by the rules lane.
+EXACT_FAMILIES: frozenset[str] = frozenset()
+STOCHASTIC_FAMILIES: frozenset[str] = frozenset()
+QUARANTINE_EVENTS: frozenset[str] = frozenset()
 
 
 @dataclass
@@ -22,6 +31,16 @@ class Check:
     predicted: dict[str, Any]
     observed: dict[str, Any]
     detail: str = ""
+    kind: CheckKind = "exact"
+
+
+def kind_of(rule: Rule, action: Action) -> CheckKind:
+    raise NotImplementedError("verifier.kind_of: rules lane")
+
+
+def evaluate(rule: Rule, action: Action, observed: dict[str, Any]) -> Verdict:
+    """Replay verdict for a recorded observation (normalizes it again)."""
+    raise NotImplementedError("verifier.evaluate: rules lane")
 
 
 def predict(rule: Rule, action: Action) -> dict[str, Any]:

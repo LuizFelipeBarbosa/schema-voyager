@@ -3,6 +3,11 @@ from __future__ import annotations
 from .models import Task
 
 
+# v1's arena vocabulary for the prior-rule call. v2 builds its vocabulary from
+# what the bot observes and the curriculum's whitelist instead.
+MINEABLE_BLOCKS = ["oak_log", "stone", "coal_ore"]
+CRAFTABLE_ITEMS = ["oak_planks", "stick", "crafting_table", "wooden_pickaxe", "stone_pickaxe", "torch"]
+
 TRAIN_LAYOUTS = (1, 2)
 HOLDOUT_LAYOUTS = (6, 7, 8)
 

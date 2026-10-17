@@ -158,3 +158,213 @@ inventory to settle, and returns the same body as `/observe`.
 `not_found`, `missing_tool`, `unreachable`, `dig_failed`,
 `missing_ingredients`, `missing_crafting_table`, `craft_failed`, `timeout`,
 `not_connected`.
+
+---
+
+# v2: natural terrain (SchemaVoyager v2)
+
+Everything above stays valid: a request without the v2 options below behaves
+exactly as in v1, and v1 clients ignore the added response fields. v2 adds
+options and fields to `/mine`, `/craft` and `/explore`, and four new endpoints.
+The Python client is `MineflayerBackend(natural=True)`; the module layout and
+the Python side are in `docs/v2-interfaces.md`.
+
+Ids are always raw Minecraft ids (`birch_log`, `deepslate_coal_ore`). The bot
+knows nothing about groups (`#log`) or variant families: Python expands them
+into lists of raw ids before calling, and normalizes what comes back. No bot
+code names a wood species, a coordinate, a seed or a biome.
+
+## Process (v2)
+
+The bot is configured by the same variables as v1; the v2 scripts set them from
+the instance settings: `MC_PORT=$SV2_MC_PORT`, `BOT_API_PORT=$SV2_BOT_PORT`,
+`VIEWER_PORT=$SV2_VIEWER_PORT`, `BOT_USERNAME=VoyagerBot`. Instance `a`:
+25566 / 3200 / 3207; instance `b`: 25567 / 3210 / 3217.
+
+## Fields added to every action response
+
+```jsonc
+{
+  // ...the v1 fields...
+  "events": [                       // bot events during this call, oldest first (see /status)
+    {"seq": 41, "t": 1760731234.512, "type": "damage", "phase": "travel", "amount": 2.0, "health": 18.0}
+  ],
+  "travel": {                       // getting into position, before the step's own dig / craft / smelt
+    "distance": 23.4,               // horizontal blocks walked
+    "dug": {"dirt": 3, "stone": 1}, // blocks the pathfinder broke on the way (raw ids)
+    "placed": {"dirt": 1},          // blocks placed on the way (pillaring, bridging)
+    "picked_up": {"dirt": 3, "cobblestone": 1}  // inventory gains before arrival
+  },
+  "inventory_before_step": {"oak_log": 2}       // snapshot on arrival, right before the step itself
+}
+```
+
+`travel` is always present on `/mine`, `/explore`, `/craft` and `/smelt` (all
+zero / empty when the bot didn't move). Everything in `travel` is tolerant: it
+is never evidence for or against a rule. Every exact field of a step (`drops`,
+`block_removed`, `inventory_delta`) is measured from `inventory_before_step`
+and the step's own window, so travel can't pollute it.
+
+Every event in an action response has `"phase": "travel"` (getting into
+position) or `"phase": "step"` (from `inventory_before_step` to the end of the
+call).
+
+### Event types
+
+| type | when | extra fields |
+|---|---|---|
+| `damage` | health went down | `amount`, `health` |
+| `death` | the bot died | `position` |
+| `respawn` | the bot respawned after a death | `position` |
+| `target_despawned` | the step's target block changed before the dig, or a drop entity vanished before its stack could be read | `detail` |
+| `interference` | during a dig's drop window, another block within 2 blocks of the target changed (leaf decay, falling gravel, flowing liquid) or a `falling_block` entity appeared there | `block`, `position` |
+| `stray_pickup` | the bot collected an item entity that didn't come from this step (not its own drop, not its own crafting table or furnace) | `items` |
+| `hazard` | the bot refused a target or a path because of lava or water | `kind` (`lava` or `water`), `position` |
+
+Python decides what an event means for the check (`verifier.QUARANTINE_EVENTS`):
+the bot only reports.
+
+## POST /mine (v2 options)
+
+```jsonc
+{
+  "block": "coal_ore",                              // v1: one raw id
+  "blocks": ["coal_ore", "deepslate_coal_ore"],     // v2: any of these (wins over "block")
+  "tool": "wooden_pickaxe",                         // or null
+  "dig_through": true,                              // v2: path may dig and pillar; target may be buried
+  "max_distance": 32,                               // v2: search radius, default 16
+  "scaffold": ["dirt", "cobbled_deepslate"]         // v2: the only blocks pathing may place; absent = none
+}
+```
+
+- Target choice: the nearest block whose id is in `blocks`, within
+  `max_distance`, not on the episode's skip list and not next to lava or flowing
+  water (those are skipped with a `hazard` event). Without `dig_through` the
+  target must have an air neighbour (v1). With `dig_through` an exposed target is
+  preferred when one is within `max_distance`; otherwise the nearest buried one.
+- Pathing with `dig_through`: may dig, and may pillar (1x1 towers) or bridge
+  with blocks listed in `scaffold` that the bot holds (none when `scaffold` is
+  absent, so pathing never spends an item the plan needs). It never digs the block straight below the bot,
+  never breaks a block next to lava or water, never walks into lava, avoids
+  drops of more than 3 blocks, and won't dig under a gravity block (gravel, sand). Without
+  `dig_through`, pathing is world-preserving as in v1.
+- On arrival: wait until 5 ticks have passed since the last travel dig, then
+  equip `tool` (or empty the hand) again, because the pathfinder switches to the
+  best tool for each dig on the way. `tool_used` is what is held when the dig
+  starts (null for an empty hand); Python fails a step whose `tool_used`
+  differs from the requested `tool`. Then take `inventory_before_step`.
+- The step's own window starts when the dig starts. `drops`: as in v1, but only
+  item entities whose spawn position lies inside the target's own cell (its
+  1x1x1 box plus 0.25 on each side), so drops of neighbouring digs, leaf decay
+  or gravel can't be counted. `block_removed` needs the server's block update
+  for the target cell; without one within 2 s, the step is `dig_failed`.
+  `picked_up`: tolerant gains since arrival.
+- Response adds `"block": "<raw id actually mined>"`, `tool_used`, `travel`,
+  `events`, `inventory_before_step`.
+- Errors: v1 codes, plus `hazard` (every candidate or path is next to lava or water)
+  and `quarantined` (the bot died, or took damage and stopped).
+
+## POST /craft (v2 fields)
+
+Request unchanged. `item` is always a raw id (Python resolves `#planks` to a
+species first). Response adds `travel` (normally empty; set if the bot moved to
+place a table), `events` (including `stray_pickup`), and
+`inventory_before_step`. `inventory_delta` is measured from
+`inventory_before_step`. When no single-variant recipe is affordable but the
+inventory can pay a tag ingredient by mixing variants (2 oak + 1 birch planks
+for a pickaxe, 2 cobblestone + 1 cobbled_deepslate for a stone pickaxe), the bot
+fills the grid itself (the `/probe` code path), takes the output and reports
+the real delta. Only if that fails: `missing_ingredients` with
+`"detail": "mixed_species"`.
+
+## POST /explore (v2 options)
+
+```jsonc
+{"direction": "NE", "distance": 32, "dig_through": true, "scaffold": ["dirt"]}
+```
+
+Without `direction`, it's the v1 spiral. With it, the bot walks up to
+`distance` blocks (default 32) along one of `N` (-z), `NE`, `E` (+x), `SE`,
+`S` (+z), `SW`, `W` (-x), `NW`, stopping at the world border, at
+barriers, before lava, or after 30 s. Response: v1 fields plus `travel`,
+`events`. `unreachable` when it moved less than 1 block.
+
+## POST /look  `{"blocks": ["coal_ore", "deepslate_coal_ore"], "radius": 64}`
+
+For each of 8 directions, the nearest block of each requested id within
+`radius` (default 64, max 96) of the bot, by 45-degree sector around the
+bot's position (`N` is centred on -z). It doesn't move the bot.
+
+```jsonc
+{
+  "ok": true,
+  "position": {"x": 10.5, "y": 71, "z": -3.5},
+  "radius": 64,
+  "directions": {
+    "N":  {"coal_ore": {"x": 12, "y": 64, "z": -40, "distance": 37.6, "exposed": true}},
+    "NE": {},
+    "E":  {"deepslate_coal_ore": {"x": 50, "y": -3, "z": -1, "distance": 85.1, "exposed": false}},
+    "SE": {}, "S": {}, "SW": {}, "W": {}, "NW": {}
+  }
+}
+```
+
+## POST /smelt  `{"ingredient": "raw_iron", "item": "iron_ingot", "times": 3, "fuel": "coal"}`
+
+1. Inventory needs `times` of `ingredient`, enough `fuel` (coal and charcoal
+   smelt 8 items each; anything else is counted as 1 item per fuel item), and a
+   placed furnace within 4 blocks or a `furnace` in the inventory. Else
+   `missing_ingredients` (with `missing`) or `missing_furnace`.
+2. Place the furnace like the crafting table (same cell retries), load the
+   input and fuel, wait for the output (about 10 s per item), take it, take back
+   any unburnt fuel and unsmelted input, then dig the furnace with the best
+   pickaxe held and pick it up (`furnace_retrieved`).
+3. Resync and settle as for `/craft`. `inventory_delta` is measured from
+   `inventory_before_step`. `fuel_used` reports the fuel removed (tolerant).
+   The action timeout for `/smelt` is `30 s + 12 s × times`.
+
+```jsonc
+{
+  "ok": true, "error": null, "ingredient": "raw_iron", "item": "iron_ingot", "times": 3,
+  "fuel": "coal", "fuel_used": 1, "used_furnace": true, "furnace_retrieved": true,
+  "inventory_delta": {"raw_iron": -3, "iron_ingot": 3, "coal": -1},
+  "inventory": {"iron_ingot": 3, "furnace": 1},
+  "travel": {"distance": 0, "dug": {}, "placed": {}, "picked_up": {}},
+  "events": [], "inventory_before_step": {"raw_iron": 3, "coal": 1, "furnace": 1}
+}
+```
+
+## POST /probe  `{"grid": [["birch_planks", null], ["birch_planks", null]]}`
+
+A 2x2 grid (player inventory) or 3x3 grid (needs a crafting table, placed and
+retrieved as for `/craft`). Puts the ingredients in the grid, reads the
+server's output slot after a resync, takes everything back, and checks the
+inventory is unchanged.
+
+```jsonc
+{"ok": true, "output": {"item": "stick", "count": 4}, "inventory_delta": {}, "events": []}
+// output is null when the grid makes nothing
+```
+
+Errors: `missing_ingredients`, `missing_crafting_table`, `craft_failed`.
+
+## POST /status  `{"since": 40}`
+
+Doesn't need the action lock (it answers while an action runs).
+
+```jsonc
+{
+  "ok": true, "connected": true, "alive": true,
+  "health": 18.0, "food": 20,
+  "position": {"x": 10.5, "y": 71, "z": -3.5},
+  "events": [{"seq": 41, "t": 1760731234.512, "type": "damage", "amount": 2.0, "health": 18.0}],
+  "last_seq": 41
+}
+```
+
+`events` are those with `seq > since` (the last 200 are kept). `seq` increases
+for the bot process's lifetime.
+
+## Error codes (v2)
+
+v1 codes, plus `hazard`, `quarantined` and `missing_furnace`.

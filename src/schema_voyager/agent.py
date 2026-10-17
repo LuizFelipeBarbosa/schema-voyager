@@ -13,10 +13,8 @@ from .llm import LLM, LLMError
 from .models import Action, EpisodeResult, Outcome, Rule, Skill
 from .planner import PlanningError, PlanStep, make_plan
 from .schema_store import SchemaStore, Transition, applies
+from .tasks import CRAFTABLE_ITEMS, MINEABLE_BLOCKS
 from .verifier import Check, check, predict
-
-MINEABLE_BLOCKS = ["oak_log", "stone", "coal_ore"]
-CRAFTABLE_ITEMS = ["oak_planks", "stick", "crafting_table", "wooden_pickaxe", "stone_pickaxe", "torch"]
 
 
 def seed_prior_rules(store: SchemaStore, llm: LLM) -> list[Rule]:

@@ -8,3 +8,6 @@ node_modules/
 mc/server-data/
 runs/
 .claude/
+/server*/
+/run/
+/logs/
