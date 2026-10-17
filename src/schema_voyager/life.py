@@ -109,8 +109,8 @@ class ChangeTrigger:
     """A `LifeHooks.before_step` that switches one rule change on right before the first
     planned step it changes, once per life, and logs it to changes.jsonl. The agent is not told.
 
-    Both bite only through a certified rule (a contradicted certified rule opens the epoch):
-    r2: mining coal ore with a wooden pickaxe. stick2: crafting sticks."""
+    r2: mining coal ore with a wooden pickaxe, by a rule that already has a confirmation.
+    stick2: crafting sticks, by a certified rule."""
 
     def __init__(self, change: str, run_dir: Path, switch_on: Callable[[str], None], resume: bool = False):
         self.change, self.switch_on = change, switch_on
@@ -137,7 +137,8 @@ class ChangeTrigger:
         if action.kind != kind or normalize.family(action.target or "") != subject:
             return False
         if self.change == "r2":
-            return action.tool == "wooden_pickaxe" and step.rule.status == "certified"
+            # A contradiction opens an epoch only for a rule with confirmations (certify() keeps them in evidence).
+            return action.tool == "wooden_pickaxe" and bool(step.rule.evidence.get("confirmed"))
         return step.rule.status == "certified"
 
     def _logged(self) -> bool:

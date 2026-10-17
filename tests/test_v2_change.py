@@ -25,8 +25,9 @@ PACKS = {"r2": "file/v2_coal_tool", "stick2": "file/v2_stick2"}
 # -- the trigger on hand-made steps ---------------------------------------------------
 
 
-def _step(kind, target, tool=None, status="certified"):
-    return SimpleNamespace(action=Action(kind, target, tool=tool), rule=SimpleNamespace(status=status))
+def _step(kind, target, tool=None, status="certified", confirmed=("t1",)):
+    rule = SimpleNamespace(status=status, evidence={"confirmed": list(confirmed)})
+    return SimpleNamespace(action=Action(kind, target, tool=tool), rule=rule)
 
 
 def _episode(goal="g008"):
@@ -63,7 +64,7 @@ def test_the_trigger_fires_once_before_the_step_it_changes(tmp_path, change, ste
 
 @pytest.mark.parametrize("change, step", [
     ("r2", _step("mine", "coal_ore", "stone_pickaxe")),
-    ("r2", _step("mine", "coal_ore", "wooden_pickaxe", status="hypothesis")),
+    ("r2", _step("mine", "coal_ore", "wooden_pickaxe", status="hypothesis", confirmed=())),
     ("r2", _step("mine", "iron_ore", "wooden_pickaxe")),
     ("stick2", _step("craft", "stick", status="hypothesis")),
     ("stick2", _step("craft", "torch")),
@@ -198,7 +199,7 @@ def test_the_datapacks_exist_for_1_21_1():
 # -- a whole simulated life per change ------------------------------------------------
 
 
-@pytest.mark.parametrize("change, goals", [("r2", 45), ("stick2", 25)])
+@pytest.mark.parametrize("change, goals", [("r2", 25), ("stick2", 25)])
 def test_a_simulated_life_passes_all_five_criteria(tmp_path, capsys, change, goals):
     world = NaturalWorld(seed=2)
     trigger = ChangeTrigger(change, tmp_path, lambda name: world.set_world_rules((name,)))

@@ -122,8 +122,10 @@ def _next_use_costs_no_calls(events: list[Event], store: SchemaStore, change: Ev
     )
     if use is None:
         return False, "(d) no later goal used the revised rule"
-    calls = life[int(use["goal"][1:])]["llm_calls"]
-    return calls == 0, f"(d) next goal using {use['rule']} ({use['goal']}) made {calls} LLM calls"
+    # The episode's own calls: life.jsonl also counts the prior rules asked for between goals.
+    end = next(e for e in events if e["kind"] == "episode_end" and e["goal"] == use["goal"])
+    calls, with_priors = end["llm_calls"], life[int(use["goal"][1:])]["llm_calls"]
+    return calls == 0, f"(d) next goal using {use['rule']} ({use['goal']}) made {calls} LLM calls ({with_priors} with prior-rule calls between goals)"
 
 
 def _no_mistake_repeated(events: list[Event], store: SchemaStore, change: Event) -> tuple[bool, str]:
