@@ -247,6 +247,17 @@ always uses the recorded real-server trace.
 - **Is the baseline fair?** B and B+ use the same model, the same actions,
   the same coal and the same "rules may differ" sentence. B+ even saw
   "inventory change: none" and repeated the mine.
+- **Did you try Crusoe's models?** Yes: `SCHEMA_VOYAGER_PROVIDER=crusoe`
+  runs every system on Crusoe Managed Inference (Nemotron 3 Super). Its
+  revisions matched Claude's: the stone-pickaxe rule ranked first in 5 of 5
+  trials. Its prior rules, written in one call before training, were usable
+  in 1 of 4 samples. One left the crafting table out of the pickaxe recipes,
+  one had the stone pickaxe consume stone instead of cobblestone, and one
+  returned a single rule. A wrong precondition makes the action fail
+  outright, and D treats a failure as tolerant, so it replans the same plan:
+  today D revises wrong effects, not wrong preconditions. That is the next
+  feature. On the one usable sample, D trained exactly as it does with
+  Claude. Logs: `runs/nemotron-eval/`.
 
 ## After a final sweep
 
