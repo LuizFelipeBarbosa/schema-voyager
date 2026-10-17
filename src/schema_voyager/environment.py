@@ -1,10 +1,16 @@
 from __future__ import annotations
 
 import math
+import random
 from collections import Counter
+from collections.abc import Iterable
+from dataclasses import dataclass
+from typing import Any
 
+from . import normalize
+from .adapter import DIRECTIONS, LookResult
 from .layouts import ARENA_RADIUS, GROUND_Y, Layout
-from .models import Action, Observation, Outcome, Task
+from .models import Action, Observation, Outcome, Status, Task
 
 # Vanilla 1.21 rules for the items in the benchmark. Only the simulator reads
 # these; the planner and agents must learn them through actions.
@@ -190,3 +196,706 @@ class SimulatedWorld:
             blocks_walked=round(self.blocks_walked, 1),
             detail=detail,
         )
+
+
+# --- NaturalWorld (v2) -------------------------------------------------------
+# A lazily generated, seeded stand-in for a naturally generated world. The
+# terrain is a pair of seeded height functions plus sparse per-chunk feature
+# lists (trees, ores, pools...) and a dict of changes; nothing dense is stored.
+
+Pos = tuple[int, int, int]
+
+# Vanilla 1.21.1 rules of docs/v2-interfaces.md, in normalized names.
+# item: (ingredients, output count, needs crafting table)
+WHITELIST_RECIPES: dict[str, tuple[dict[str, int], int, bool]] = {
+    "#planks": ({"#log": 1}, 4, False),
+    "stick": ({"#planks": 2}, 4, False),
+    "crafting_table": ({"#planks": 4}, 1, False),
+    "wooden_pickaxe": ({"#planks": 3, "stick": 2}, 1, True),
+    "wooden_axe": ({"#planks": 3, "stick": 2}, 1, True),
+    "wooden_shovel": ({"#planks": 1, "stick": 2}, 1, True),
+    "wooden_sword": ({"#planks": 2, "stick": 1}, 1, True),
+    "stone_pickaxe": ({"#cobblestone": 3, "stick": 2}, 1, True),
+    "stone_axe": ({"#cobblestone": 3, "stick": 2}, 1, True),
+    "stone_shovel": ({"#cobblestone": 1, "stick": 2}, 1, True),
+    "stone_sword": ({"#cobblestone": 2, "stick": 1}, 1, True),
+    "furnace": ({"#cobblestone": 8}, 1, True),
+    "torch": ({"coal": 1, "stick": 1}, 4, False),
+    "chest": ({"#planks": 8}, 1, True),
+    "ladder": ({"stick": 7}, 3, True),
+    "iron_pickaxe": ({"iron_ingot": 3, "stick": 2}, 1, True),
+    "iron_axe": ({"iron_ingot": 3, "stick": 2}, 1, True),
+    "iron_shovel": ({"iron_ingot": 1, "stick": 2}, 1, True),
+    "iron_sword": ({"iron_ingot": 2, "stick": 1}, 1, True),
+    "bucket": ({"iron_ingot": 3}, 1, True),
+    "shears": ({"iron_ingot": 2}, 1, False),
+}
+SMELTS = {"raw_iron": "iron_ingot"}
+FUEL_ITEMS_PER_FUEL = {"coal": 8, "charcoal": 8}  # any other fuel smelts 1 item
+OTHER_FUELS = ("#planks", "#log", "stick")
+
+TERRAIN_BOTTOM = -40  # bedrock; deepslate is -39..-1, stone 0 and up
+MAX_DISTANCE = 32
+REACH = 4.5
+WORLD_BORDER = 512
+SPAWN_CLEAR = 8  # no pools this close to the spawn
+TRAVEL_DAMAGE_CHANCE = 0.03
+STEP_DAMAGE_CHANCE = 0.005
+PASSABLE = frozenset({"air", "short_grass", "poppy", "dandelion"})
+LIQUIDS = frozenset({"water", "lava"})
+TERRAIN_BLOCKS = frozenset({"grass_block", "dirt", "stone", "deepslate"})
+UNLISTED_NEARBY = frozenset({"air", "cave_air", "grass_block", "dirt", "bedrock", "barrier", "short_grass", "tall_grass"})
+_DIRECTION_VECTORS = {
+    "N": (0, -1), "NE": (1, -1), "E": (1, 0), "SE": (1, 1),
+    "S": (0, 1), "SW": (-1, 1), "W": (-1, 0), "NW": (-1, -1),
+}
+
+
+@dataclass
+class _Chunk:
+    blocks: dict[Pos, str]
+    by_id: dict[str, list[Pos]]
+
+
+@dataclass
+class _Target:
+    pos: Pos
+    block: str
+    exposed: bool
+    path: list[Pos]  # cells between the bot and a buried target, dug on the way
+
+
+def _hash01(seed: int, salt: int, x: int, z: int) -> float:
+    n = (x * 374761393 + z * 668265263 + seed * 2246822519 + salt * 3266489917) & 0xFFFFFFFF
+    n = ((n ^ (n >> 13)) * 1274126177) & 0xFFFFFFFF
+    n = ((n ^ (n >> 16)) * 2246822519) & 0xFFFFFFFF
+    return (n ^ (n >> 15)) / 2**32
+
+
+def _smooth_noise(seed: int, salt: int, x: int, z: int, scale: int) -> float:
+    """Value noise in [0, 1): seeded lattice values, smoothly interpolated."""
+    gx, gz = math.floor(x / scale), math.floor(z / scale)
+    fx, fz = x / scale - gx, z / scale - gz
+    fx, fz = fx * fx * (3 - 2 * fx), fz * fz * (3 - 2 * fz)
+    a, b = _hash01(seed, salt, gx, gz), _hash01(seed, salt, gx + 1, gz)
+    c, d = _hash01(seed, salt, gx, gz + 1), _hash01(seed, salt, gx + 1, gz + 1)
+    return (a * (1 - fx) + b * fx) * (1 - fz) + (c * (1 - fx) + d * fx) * fz
+
+
+class NaturalWorld:
+    """Deterministic, cheap stand-in for a natural Minecraft world (LifeBackend).
+
+    The world may know vanilla (drops, recipes); species come from the `species`
+    argument or normalize.SPECIES. Inventories and outcomes use raw ids."""
+
+    name = "natural"
+
+    def __init__(self, seed: int, *, world_rules: tuple[str, ...] = (), species: tuple[str, ...] | None = None):
+        self.seed = seed
+        pool = list(species if species is not None else normalize.SPECIES)
+        self._tree_species = random.Random(f"{seed}:species").sample(pool, k=min(len(pool), 1 + seed % 3))
+        self._rng = random.Random(f"{seed}:rolls")  # random drops and damage
+        self._columns: dict[tuple[int, int], tuple[int, bool]] = {}
+        self._chunks: dict[tuple[int, int], _Chunk] = {}
+        self._changes: dict[Pos, str] = {}
+        self._skipped: set[Pos] = set()
+        self._events: list[dict[str, Any]] = []
+        self._seq = 0
+        self._spiral_leg = 0
+        self.inventory: Counter[str] = Counter()
+        self.blocks_walked = 0.0
+        self.health = 20.0
+        self.set_world_rules(world_rules)
+        self._cell: Pos = (0, self._column(0, 0)[0] + 1, 0)  # the bot's feet cell
+
+    # --- LifeBackend ---------------------------------------------------------
+
+    def reset(self, task: Task, layout: Layout) -> Observation:
+        """The terrain stays: only the inventory and the rules follow the task."""
+        self.inventory = Counter(task.start_inventory)
+        self.set_world_rules(task.world_rules)
+        return self.begin_episode()
+
+    def begin_episode(self) -> Observation:
+        self._skipped.clear()
+        self._spiral_leg = 0
+        self.blocks_walked = 0.0
+        return self.observe()
+
+    def set_world_rules(self, rules: Iterable[str]) -> None:
+        self.r2 = "r2" in rules
+        self.stick2 = "stick2" in rules
+
+    def say(self, message: str) -> None:
+        pass
+
+    def observe(self) -> Observation:
+        x, y, z = self._cell
+        nearby: Counter[str] = Counter()
+        for chunk in self._chunks_within(VIEW_RADIUS):
+            for block, positions in chunk.by_id.items():
+                if block not in UNLISTED_NEARBY:
+                    nearby[block] += sum(
+                        1 for pos in positions if self._changes.get(pos, block) == block and self._distance_to(pos) <= VIEW_RADIUS
+                    )
+        for column_x, column_z in self._disc(VIEW_RADIUS):
+            for block, (low, high) in self._spans(*self._column(column_x, column_z)).items():
+                if block in ("stone", "deepslate"):
+                    nearby[block] += max(0, min(high, y + VIEW_RADIUS) - max(low, y - VIEW_RADIUS) + 1)
+        return Observation(
+            position=self._position(),
+            inventory=self._inventory(),
+            nearby={block: count for block, count in sorted(nearby.items()) if count > 0},
+            blocks_walked=round(self.blocks_walked, 1),
+        )
+
+    def status(self, since: int = 0) -> Status:
+        return Status(
+            health=self.health,
+            food=20,
+            position=self._position(),
+            events=[event for event in self._events if event["seq"] > since],
+            last_seq=self._seq,
+        )
+
+    def look(self, blocks: list[str], radius: int = 64) -> LookResult:
+        x, _, z = self._cell
+        result: LookResult = {direction: {} for direction in DIRECTIONS}
+        for _, pos, block in sorted(self._candidates(set(blocks), min(radius, 96))):
+            angle = math.degrees(math.atan2(pos[0] - x, z - pos[2]))  # N is -z
+            sector = result[DIRECTIONS[round(angle / 45) % 8]]
+            if block not in sector:
+                sector[block] = {
+                    "x": pos[0], "y": pos[1], "z": pos[2],
+                    "distance": round(self._distance_to(pos), 1),
+                    "exposed": self._exposed(pos),
+                }
+        return result
+
+    def probe(self, grid: list[list[str | None]]) -> dict[str, Any]:
+        """The recipe output for a grid (shapeless, matched by tag), consuming nothing."""
+        cells = [item for row in grid for item in row if item]
+        held = Counter(cells)
+        if any(self.inventory[item] < count for item, count in held.items()):
+            return {"ok": False, "error": "missing_ingredients", "output": None, "inventory_delta": {}, "events": []}
+        if len(grid) > 2 and self.inventory["crafting_table"] < 1:
+            return {"ok": False, "error": "missing_crafting_table", "output": None, "inventory_delta": {}, "events": []}
+        wanted = Counter(normalize.family(item) for item in cells)
+        output = None
+        for key, (ingredients, count, needs_table) in WHITELIST_RECIPES.items():
+            if Counter(ingredients) == wanted and (len(grid) > 2 or not needs_table):
+                item = f"{normalize.species(cells[0])}_planks" if key == "#planks" else key
+                output = {"item": item, "count": self._output_count(key, count)}
+                break
+        return {"ok": True, "error": None, "output": output, "inventory_delta": {}, "events": []}
+
+    def act(self, action: Action) -> Outcome:
+        self.health = min(20.0, self.health + 1)
+        if action.kind == "mine":
+            return self._mine(action)
+        if action.kind == "craft":
+            return self._craft(action)
+        if action.kind == "smelt":
+            return self._smelt(action)
+        if action.kind == "explore":
+            return self._explore(action)
+        return self._fail("unknown_action")
+
+    # --- actions -------------------------------------------------------------
+
+    def _mine(self, action: Action) -> Outcome:
+        events: list[dict[str, Any]] = []
+        target = self._choose_target(set(normalize.members(action.target or "")), events)
+        if isinstance(target, str):
+            return self._fail(target, events=events)
+        if action.tool is not None and self.inventory[action.tool] < 1:
+            return self._fail("missing_tool", events=events)
+
+        travel = self._travel_to(target)
+        if travel["distance"] or travel["dug"]:
+            self._roll_damage("travel", TRAVEL_DAMAGE_CHANCE, events)
+        before_step = self._inventory()
+        drops = self._drops(target.block, action.tool)
+        self._changes[target.pos] = "air"
+        self.inventory.update(drops)
+        self._roll_damage("step", STEP_DAMAGE_CHANCE, events)
+        return Outcome(
+            ok=True,
+            block_removed=True,
+            drops=dict(drops),
+            picked_up=dict(drops),
+            inventory_delta=dict(drops),
+            inventory=self._inventory(),
+            blocks_walked=round(self.blocks_walked, 1),
+            detail={
+                "block": target.block,
+                "target": {"x": target.pos[0], "y": target.pos[1], "z": target.pos[2]},
+                "tool_used": action.tool,
+                "inventory_before_step": before_step,
+            },
+            travel=travel,
+            events=events,
+        )
+
+    def _craft(self, action: Action) -> Outcome:
+        name = action.target or ""
+        is_group = name.startswith("#")
+        key = name if is_group else normalize.family(name)
+        recipe = WHITELIST_RECIPES.get(key)
+        if recipe is None:
+            return self._fail("craft_failed")
+        ingredients, output, needs_table = recipe
+        try:
+            item = normalize.resolve(name, self._inventory()) if is_group else name
+        except ValueError:
+            return self._fail("missing_ingredients", missing={i: n * action.times for i, n in ingredients.items()})
+
+        # A raw planks target is made from logs of its own species; a group takes any.
+        log_species = normalize.species(item) if key == "#planks" and not is_group else None
+        payment, missing = self._pay(ingredients, action.times, log_species)
+        if missing:
+            return self._fail("missing_ingredients", missing=missing)
+        if needs_table and self.inventory["crafting_table"] < 1:
+            return self._fail("missing_crafting_table")
+
+        gains: Counter[str] = Counter()
+        if key == "#planks":  # planks take the species of the log consumed
+            for log, count in payment.items():
+                gains[f"{normalize.species(log)}_planks"] += output * count
+            item = max(gains, key=lambda planks: gains[planks])
+        else:
+            gains[item] = self._output_count(key, output) * action.times
+        return self._finish_recipe(payment, gains, item, {"used_table": needs_table, **({"table_retrieved": True} if needs_table else {})})
+
+    def _smelt(self, action: Action) -> Outcome:
+        try:
+            ingredient = normalize.resolve(action.ingredient or "", self._inventory())
+            fuel = normalize.resolve(action.fuel or "", self._inventory())
+        except ValueError:
+            return self._fail("missing_ingredients")
+        item = SMELTS.get(ingredient)
+        if item is None or item != action.target:
+            return self._fail("craft_failed")
+        if normalize.family(fuel) not in FUEL_ITEMS_PER_FUEL and normalize.family(fuel) not in OTHER_FUELS:
+            return self._fail("craft_failed", detail="not_fuel")
+
+        fuel_used = -(-action.times // FUEL_ITEMS_PER_FUEL.get(fuel, 1))  # ceil
+        payment = Counter({ingredient: action.times})
+        payment[fuel] += fuel_used
+        missing = {name: need - self.inventory[name] for name, need in payment.items() if self.inventory[name] < need}
+        if missing:
+            return self._fail("missing_ingredients", missing=missing)
+        if self.inventory["furnace"] < 1:
+            return self._fail("missing_furnace")
+        return self._finish_recipe(
+            payment,
+            Counter({item: action.times}),
+            item,
+            {"used_furnace": True, "furnace_retrieved": True, "fuel": fuel, "fuel_used": fuel_used},
+        )
+
+    def _explore(self, action: Action) -> Outcome:
+        if action.direction:
+            ux, uz = _DIRECTION_VECTORS[action.direction]
+            norm = math.hypot(ux, uz)
+            unit, steps = (ux / norm, uz / norm), MAX_DISTANCE
+        else:  # the v1 spiral
+            unit, steps = _SPIRAL[self._spiral_leg % 4], EXPLORE_LEG * (1 + self._spiral_leg // 2)
+            self._spiral_leg += 1
+
+        x, _, z = self._cell
+        reached, walked = None, 0
+        for step in range(1, steps + 1):
+            column_x, column_z = math.floor(x + 0.5 + unit[0] * step), math.floor(z + 0.5 + unit[1] * step)
+            ground = self._column(column_x, column_z)[0]
+            if max(abs(column_x), abs(column_z)) > WORLD_BORDER or self.block_at((column_x, ground, column_z)) == "lava":
+                break
+            reached, walked = (column_x, ground + 1, column_z), step
+        if reached is None:
+            return self._fail("unreachable")
+
+        events: list[dict[str, Any]] = []
+        self._cell = reached
+        self.blocks_walked += walked
+        self._roll_damage("travel", TRAVEL_DAMAGE_CHANCE, events)
+        position = self._position()
+        return Outcome(
+            ok=True,
+            inventory=self._inventory(),
+            blocks_walked=round(self.blocks_walked, 1),
+            detail={"position": {"x": position[0], "y": position[1], "z": position[2]}},
+            travel={"distance": float(walked), "dug": {}, "placed": {}, "picked_up": {}},
+            events=events,
+        )
+
+    # --- crafting helpers ----------------------------------------------------
+
+    def _pay(self, ingredients: dict[str, int], times: int, log_species: str | None) -> tuple[Counter[str], dict[str, int]]:
+        """Which inventory items pay the ingredients; tags take mixed species, most plentiful first."""
+        payment: Counter[str] = Counter()
+        missing: dict[str, int] = {}
+        for ingredient, count in ingredients.items():
+            need = count * times
+            if ingredient.startswith("#"):
+                held = sorted(
+                    (item for item, n in self.inventory.items()
+                     if n > 0 and normalize.family(item) == ingredient
+                     and (log_species is None or normalize.species(item) == log_species)),
+                    key=lambda item: (-self.inventory[item], item),
+                )
+            else:
+                held = [ingredient]
+            for item in held:
+                taken = min(self.inventory[item], need)
+                payment[item] += taken
+                need -= taken
+            if need:
+                missing[ingredient] = need
+        return payment, missing
+
+    def _finish_recipe(self, payment: Counter[str], gains: Counter[str], item: str, detail: dict[str, Any]) -> Outcome:
+        events: list[dict[str, Any]] = []
+        before_step = self._inventory()
+        delta: Counter[str] = Counter(gains)
+        delta.subtract(payment)
+        self.inventory.update(delta)
+        self._roll_damage("step", STEP_DAMAGE_CHANCE, events)
+        return Outcome(
+            ok=True,
+            inventory_delta={name: count for name, count in sorted(delta.items()) if count},
+            inventory=self._inventory(),
+            blocks_walked=round(self.blocks_walked, 1),
+            detail={**detail, "item": item, "inventory_before_step": before_step},
+            travel=_empty_travel(),
+            events=events,
+        )
+
+    def _output_count(self, item: str, count: int) -> int:
+        return 2 if item == "stick" and self.stick2 else count
+
+    # --- mining helpers ------------------------------------------------------
+
+    def _drops(self, block: str, tool: str | None) -> dict[str, int]:
+        tier = PICKAXE_TIER.get(tool or "", 0)
+        if block.endswith("_log") or block in ("poppy", "dandelion"):
+            return {block: 1}
+        if block in ("grass_block", "dirt"):
+            return {"dirt": 1}
+        if block == "stone":
+            return {"cobblestone": 1} if tier >= 1 else {}
+        if block == "deepslate":
+            return {"cobbled_deepslate": 1} if tier >= 1 else {}
+        if block in ("coal_ore", "deepslate_coal_ore"):
+            return {"coal": 1} if tier >= (2 if self.r2 else 1) else {}
+        if block in ("iron_ore", "deepslate_iron_ore"):
+            return {"raw_iron": 1} if tier >= 2 else {}
+        if block == "gravel":
+            return {"flint": 1} if self._rng.random() < 0.10 else {"gravel": 1}
+        if block == "short_grass":
+            return {"wheat_seeds": 1} if self._rng.random() < 0.125 else {}
+        if block.endswith("_leaves"):
+            species = block.removesuffix("_leaves")
+            drops: Counter[str] = Counter()
+            if self._rng.random() < 0.05:
+                drops[f"{species}_sapling"] += 1
+            if self._rng.random() < 0.02:
+                drops["stick"] += self._rng.randint(1, 2)
+            if species in ("oak", "dark_oak") and self._rng.random() < 0.005:
+                drops["apple"] += 1
+            return dict(drops)
+        return {}
+
+    def _choose_target(self, blocks: set[str], events: list[dict[str, Any]]) -> _Target | str:
+        """The nearest exposed candidate, else the nearest buried one; an error code if none is usable."""
+        candidates = sorted(self._candidates(blocks, MAX_DISTANCE))
+        hazard_seen = False
+        buried: list[tuple[float, Pos, str]] = []
+        for pass_exposed in (True, False):
+            for candidate in candidates if pass_exposed else buried:
+                _, pos, block = candidate
+                if pass_exposed and not self._exposed(pos):
+                    buried.append(candidate)
+                    continue
+                path = [] if pass_exposed else self._dig_path(pos)
+                if pos in self._skipped or any(self._near_lava(cell) for cell in [pos, *path]):
+                    hazard_seen = True
+                    if pos not in self._skipped:
+                        self._skipped.add(pos)
+                        events.append(self._emit(
+                            {"type": "hazard", "phase": "travel", "kind": "lava", "position": {"x": pos[0], "y": pos[1], "z": pos[2]}}
+                        ))
+                    continue
+                return _Target(pos, block, pass_exposed, path)
+        return "hazard" if hazard_seen else "not_found"
+
+    def _travel_to(self, target: _Target) -> dict[str, Any]:
+        """Walk (and dig, for a buried target) next to the target; returns the travel report."""
+        dug: Counter[str] = Counter()
+        picked_up: Counter[str] = Counter()
+        if target.exposed:
+            stand = self._cell if self._distance_to(target.pos) <= REACH else self._stand_next_to(target.pos)
+        else:
+            best_pickaxe = max((tool for tool in PICKAXE_TIER if self.inventory[tool] > 0), key=PICKAXE_TIER.get, default=None)
+            for cell in target.path:
+                block = self.block_at(cell)
+                if block not in PASSABLE and block not in LIQUIDS:
+                    dug[block] += 1
+                    picked_up.update(self._drops(block, best_pickaxe))
+                    self._changes[cell] = "air"
+            stand = target.path[-1] if target.path else self._cell
+        self.inventory.update(picked_up)
+
+        distance = math.hypot(stand[0] - self._cell[0], stand[2] - self._cell[2])
+        self.blocks_walked += distance
+        self._cell = stand
+        return {"distance": round(distance, 1), "dug": dict(dug), "placed": {}, "picked_up": dict(picked_up)}
+
+    def _dig_path(self, pos: Pos) -> list[Pos]:
+        """The straight line of cells between the bot and pos, both excluded."""
+        x, y, z = self._cell
+        dx, dy, dz = pos[0] - x, pos[1] - y, pos[2] - z
+        steps = max(abs(dx), abs(dy), abs(dz))
+        return [(x + round(dx * i / steps), y + round(dy * i / steps), z + round(dz * i / steps)) for i in range(1, steps)]
+
+    def _stand_next_to(self, pos: Pos) -> Pos:
+        """The free cell beside pos nearest to the bot, dropped to the floor."""
+        free = [
+            (pos[0] + dx, pos[1] + dy, pos[2] + dz)
+            for dx, dy, dz in _NEIGHBOURS
+            if self.block_at((pos[0] + dx, pos[1] + dy, pos[2] + dz)) in PASSABLE
+        ]
+        x, y, z = min(free, key=self._distance_to)
+        while y > TERRAIN_BOTTOM and self.block_at((x, y - 1, z)) in PASSABLE:
+            y -= 1
+        return (x, y, z)
+
+    def _roll_damage(self, phase: str, chance: float, events: list[dict[str, Any]]) -> None:
+        if self._rng.random() >= chance:
+            return
+        amount = float(self._rng.choice((1, 2, 3)))
+        self.health = max(1.0, self.health - amount)
+        events.append(self._emit({"type": "damage", "phase": phase, "amount": amount, "health": self.health}))
+
+    def _emit(self, event: dict[str, Any]) -> dict[str, Any]:
+        self._seq += 1
+        event = {"seq": self._seq, "t": 1_760_000_000.0 + self._seq * 0.5, **event}
+        self._events = [*self._events[-199:], event]
+        return event
+
+    def _near_lava(self, pos: Pos) -> bool:
+        x, y, z = pos
+        return self.block_at(pos) == "lava" or any(self.block_at((x + dx, y + dy, z + dz)) == "lava" for dx, dy, dz in _NEIGHBOURS)
+
+    def _exposed(self, pos: Pos) -> bool:
+        x, y, z = pos
+        return any(self.block_at((x + dx, y + dy, z + dz)) in PASSABLE for dx, dy, dz in _NEIGHBOURS)
+
+    # --- the world -----------------------------------------------------------
+
+    def block_at(self, pos: Pos) -> str:
+        if pos in self._changes:
+            return self._changes[pos]
+        feature = self._chunk(pos[0] >> 4, pos[2] >> 4).blocks.get(pos)
+        if feature is not None:
+            return feature
+        height, rocky = self._column(pos[0], pos[2])
+        y = pos[1]
+        if y > height:
+            return "air"
+        if y <= TERRAIN_BOTTOM:
+            return "bedrock"
+        if y == height:
+            return "stone" if rocky else "grass_block"
+        if y >= height - 3 and not rocky:
+            return "dirt"
+        return "stone" if y >= 0 else "deepslate"
+
+    def _column(self, x: int, z: int) -> tuple[int, bool]:
+        """(surface height, whether the surface is bare stone) of a column."""
+        column = self._columns.get((x, z))
+        if column is None:
+            height = 11 + 10 * (_smooth_noise(self.seed, 1, x, z, 28) - 0.5) + 5 * (_smooth_noise(self.seed, 2, x, z, 9) - 0.5)
+            rocky = _smooth_noise(self.seed, 3, x, z, 22) > 0.68
+            column = self._columns[(x, z)] = (max(6, min(18, round(height))), rocky)
+        return column
+
+    @staticmethod
+    def _spans(height: int, rocky: bool) -> dict[str, tuple[int, int]]:
+        """The y range of each terrain block in a column."""
+        if rocky:
+            return {"stone": (0, height), "deepslate": (TERRAIN_BOTTOM + 1, -1)}
+        return {
+            "grass_block": (height, height),
+            "dirt": (height - 3, height - 1),
+            "stone": (0, height - 4),
+            "deepslate": (TERRAIN_BOTTOM + 1, -1),
+        }
+
+    def _candidates(self, blocks: set[str], radius: float) -> list[tuple[float, Pos, str]]:
+        """(distance, position, block) of the wanted blocks within radius of the bot.
+
+        Terrain blocks are too many to list, so each column offers its topmost
+        block of the type and the one level with the bot."""
+        found = []
+        for chunk in self._chunks_within(radius):
+            for block in blocks & chunk.by_id.keys():
+                for pos in chunk.by_id[block]:
+                    distance = self._distance_to(pos)
+                    if 0 < distance <= radius and self._changes.get(pos, block) == block:
+                        found.append((distance, pos, block))
+        for pos, block in self._changes.items():  # placed blocks are not in any chunk
+            distance = self._distance_to(pos)
+            if block in blocks and 0 < distance <= radius:
+                found.append((distance, pos, block))
+        terrain = blocks & TERRAIN_BLOCKS
+        if terrain:
+            bot_y = self._cell[1]
+            for x, z in self._disc(radius):
+                spans = self._spans(*self._column(x, z))
+                for block in terrain:
+                    low, high = spans[block]
+                    for y in {high, min(max(bot_y, low), high)}:
+                        distance = self._distance_to((x, y, z))
+                        if 0 < distance <= radius and self.block_at((x, y, z)) == block:
+                            found.append((distance, (x, y, z), block))
+        return found
+
+    def _disc(self, radius: float) -> Iterable[tuple[int, int]]:
+        """The columns within a horizontal radius of the bot."""
+        x, _, z = self._cell
+        reach = int(radius)
+        return [(x + dx, z + dz) for dx in range(-reach, reach + 1) for dz in range(-reach, reach + 1) if dx * dx + dz * dz <= radius * radius]
+
+    def _chunks_within(self, radius: float) -> list[_Chunk]:
+        x, _, z = self._cell
+        reach = int(radius)
+        return [
+            self._chunk(cx, cz)
+            for cx in range((x - reach) >> 4, ((x + reach) >> 4) + 1)
+            for cz in range((z - reach) >> 4, ((z + reach) >> 4) + 1)
+        ]
+
+    def _chunk(self, cx: int, cz: int) -> _Chunk:
+        chunk = self._chunks.get((cx, cz))
+        if chunk is None:
+            chunk = self._chunks[(cx, cz)] = self._generate_chunk(cx, cz)
+        return chunk
+
+    def _generate_chunk(self, cx: int, cz: int) -> _Chunk:
+        rng = random.Random(f"{self.seed}:{cx}:{cz}")
+        x0, z0 = cx * 16, cz * 16
+        blocks: dict[Pos, str] = {}
+        self._add_pools(blocks, rng, x0, z0)
+        self._add_trees(blocks, rng, x0, z0)
+        self._add_gravel(blocks, rng, x0, z0)
+        self._add_ores(blocks, rng, x0, z0)
+        self._add_ground_cover(blocks, rng, x0, z0)
+        by_id: dict[str, list[Pos]] = {}
+        for pos, block in blocks.items():
+            by_id.setdefault(block, []).append(pos)
+        return _Chunk(blocks, by_id)
+
+    def _add_pools(self, blocks: dict[Pos, str], rng: random.Random, x0: int, z0: int) -> None:
+        for fluid, chance, (smallest, largest) in (("water", 0.3, (2, 3)), ("lava", 0.12, (1, 2))):
+            center_x, center_z = x0 + rng.randint(3, 12), z0 + rng.randint(3, 12)
+            radius = rng.randint(smallest, largest)
+            if rng.random() >= chance or math.hypot(center_x, center_z) < SPAWN_CLEAR:
+                continue
+            for x in range(center_x - radius, center_x + radius + 1):
+                for z in range(center_z - radius, center_z + radius + 1):
+                    if math.hypot(x - center_x, z - center_z) <= radius:
+                        height = self._column(x, z)[0]
+                        blocks[(x, height, z)] = blocks[(x, height - 1, z)] = fluid
+
+    def _add_trees(self, blocks: dict[Pos, str], rng: random.Random, x0: int, z0: int) -> None:
+        for _ in range(rng.randint(0, 5)):
+            x, z = x0 + rng.randint(2, 13), z0 + rng.randint(2, 13)  # leaves stay inside the chunk
+            species = rng.choice(self._tree_species)
+            top_height = rng.randint(4, 6)
+            height, rocky = self._column(x, z)
+            if rocky or (x, height, z) in blocks:
+                continue
+            top = height + top_height
+            for y in range(top - 2, top + 2):
+                radius = 2 if y < top else 1
+                for dx in range(-radius, radius + 1):
+                    for dz in range(-radius, radius + 1):
+                        if not (radius == 2 and abs(dx) == abs(dz) == 2):
+                            blocks.setdefault((x + dx, y, z + dz), f"{species}_leaves")
+            for y in range(height + 1, top + 1):
+                blocks[(x, y, z)] = f"{species}_log"
+
+    def _add_gravel(self, blocks: dict[Pos, str], rng: random.Random, x0: int, z0: int) -> None:
+        center_x, center_z = x0 + rng.randint(3, 12), z0 + rng.randint(3, 12)
+        if rng.random() >= 0.5:
+            return
+        for x in range(center_x - 2, center_x + 3):
+            for z in range(center_z - 2, center_z + 3):
+                if math.hypot(x - center_x, z - center_z) <= 2:
+                    height = self._column(x, z)[0]
+                    blocks.setdefault((x, height, z), "gravel")
+                    blocks.setdefault((x, height - 1, z), "gravel")
+
+    def _add_ores(self, blocks: dict[Pos, str], rng: random.Random, x0: int, z0: int) -> None:
+        # Outcrops of coal at the surface.
+        if rng.random() < 0.6:
+            x, z = x0 + rng.randint(2, 13), z0 + rng.randint(2, 13)
+            for _ in range(rng.randint(1, 3)):
+                column_x, column_z = x + rng.randint(-1, 1), z + rng.randint(-1, 1)
+                blocks.setdefault((column_x, self._column(column_x, column_z)[0], column_z), "coal_ore")
+        for _ in range(rng.randint(1, 3)):
+            self._add_vein(blocks, rng, x0, z0, "coal", rng.randint(3, 6), (-30, 10))
+        for _ in range(rng.randint(1, 2)):
+            self._add_vein(blocks, rng, x0, z0, "iron", rng.randint(1, 4), (-28, 6))
+
+    def _add_vein(self, blocks: dict[Pos, str], rng: random.Random, x0: int, z0: int, ore: str, size: int, y_range: tuple[int, int]) -> None:
+        """A random-walk vein under the surface; sometimes a pocket of lava touches it."""
+        x, z = x0 + rng.randrange(16), z0 + rng.randrange(16)
+        y = rng.randint(y_range[0], max(y_range[0], min(y_range[1], self._column(x, z)[0] - 4)))
+        cells = []
+        for _ in range(size):
+            if x0 <= x < x0 + 16 and z0 <= z < z0 + 16 and TERRAIN_BOTTOM < y <= self._column(x, z)[0] - 4 and (x, y, z) not in blocks:
+                blocks[(x, y, z)] = f"{'deepslate_' if y < 0 else ''}{ore}_ore"
+                cells.append((x, y, z))
+            dx, dy, dz = rng.choice(_NEIGHBOURS)
+            x, y, z = x + dx, y + dy, z + dz
+        if cells and rng.random() < 0.3:
+            dx, dy, dz = rng.choice(_NEIGHBOURS)
+            lava = (cells[0][0] + dx, cells[0][1] + dy, cells[0][2] + dz)
+            if x0 <= lava[0] < x0 + 16 and z0 <= lava[2] < z0 + 16 and lava[1] > TERRAIN_BOTTOM:
+                blocks.setdefault(lava, "lava")
+
+    def _add_ground_cover(self, blocks: dict[Pos, str], rng: random.Random, x0: int, z0: int) -> None:
+        for plant in ["short_grass"] * 10 + [rng.choice(("poppy", "dandelion")) for _ in range(3)]:
+            x, z = x0 + rng.randrange(16), z0 + rng.randrange(16)
+            height, rocky = self._column(x, z)
+            if not rocky and (x, height, z) not in blocks and (x, height + 1, z) not in blocks:
+                blocks[(x, height + 1, z)] = plant
+
+    # --- small helpers -------------------------------------------------------
+
+    def _position(self) -> tuple[float, float, float]:
+        x, y, z = self._cell
+        return (x + 0.5, float(y), z + 0.5)
+
+    def _distance_to(self, pos: Pos) -> float:
+        x, y, z = self._cell
+        return math.sqrt((pos[0] - x) ** 2 + (pos[1] - y) ** 2 + (pos[2] - z) ** 2)
+
+    def _inventory(self) -> dict[str, int]:
+        return {item: count for item, count in sorted(self.inventory.items()) if count > 0}
+
+    def _fail(self, error: str, events: list[dict[str, Any]] | None = None, **detail: Any) -> Outcome:
+        return Outcome(
+            ok=False,
+            error=error,
+            inventory=self._inventory(),
+            blocks_walked=round(self.blocks_walked, 1),
+            detail=detail,
+            travel=_empty_travel(),
+            events=events or [],
+        )
+
+
+def _empty_travel() -> dict[str, Any]:
+    return {"distance": 0.0, "dug": {}, "placed": {}, "picked_up": {}}
