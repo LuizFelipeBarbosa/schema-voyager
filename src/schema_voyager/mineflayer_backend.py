@@ -49,7 +49,7 @@ class MineflayerBackend:
                 inventory_delta=body.get("picked_up") or {},
                 inventory=body.get("inventory") or {},
                 blocks_walked=body.get("blocks_walked", 0.0),
-                detail=_detail(body, "target", "tool"),
+                detail=_detail(body, "target", "tool", "detail"),
             )
         if action.kind == "craft":
             body = self._post("/craft", {"item": action.target, "times": action.times})
@@ -59,7 +59,7 @@ class MineflayerBackend:
                 inventory_delta=body.get("inventory_delta") or {},
                 inventory=body.get("inventory") or {},
                 blocks_walked=body.get("blocks_walked", 0.0),
-                detail=_detail(body, "missing", "used_table", "table_retrieved"),
+                detail=_detail(body, "missing", "used_table", "table_retrieved", "detail"),
             )
         body = self._post("/explore")
         return Outcome(
@@ -105,4 +105,6 @@ def _observation(body: dict[str, Any]) -> Observation:
 
 
 def _detail(body: dict[str, Any], *keys: str) -> dict[str, Any]:
+    """The listed response fields that are set. "detail" is the bot's own
+    explanation of a failure, such as why a crafting table could not be placed."""
     return {key: body[key] for key in keys if body.get(key) is not None}

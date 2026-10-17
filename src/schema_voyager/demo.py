@@ -12,8 +12,10 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import subprocess
 import sys
 import time
+from functools import partial
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -84,6 +86,7 @@ class Runner:
 
 def run_demo(args: argparse.Namespace) -> None:
     run_dir = args.run_dir or Path("runs") / time.strftime("%Y%m%d-%H%M%S")
+    _record_commit(run_dir)
     runner = Runner(make_backend(args.backend), LLM(mode=args.llm, cache_path=LLM_CACHE), run_dir)
     systems = args.systems.split(",")
     train_seeds = _seeds(args.train_layouts)
@@ -132,6 +135,7 @@ def run_demo(args: argparse.Namespace) -> None:
 
 def run_episode(args: argparse.Namespace) -> None:
     run_dir = args.run_dir or Path("runs") / time.strftime("episode-%Y%m%d-%H%M%S")
+    _record_commit(run_dir)
     runner = Runner(make_backend(args.backend), LLM(mode=args.llm, cache_path=LLM_CACHE), run_dir)
     task = get_task(args.task)
     if args.system == "D":
@@ -187,6 +191,21 @@ def _fake_baseline_planner(task: Task):
             return []
 
     return plan
+
+
+def _record_commit(run_dir: Path) -> None:
+    """Note which code produced the run, unless a COMMIT file is already there."""
+    path = run_dir / "COMMIT"
+    if path.exists():
+        return
+    try:
+        git = partial(subprocess.run, capture_output=True, text=True, check=True)
+        commit = git(["git", "rev-parse", "--short", "HEAD"]).stdout.strip()
+        dirty = git(["git", "status", "--porcelain", "--untracked-files=no"]).stdout.strip()
+    except (OSError, subprocess.CalledProcessError):
+        return
+    run_dir.mkdir(parents=True, exist_ok=True)
+    path.write_text(commit + ("-dirty" if dirty else "") + "\n", encoding="utf-8")
 
 
 def _load_results(run_dir: Path) -> list[EpisodeResult]:

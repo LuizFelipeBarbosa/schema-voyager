@@ -2,7 +2,7 @@
 
 The Node bot server (`mc/bot/server.js`) owns one Mineflayer bot and exposes it
 over HTTP so the Python agent can drive it. The Python adapter
-(`src/schema_voyager/adapters/mineflayer.py`) is the only client.
+(`src/schema_voyager/mineflayer_backend.py`) is the only client.
 
 Arena building, inventory resets, teleports and datapack switches happen over
 RCON from Python, not through this API.
