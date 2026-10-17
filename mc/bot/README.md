@@ -46,10 +46,12 @@ and response.
 
 ## Live tests
 
-Both start their own server (`SpikeBot` on 3100, `T1Bot` on 3101, viewer off)
-and use RCON through `docker exec schema-voyager-mc rcon-cli`.
+Each starts its own server (`SpikeBot` on 3100, `T1Bot` on 3101, `FixBot` on
+3102, viewer off) and uses RCON through `docker exec schema-voyager-mc rcon-cli`.
+Run them only while no episode is running.
 
 ```bash
 node mc/bot/test/r2_spike.js              # gate G1: R2 loot table drops; leaves R2 enabled
 node mc/bot/test/scripted_t1.js --runs 3  # gate G2: logs -> planks -> stick -> table -> wooden pickaxe
+node mc/bot/test/layout8_fixes.js         # refused table cells and the /mine skip list
 ```

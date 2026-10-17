@@ -1,6 +1,8 @@
 // POST /mine: find the nearest exposed block, equip, path, dig, then measure
 // what the server dropped (exact) separately from what the bot picked up
-// (tolerant). See contracts/bot_api.md.
+// (tolerant). A target the bot could not reach or dig is skipped for the rest
+// of the episode, so the next call picks the next nearest one instead of the
+// same block again. See contracts/bot_api.md.
 
 const { goals } = require('mineflayer-pathfinder')
 const {
@@ -11,7 +13,8 @@ const {
 const DIG_REACH = 4 // stay inside the 4.5 block survival reach
 const DROP_WINDOW_TICKS = 20
 
-async function mine (bot, { block: blockName, tool = null }) {
+// `skipped`: the episode's set of failed target positions (Vec3#toString keys).
+async function mine (bot, { block: blockName, tool = null }, skipped) {
   const before = inventoryCounts(bot)
   const result = {
     block: blockName,
@@ -28,9 +31,13 @@ async function mine (bot, { block: blockName, tool = null }) {
     return body
   }
 
-  const targetPos = findNearestExposedBlock(bot, blockName)
+  const targetPos = findNearestExposedBlock(bot, blockName, skipped)
   if (!targetPos) return finish('not_found')
   result.target = { x: targetPos.x, y: targetPos.y, z: targetPos.z }
+  const giveUpOnTarget = (error, detail) => {
+    skipped.add(targetPos.toString())
+    return finish(error, detail)
+  }
 
   const toolItem = tool ? findInventoryItem(bot, tool) : null
   if (tool && !toolItem) return finish('missing_tool')
@@ -42,14 +49,14 @@ async function mine (bot, { block: blockName, tool = null }) {
   }
 
   const goal = new goals.GoalLookAtBlock(targetPos, bot.world, { reach: DIG_REACH })
-  if (!await gotoGoal(bot, goal)) return finish('unreachable')
+  if (!await gotoGoal(bot, goal)) return giveUpOnTarget('unreachable')
 
   const watcher = watchDrops(bot, targetPos)
   try {
     await bot.dig(bot.blockAt(targetPos), true)
   } catch (err) {
     watcher.stop()
-    return finish('dig_failed', err.message)
+    return giveUpOnTarget('dig_failed', err.message)
   }
   // Mineflayer marks the block as air locally when its dig timer ends; a
   // server rejection re-sends the real block within this window.
@@ -60,7 +67,8 @@ async function mine (bot, { block: blockName, tool = null }) {
 
   await pickUpEntities(bot, drops.entities)
   await settleInventory(bot)
-  return finish(result.block_removed ? null : 'dig_failed', result.block_removed ? null : 'block still present after dig')
+  if (!result.block_removed) return giveUpOnTarget('dig_failed', 'block still present after dig')
+  return finish(null)
 }
 
 module.exports = { mine }

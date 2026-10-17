@@ -54,7 +54,8 @@ RCON from Python, not through this API.
 
 ## POST /mine  `{"block": "coal_ore", "tool": "wooden_pickaxe" | null}`
 
-1. Find the nearest `block` within 16 blocks that has an air neighbour.
+1. Find the nearest `block` within 16 blocks that has an air neighbour,
+   skipping positions that already failed this episode (below).
    None: `ok: false, error: "not_found"`.
 2. If `tool` is set and not in the inventory: `ok: false, error: "missing_tool"`.
    Equip `tool`, or empty the hand if `tool` is null.
@@ -69,6 +70,11 @@ RCON from Python, not through this API.
 7. Pickup (tolerant): walk to each dropped entity that still exists, wait up to
    1 s for collection, retry twice. `picked_up` is the inventory gain over
    the whole call.
+
+A target that fails with `unreachable` (step 3) or `dig_failed` (step 4, or
+the block still there after the dig) is added to the episode's skip list, so
+the next `/mine` picks the next nearest block instead of the same one.
+`/reset_episode` clears the list.
 
 ```jsonc
 {
@@ -95,8 +101,11 @@ RCON from Python, not through this API.
    cheapest recipe from `bot.recipesAll` lacks.
 2. If the recipe needs a crafting table: use a placed `crafting_table` within
    4 blocks, else place one from the inventory next to the bot, else
-   `ok: false, error: "missing_crafting_table"`. A table the bot placed is dug
-   back up and picked up after crafting (`table_retrieved`).
+   `ok: false, error: "missing_crafting_table"`. Placement tries the free
+   cells at the bot's feet level, closest first; when the server refuses one,
+   it waits 5 ticks and tries the next, up to 6 cells, then answers
+   `craft_failed` with a `detail`. A table the bot placed is dug back up and
+   picked up after crafting (`table_retrieved`).
 3. Craft, close the window, then wait until the player inventory has had no
    slot updates for 5 ticks (cap 40 ticks). Mineflayer writes its predicted
    result into the output slot before the server confirms, so the inventory is
@@ -135,9 +144,9 @@ mismatches in game. `{"ok": true}`.
 ## POST /reset_episode  `{}`
 
 Call after Python has rebuilt the arena and teleported the bot. Stops the
-pathfinder, clears the spiral state, sets the spiral origin to the current
-position, zeroes `blocks_walked`, waits 10 ticks for the inventory to settle,
-and returns the same body as `/observe`.
+pathfinder, clears the spiral state and the `/mine` skip list, sets the spiral
+origin to the current position, zeroes `blocks_walked`, waits 10 ticks for the
+inventory to settle, and returns the same body as `/observe`.
 
 ## Error codes
 

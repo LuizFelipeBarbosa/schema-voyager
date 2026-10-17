@@ -25,7 +25,8 @@ const MAX_WALK_STEP = 2 // larger per-tick jumps are teleports, not walking
 
 let bot = null
 let connected = false
-const episode = { origin: null, spiral: newSpiral(), walked: 0 }
+// skippedTargets: mine targets that failed as unreachable or dig_failed this episode.
+const episode = { origin: null, spiral: newSpiral(), walked: 0, skippedTargets: new Set() }
 
 function log (message) {
   console.log(`${new Date().toISOString()} ${message}`)
@@ -130,6 +131,7 @@ async function resetEpisode () {
   episode.origin = bot.entity.position.clone()
   episode.spiral = newSpiral()
   episode.walked = 0
+  episode.skippedTargets.clear()
   return observe()
 }
 
@@ -209,7 +211,7 @@ app.get('/health', (req, res) => {
 })
 
 action('/observe', validators.none, () => observe())
-action('/mine', validators.mine, async (body) => ({ ...await mine(bot, body), blocks_walked: walked() }))
+action('/mine', validators.mine, async (body) => ({ ...await mine(bot, body, episode.skippedTargets), blocks_walked: walked() }))
 action('/craft', validators.craft, async (body) => ({ ...await craft(bot, body), blocks_walked: walked() }))
 action('/explore', validators.none, async () => ({ ...await explore(bot, episode), blocks_walked: walked() }))
 action('/chat', validators.chat, (body) => chat(body))

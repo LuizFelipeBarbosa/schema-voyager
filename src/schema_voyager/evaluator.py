@@ -92,7 +92,8 @@ def summarize(results: list[EpisodeResult]) -> str:
         "D's one-time prior-rule call before training is not charged to any episode. "
         "After a failed plan, B and B+ get the same \"rules may differ from vanilla\" sentence as D's revision prompt. "
         "Repeated failures count any identical action that failed or mined a block that dropped nothing "
-        "more than once, including `not_found` retries after the visible ore ran out.",
+        "more than once, including the shared policy's retries after an explore (`not_found`, `unreachable`, "
+        "`craft_failed`, `dig_failed`, `timeout`); every attempt and explore counts as an action.",
     ]
     return "\n".join(lines) + "\n"
 

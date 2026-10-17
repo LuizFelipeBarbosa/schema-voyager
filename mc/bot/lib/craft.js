@@ -11,6 +11,8 @@ const {
 
 const TABLE_SEARCH_RADIUS = 4
 const DROP_WINDOW_TICKS = 20
+const MAX_TABLE_CELLS = 6 // distinct cells tried before giving up on placing a table
+const TABLE_RETRY_TICKS = 5
 
 async function craft (bot, { item: itemName, times = 1 }) {
   const before = inventoryCounts(bot)
@@ -119,19 +121,37 @@ async function resyncInventory (bot) {
 
 // --- Crafting table --------------------------------------------------------
 
+// The server can refuse a cell that looks free here (say, an entity is in the
+// way), and asking again for the same cell gets the same answer. So each
+// refusal moves on to the next closest cell, a few ticks later.
 async function placeTable (bot) {
-  const spot = findTableSpot(bot)
-  if (!spot) throw new Error('no free spot next to the bot')
-  await bot.equip(findInventoryItem(bot, 'crafting_table'), 'hand')
-  await bot.placeBlock(bot.blockAt(spot.offset(0, -1, 0)), new Vec3(0, 1, 0))
-  const placed = bot.blockAt(spot)
-  if (placed?.name !== 'crafting_table') throw new Error(`found ${placed?.name} at ${spot} after placing`)
-  return placed
+  const spots = findTableSpots(bot).slice(0, MAX_TABLE_CELLS)
+  if (spots.length === 0) throw new Error('no free spot next to the bot')
+  let lastProblem = null
+  for (const spot of spots) {
+    lastProblem = await tryPlaceTable(bot, spot)
+    if (!lastProblem) return bot.blockAt(spot)
+    console.log(`warn: crafting table not placed at ${spot}: ${lastProblem}`)
+    await sleepTicks(TABLE_RETRY_TICKS)
+  }
+  throw new Error(`refused at ${spots.length} cells, last: ${lastProblem}`)
 }
 
-// An air cell at the bot's feet level, on a full solid block, that does not
+// Null when the table stands at `spot`, else what went wrong.
+async function tryPlaceTable (bot, spot) {
+  try {
+    await bot.equip(findInventoryItem(bot, 'crafting_table'), 'hand')
+    await bot.placeBlock(bot.blockAt(spot.offset(0, -1, 0)), new Vec3(0, 1, 0))
+  } catch (err) {
+    return err.message
+  }
+  const placed = bot.blockAt(spot)
+  return placed?.name === 'crafting_table' ? null : `found ${placed?.name} at ${spot} after placing`
+}
+
+// Air cells at the bot's feet level, on a full solid block, that do not
 // overlap the bot's hitbox; closest first, at most 2 blocks out.
-function findTableSpot (bot) {
+function findTableSpots (bot) {
   const feet = bot.entity.position.floored()
   const candidates = []
   for (let dx = -2; dx <= 2; dx++) {
@@ -145,7 +165,7 @@ function findTableSpot (bot) {
   }
   const botPos = bot.entity.position
   candidates.sort((a, b) => botPos.distanceTo(a.offset(0.5, 0, 0.5)) - botPos.distanceTo(b.offset(0.5, 0, 0.5)))
-  return candidates[0] || null
+  return candidates
 }
 
 function overlapsBot (bot, cell) {

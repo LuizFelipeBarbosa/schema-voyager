@@ -13,7 +13,9 @@ from .arena import Arena
 from .layouts import Layout
 from .models import Action, Observation, Outcome, Task
 
-REQUEST_TIMEOUT_S = 120
+# Longer than the bot's own 120 s action timeout, so a slow action comes back
+# as an error the episode can retry instead of a dropped connection.
+REQUEST_TIMEOUT_S = 150
 
 
 class BackendError(RuntimeError):
@@ -47,7 +49,7 @@ class MineflayerBackend:
                 drops=body.get("drops") or {},
                 picked_up=body.get("picked_up") or {},
                 inventory_delta=body.get("picked_up") or {},
-                inventory=body.get("inventory") or {},
+                inventory=self._inventory(body),
                 blocks_walked=body.get("blocks_walked", 0.0),
                 detail=_detail(body, "target", "tool", "detail"),
             )
@@ -57,7 +59,7 @@ class MineflayerBackend:
                 ok=body["ok"],
                 error=body.get("error"),
                 inventory_delta=body.get("inventory_delta") or {},
-                inventory=body.get("inventory") or {},
+                inventory=self._inventory(body),
                 blocks_walked=body.get("blocks_walked", 0.0),
                 detail=_detail(body, "missing", "used_table", "table_retrieved", "detail"),
             )
@@ -69,6 +71,10 @@ class MineflayerBackend:
             blocks_walked=body.get("blocks_walked", 0.0),
             detail=_detail(body, "position"),
         )
+
+    def _inventory(self, body: dict[str, Any]) -> dict[str, int]:
+        """The inventory an action reported; failures such as a timeout report none, so ask."""
+        return body["inventory"] if "inventory" in body else self.observe().inventory
 
     def say(self, message: str) -> None:
         try:

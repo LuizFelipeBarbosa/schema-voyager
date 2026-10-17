@@ -145,12 +145,14 @@ function scanNearbyBlocks (bot) {
   return summary
 }
 
-function findNearestExposedBlock (bot, blockName) {
+// The nearest `blockName` with an air neighbour whose position (as
+// Vec3#toString) is not in `skipped`.
+function findNearestExposedBlock (bot, blockName, skipped = new Set()) {
   let best = null
   let bestDistance = Infinity
   forEachNearbyBlock(bot, (name, pos, distance) => {
     if (name !== blockName || distance >= bestDistance) return
-    if (!hasAirNeighbour(bot, pos)) return
+    if (!hasAirNeighbour(bot, pos) || skipped.has(pos.toString())) return
     best = pos
     bestDistance = distance
   })

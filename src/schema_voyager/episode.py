@@ -13,6 +13,10 @@ from .models import Action, EpisodeResult, Outcome, Task
 from .trace import EpisodeLog
 
 MAX_EXPLORES_PER_TARGET = 3
+# Failures of pathing, digging or the bot itself, which say nothing about the
+# world's rules: retried after an explore, so the bot tries from somewhere else.
+RETRIED_ERRORS = frozenset({"unreachable", "craft_failed", "dig_failed", "timeout"})
+MAX_RETRIES = 2
 
 Annotator = Callable[[Outcome], dict[str, Any]]
 
@@ -53,19 +57,21 @@ class Episode:
         return self.llm.total_tokens - self._tokens_at_start
 
     def act(self, action: Action, annotate: Annotator | None = None) -> Outcome:
-        """Run one action. If the target is out of view, explore and retry,
-        within the budget. Every adapter call is logged and counted;
-        `annotate` adds fields (such as the verifier's verdict) to the step."""
+        """Run one action with the tolerant policy every system shares, within
+        the budget: a target out of view gets up to 3 explores, and an error in
+        RETRIED_ERRORS up to 2 more attempts, each after an explore. Every
+        adapter call is logged and counted as an action; `annotate` adds fields
+        (such as the verifier's verdict) to each attempt's step."""
         outcome = self._act_once(action, annotate)
-        explores = 0
-        while (
-            not outcome.ok
-            and outcome.error == "not_found"
-            and explores < MAX_EXPLORES_PER_TARGET
-            and self.budget_left >= 2
-        ):
+        explores = retries = 0
+        while not outcome.ok and self.budget_left >= 2:
+            if outcome.error == "not_found" and explores < MAX_EXPLORES_PER_TARGET:
+                explores += 1
+            elif outcome.error in RETRIED_ERRORS and retries < MAX_RETRIES:
+                retries += 1
+            else:
+                break
             self._act_once(Action("explore"), None)
-            explores += 1
             outcome = self._act_once(action, annotate)
         return outcome
 
