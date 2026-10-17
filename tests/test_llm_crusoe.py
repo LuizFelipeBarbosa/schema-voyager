@@ -30,8 +30,8 @@ class FakeEndpoint:
         return io.BytesIO(json.dumps(body).encode())
 
 
-def _http_error(code, detail):
-    return urllib.error.HTTPError("https://x", code, "error", {}, io.BytesIO(detail.encode()))
+def _http_error(code, detail, headers=None):
+    return urllib.error.HTTPError("https://x", code, "error", headers or {}, io.BytesIO(detail.encode()))
 
 
 @pytest.fixture
@@ -42,7 +42,9 @@ def crusoe(tmp_path, monkeypatch):
 
     def make(*replies):
         endpoint = FakeEndpoint(*replies)
+        endpoint.waits = []
         monkeypatch.setattr(llm_module.urllib.request, "urlopen", endpoint)
+        monkeypatch.setattr(llm_module.time, "sleep", endpoint.waits.append)
         return LLM(mode="live", provider="crusoe", cache_path=tmp_path / "cache.jsonl"), endpoint
 
     return make
@@ -105,7 +107,7 @@ def test_a_reply_that_misses_the_schema_is_asked_for_once_more(crusoe):
 
 
 def test_server_errors_and_a_missing_key_are_llm_errors(crusoe, monkeypatch):
-    llm, _ = crusoe(_http_error(500, "overloaded"))
+    llm, _ = crusoe(*[_http_error(500, "overloaded")] * 4)
     with pytest.raises(LLMError, match="500"):
         llm.baseline_plan("Goal: one log")
 
@@ -123,3 +125,32 @@ def test_recordings_of_the_two_providers_do_not_mix(crusoe, tmp_path):
     with pytest.raises(LLMError, match="no recorded response"):
         replay.baseline_plan("Goal: one log")
     assert LLM(mode="replay", provider="crusoe", cache_path=tmp_path / "cache.jsonl").baseline_plan("Goal: one log")[0] == "mine a log"
+
+
+def test_a_rate_limited_server_is_retried_after_a_wait(crusoe):
+    llm, endpoint = crusoe(_http_error(429, "max_requests_limit"), _http_error(429, "max_requests_limit"), json.dumps(PLAN))
+    assert llm.baseline_plan("Goal: one log")[0] == "mine a log"
+    assert endpoint.waits == [10, 30] and len(endpoint.requests) == 3
+
+    llm, endpoint = crusoe(_http_error(429, "slow down", {"Retry-After": "2"}), json.dumps(PLAN))
+    llm.baseline_plan("Goal: one log")
+    assert endpoint.waits == [2.0]
+
+    llm, endpoint = crusoe(*[_http_error(503, "busy", {"Retry-After": "1"})] * 4)
+    with pytest.raises(LLMError, match="503"):
+        llm.baseline_plan("Goal: one log")
+    assert len(endpoint.requests) == 4
+
+
+def test_a_timeout_gets_one_more_try(crusoe, monkeypatch):
+    llm, _ = crusoe()
+    calls = []
+
+    def times_out(request, timeout):
+        calls.append(timeout)
+        raise TimeoutError("The read operation timed out")
+
+    monkeypatch.setattr(llm_module.urllib.request, "urlopen", times_out)
+    with pytest.raises(LLMError, match="could not reach"):
+        llm.baseline_plan("Goal: one log")
+    assert calls == [llm_module.CRUSOE_TIMEOUT_S] * 2

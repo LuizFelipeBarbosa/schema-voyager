@@ -3,9 +3,11 @@
 1. Prior rules: Claude proposes one rule per action; we diff them against the
    hand-written vanilla rules.
 2. H3 revision: given the coal-ore counterexample (wooden pickaxe, block
-   removed, nothing dropped), Claude must rank a stone-tier pickaxe rule in its
-   top 3 that the agent keeps (it explains the counterexample). Passes at
-   >= 4 of N.
+   removed, nothing dropped), the model must rank a stone-tier pickaxe rule in
+   its top 3 that the agent keeps (it explains the counterexample). Passes at
+   >= 4 of N; a failed call counts as a miss.
+
+Set SCHEMA_VOYAGER_PROVIDER=crusoe to check Nemotron instead of Claude.
 
     python scripts/eval_revision.py --n 5
 """
@@ -18,7 +20,7 @@ import sys
 from dotenv import load_dotenv
 
 from schema_voyager.agent import CRAFTABLE_ITEMS, MINEABLE_BLOCKS
-from schema_voyager.llm import LLM, fixture_prior_rules
+from schema_voyager.llm import LLM, LLMError, fixture_prior_rules
 from schema_voyager.models import Action
 from schema_voyager.schema_store import applies
 from schema_voyager.verifier import predict
@@ -55,7 +57,11 @@ def main() -> None:
 
     passes = 0
     for trial in range(args.n):
-        hypotheses = llm.revise_rule(coal_rule, evidence, counterexample, known, world_id="weval")
+        try:
+            hypotheses = llm.revise_rule(coal_rule, evidence, counterexample, known, world_id="weval")
+        except LLMError as error:
+            print(f"\nTrial {trial + 1}: call failed, counted as a miss: {error}")
+            continue
         kept = [h for h in hypotheses if not applies(h, action) or predict(h, action) == observed]
         stone_rank = next(
             (i + 1 for i, h in enumerate(kept)

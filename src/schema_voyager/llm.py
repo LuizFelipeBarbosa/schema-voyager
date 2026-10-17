@@ -17,6 +17,7 @@ import hashlib
 import json
 import os
 import re
+import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
@@ -30,7 +31,9 @@ DEFAULT_EFFORT = "medium"
 CRUSOE_BASE_URL = "https://api.inference.crusoecloud.com/v1"
 CRUSOE_MODEL = "nvidia/NVIDIA-Nemotron-3-Super-120B-A12B"
 CRUSOE_THINKING = {"revise_rule"}  # Nemotron thinks before a revision, not before a plan or the prior rules
-REQUEST_TIMEOUT_S = 120
+CRUSOE_TIMEOUT_S = 180  # a revision with thinking can take over two minutes
+_RETRIED_STATUS = (429, 500, 502, 503, 504)
+_RETRY_WAITS_S = (10, 30, 60)  # before each new try after a 429 or 5xx, unless the server says how long
 DATA_DIR = Path(__file__).parent / "data"
 
 WORLD_MODEL_SYSTEM = """You are the world-model module of an agent playing Minecraft Java Edition 1.21 in survival mode.
@@ -320,16 +323,25 @@ class LLM:
             data=json.dumps(body).encode("utf-8"),
             headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"},
         )
-        try:
-            with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT_S) as response:
-                data = json.loads(response.read().decode("utf-8"))
-        except urllib.error.HTTPError as error:
-            detail = error.read().decode("utf-8", "replace")[:300]
-            if error.code in (400, 422) and options and any(name in detail for name in _OPTIONAL_FIELDS):
-                raise _RequestRejected(detail) from error
-            raise LLMError(f"Crusoe API error {error.code}: {detail}") from error
-        except (urllib.error.URLError, TimeoutError) as error:
-            raise LLMError(f"could not reach {base_url}: {error}") from error
+        # A rate-limited or failing server is tried again after a wait; a slow one once more at once.
+        waits, timed_out = list(_RETRY_WAITS_S), False
+        while True:
+            try:
+                with urllib.request.urlopen(request, timeout=CRUSOE_TIMEOUT_S) as response:
+                    data = json.loads(response.read().decode("utf-8"))
+                break
+            except urllib.error.HTTPError as error:
+                detail = error.read().decode("utf-8", "replace")[:300]
+                if error.code in (400, 422) and options and any(name in detail for name in _OPTIONAL_FIELDS):
+                    raise _RequestRejected(detail) from error
+                if error.code not in _RETRIED_STATUS or not waits:
+                    raise LLMError(f"Crusoe API error {error.code}: {detail}") from error
+                wait = waits.pop(0)
+                time.sleep(_retry_after(error) or wait)
+            except (urllib.error.URLError, TimeoutError) as error:
+                if timed_out:
+                    raise LLMError(f"could not reach {base_url}: {error}") from error
+                timed_out = True
 
         tokens = data.get("usage") or {}
         usage[0] += tokens.get("prompt_tokens", 0)
@@ -408,6 +420,14 @@ def _fake_revisions(rule: Rule, counterexample: dict[str, Any]) -> list[dict[str
         {**base, "tool_any": tiers[2:], "rationale": "needs an iron-tier pickaxe"},
         {**base, "tool_any": [], "yields": [], "rationale": "drops nothing in this world"},
     ]
+
+
+def _retry_after(error: urllib.error.HTTPError) -> float | None:
+    """The wait a 429 or 503 asks for in seconds, if it gives one."""
+    try:
+        return float(error.headers.get("Retry-After") or "")
+    except (AttributeError, ValueError):
+        return None
 
 
 def _parse_json(text: str) -> Any:
