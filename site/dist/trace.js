@@ -239,7 +239,7 @@ function applyEvent(state, event) {
       state.calls += 1;
       state.changes.push({
         tone: 'llm',
-        title: `Claude proposed ${event.hypotheses.length} ranked revisions`,
+        title: `Claude proposed ${plural(event.hypotheses.length, 'ranked revision')}`,
         detail: `${formatNumber(event.tokens)} tokens. Each must explain the counterexample.`,
         hypotheses: event.hypotheses
       });
