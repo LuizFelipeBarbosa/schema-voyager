@@ -80,13 +80,23 @@ function worldPreservingMovements (current) {
   return movements
 }
 
+// prismarine-viewer only sends the camera position on 'move', so a browser
+// opened while the bot stands still sees empty sky. Re-send the position
+// while idle; the walked-distance listener adds 0 for a zero-length move.
+const VIEWER_HEARTBEAT_MS = 1000
+
 function startViewer (current) {
   if (!config.viewerPort) return
   try {
     require('prismarine-viewer').mineflayer(current, { port: config.viewerPort, firstPerson: false, viewDistance: 4 })
   } catch (err) {
     log(`viewer failed to start: ${err.message}`)
+    return
   }
+  const heartbeat = setInterval(() => {
+    if (connected && !busy && current.entity) current.emit('move', current.entity.position.clone())
+  }, VIEWER_HEARTBEAT_MS)
+  current.once('end', () => clearInterval(heartbeat))
 }
 
 // Stops whatever the bot is doing (used on reset and on action timeout).
