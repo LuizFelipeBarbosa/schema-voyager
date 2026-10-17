@@ -1,13 +1,13 @@
 {
   "demoted_in": {
-    "w3919c": {
-      "mine_coal_ore": "D/h3/L8/24"
-    },
-    "wda661": {
-      "mine_coal_ore": "D/h3/L7/10"
-    },
-    "we77d2": {
+    "w43211": {
       "mine_coal_ore": "D/h3/L6/10"
+    },
+    "w4b81a": {
+      "mine_coal_ore": "D/h3/L8/10"
+    },
+    "we3fea": {
+      "mine_coal_ore": "D/h3/L7/10"
     }
   },
   "rules": [
@@ -117,7 +117,7 @@
         "counterexamples": [
           "D/h3/L6/10",
           "D/h3/L7/10",
-          "D/h3/L8/24"
+          "D/h3/L8/10"
         ]
       },
       "id": "mine_coal_ore",
@@ -377,45 +377,16 @@
         "contradicted": [],
         "counterexamples": []
       },
-      "id": "mine_coal_ore.rev1@we77d2",
+      "id": "mine_coal_ore.rev1@w43211",
       "preconditions": {
         "tool_any": [
           "stone_pickaxe"
         ]
       },
       "rank": 0,
-      "rationale": "In this world coal ore may need a stone pickaxe, so a wooden pickaxe removes the block but drops nothing.",
+      "rationale": "In this world coal ore needs a stone pickaxe or better, so a wooden pickaxe breaks it without dropping anything.",
       "revision_of": "mine_coal_ore",
-      "scope": "we77d2",
-      "source": "revision",
-      "status": "hypothesis"
-    },
-    {
-      "action": {
-        "block": "coal_ore",
-        "type": "mine"
-      },
-      "effects": {
-        "block_removed": true,
-        "drops": {}
-      },
-      "evidence": {
-        "confirmed": [
-          "D/h3/L6/10"
-        ],
-        "contradicted": [
-          "D/h3/L6/15"
-        ],
-        "counterexamples": []
-      },
-      "id": "mine_coal_ore.rev2@we77d2",
-      "preconditions": {
-        "tool_any": []
-      },
-      "rank": 1,
-      "rationale": "Coal ore may drop nothing in this world, whatever tool is used.",
-      "revision_of": "mine_coal_ore",
-      "scope": "we77d2",
+      "scope": "w43211",
       "source": "revision",
       "status": "hypothesis"
     },
@@ -437,16 +408,16 @@
         "contradicted": [],
         "counterexamples": []
       },
-      "id": "mine_coal_ore.rev1@wda661",
+      "id": "mine_coal_ore.rev1@we3fea",
       "preconditions": {
         "tool_any": [
           "stone_pickaxe"
         ]
       },
       "rank": 0,
-      "rationale": "In this world coal ore may need a stone pickaxe, so a wooden pickaxe removes the block but drops nothing.",
+      "rationale": "In this world coal ore may need a stone pickaxe, so the wooden pickaxe removes the block with no drop.",
       "revision_of": "mine_coal_ore",
-      "scope": "wda661",
+      "scope": "we3fea",
       "source": "revision",
       "status": "hypothesis"
     },
@@ -468,14 +439,17 @@
         ],
         "counterexamples": []
       },
-      "id": "mine_coal_ore.rev2@wda661",
+      "id": "mine_coal_ore.rev2@we3fea",
       "preconditions": {
-        "tool_any": []
+        "tool_any": [
+          "wooden_pickaxe",
+          "stone_pickaxe"
+        ]
       },
       "rank": 1,
-      "rationale": "Coal ore may drop nothing in this world, whatever tool is used.",
+      "rationale": "In this world coal ore may drop nothing, so mining it yields no items with any tool.",
       "revision_of": "mine_coal_ore",
-      "scope": "wda661",
+      "scope": "we3fea",
       "source": "revision",
       "status": "hypothesis"
     },
@@ -492,50 +466,21 @@
       },
       "evidence": {
         "confirmed": [
-          "D/h3/L8/50"
+          "D/h3/L8/15"
         ],
         "contradicted": [],
         "counterexamples": []
       },
-      "id": "mine_coal_ore.rev1@w3919c",
+      "id": "mine_coal_ore.rev1@w4b81a",
       "preconditions": {
         "tool_any": [
           "stone_pickaxe"
         ]
       },
       "rank": 0,
-      "rationale": "In this world coal ore may need a stone pickaxe, so the wooden pickaxe removes the block but drops nothing.",
+      "rationale": "In this world coal ore may need a stone pickaxe, so a wooden pickaxe breaks it but drops nothing.",
       "revision_of": "mine_coal_ore",
-      "scope": "w3919c",
-      "source": "revision",
-      "status": "hypothesis"
-    },
-    {
-      "action": {
-        "block": "coal_ore",
-        "type": "mine"
-      },
-      "effects": {
-        "block_removed": true,
-        "drops": {}
-      },
-      "evidence": {
-        "confirmed": [
-          "D/h3/L8/24"
-        ],
-        "contradicted": [
-          "D/h3/L8/50"
-        ],
-        "counterexamples": []
-      },
-      "id": "mine_coal_ore.rev2@w3919c",
-      "preconditions": {
-        "tool_any": []
-      },
-      "rank": 1,
-      "rationale": "Coal ore may drop nothing in this world, whatever tool is used.",
-      "revision_of": "mine_coal_ore",
-      "scope": "w3919c",
+      "scope": "w4b81a",
       "source": "revision",
       "status": "hypothesis"
     }
@@ -2061,7 +2006,7 @@
           "oak_log": 1
         }
       },
-      "world_id": "we77d2"
+      "world_id": "w43211"
     },
     {
       "action": {
@@ -2078,7 +2023,7 @@
           "oak_planks": 4
         }
       },
-      "world_id": "we77d2"
+      "world_id": "w43211"
     },
     {
       "action": {
@@ -2095,7 +2040,7 @@
           "stick": 4
         }
       },
-      "world_id": "we77d2"
+      "world_id": "w43211"
     },
     {
       "action": {
@@ -2112,7 +2057,7 @@
           "oak_log": 1
         }
       },
-      "world_id": "we77d2"
+      "world_id": "w43211"
     },
     {
       "action": {
@@ -2129,7 +2074,7 @@
           "oak_planks": 4
         }
       },
-      "world_id": "we77d2"
+      "world_id": "w43211"
     },
     {
       "action": {
@@ -2146,7 +2091,7 @@
           "oak_planks": -4
         }
       },
-      "world_id": "we77d2"
+      "world_id": "w43211"
     },
     {
       "action": {
@@ -2163,7 +2108,7 @@
           "oak_log": 1
         }
       },
-      "world_id": "we77d2"
+      "world_id": "w43211"
     },
     {
       "action": {
@@ -2180,7 +2125,7 @@
           "oak_planks": 4
         }
       },
-      "world_id": "we77d2"
+      "world_id": "w43211"
     },
     {
       "action": {
@@ -2198,7 +2143,7 @@
           "wooden_pickaxe": 1
         }
       },
-      "world_id": "we77d2"
+      "world_id": "w43211"
     },
     {
       "action": {
@@ -2213,7 +2158,7 @@
         "block_removed": true,
         "drops": {}
       },
-      "world_id": "we77d2"
+      "world_id": "w43211"
     },
     {
       "action": {
@@ -2230,7 +2175,7 @@
           "cobblestone": 1
         }
       },
-      "world_id": "we77d2"
+      "world_id": "w43211"
     },
     {
       "action": {
@@ -2247,7 +2192,7 @@
           "cobblestone": 1
         }
       },
-      "world_id": "we77d2"
+      "world_id": "w43211"
     },
     {
       "action": {
@@ -2264,7 +2209,7 @@
           "cobblestone": 1
         }
       },
-      "world_id": "we77d2"
+      "world_id": "w43211"
     },
     {
       "action": {
@@ -2282,7 +2227,7 @@
           "stone_pickaxe": 1
         }
       },
-      "world_id": "we77d2"
+      "world_id": "w43211"
     },
     {
       "action": {
@@ -2299,7 +2244,7 @@
           "coal": 1
         }
       },
-      "world_id": "we77d2"
+      "world_id": "w43211"
     },
     {
       "action": {
@@ -2316,7 +2261,7 @@
           "stick": 4
         }
       },
-      "world_id": "we77d2"
+      "world_id": "w43211"
     },
     {
       "action": {
@@ -2334,7 +2279,7 @@
           "torch": 4
         }
       },
-      "world_id": "we77d2"
+      "world_id": "w43211"
     },
     {
       "action": {
@@ -2351,7 +2296,7 @@
           "oak_log": 1
         }
       },
-      "world_id": "wda661"
+      "world_id": "we3fea"
     },
     {
       "action": {
@@ -2368,7 +2313,7 @@
           "oak_planks": 4
         }
       },
-      "world_id": "wda661"
+      "world_id": "we3fea"
     },
     {
       "action": {
@@ -2385,7 +2330,7 @@
           "stick": 4
         }
       },
-      "world_id": "wda661"
+      "world_id": "we3fea"
     },
     {
       "action": {
@@ -2402,7 +2347,7 @@
           "oak_log": 1
         }
       },
-      "world_id": "wda661"
+      "world_id": "we3fea"
     },
     {
       "action": {
@@ -2419,7 +2364,7 @@
           "oak_planks": 4
         }
       },
-      "world_id": "wda661"
+      "world_id": "we3fea"
     },
     {
       "action": {
@@ -2436,7 +2381,7 @@
           "oak_planks": -4
         }
       },
-      "world_id": "wda661"
+      "world_id": "we3fea"
     },
     {
       "action": {
@@ -2453,7 +2398,7 @@
           "oak_log": 1
         }
       },
-      "world_id": "wda661"
+      "world_id": "we3fea"
     },
     {
       "action": {
@@ -2470,7 +2415,7 @@
           "oak_planks": 4
         }
       },
-      "world_id": "wda661"
+      "world_id": "we3fea"
     },
     {
       "action": {
@@ -2488,7 +2433,7 @@
           "wooden_pickaxe": 1
         }
       },
-      "world_id": "wda661"
+      "world_id": "we3fea"
     },
     {
       "action": {
@@ -2503,7 +2448,7 @@
         "block_removed": true,
         "drops": {}
       },
-      "world_id": "wda661"
+      "world_id": "we3fea"
     },
     {
       "action": {
@@ -2520,7 +2465,7 @@
           "cobblestone": 1
         }
       },
-      "world_id": "wda661"
+      "world_id": "we3fea"
     },
     {
       "action": {
@@ -2537,7 +2482,7 @@
           "cobblestone": 1
         }
       },
-      "world_id": "wda661"
+      "world_id": "we3fea"
     },
     {
       "action": {
@@ -2554,7 +2499,7 @@
           "cobblestone": 1
         }
       },
-      "world_id": "wda661"
+      "world_id": "we3fea"
     },
     {
       "action": {
@@ -2572,7 +2517,7 @@
           "stone_pickaxe": 1
         }
       },
-      "world_id": "wda661"
+      "world_id": "we3fea"
     },
     {
       "action": {
@@ -2589,7 +2534,7 @@
           "coal": 1
         }
       },
-      "world_id": "wda661"
+      "world_id": "we3fea"
     },
     {
       "action": {
@@ -2606,7 +2551,7 @@
           "stick": 4
         }
       },
-      "world_id": "wda661"
+      "world_id": "we3fea"
     },
     {
       "action": {
@@ -2624,7 +2569,7 @@
           "torch": 4
         }
       },
-      "world_id": "wda661"
+      "world_id": "we3fea"
     },
     {
       "action": {
@@ -2641,7 +2586,7 @@
           "oak_log": 1
         }
       },
-      "world_id": "w3919c"
+      "world_id": "w4b81a"
     },
     {
       "action": {
@@ -2658,7 +2603,7 @@
           "oak_planks": 4
         }
       },
-      "world_id": "w3919c"
+      "world_id": "w4b81a"
     },
     {
       "action": {
@@ -2675,7 +2620,7 @@
           "stick": 4
         }
       },
-      "world_id": "w3919c"
+      "world_id": "w4b81a"
     },
     {
       "action": {
@@ -2692,7 +2637,7 @@
           "oak_log": 1
         }
       },
-      "world_id": "w3919c"
+      "world_id": "w4b81a"
     },
     {
       "action": {
@@ -2709,7 +2654,7 @@
           "oak_planks": 4
         }
       },
-      "world_id": "w3919c"
+      "world_id": "w4b81a"
     },
     {
       "action": {
@@ -2726,7 +2671,7 @@
           "oak_planks": -4
         }
       },
-      "world_id": "w3919c"
+      "world_id": "w4b81a"
     },
     {
       "action": {
@@ -2743,41 +2688,7 @@
           "oak_log": 1
         }
       },
-      "world_id": "w3919c"
-    },
-    {
-      "action": {
-        "kind": "mine",
-        "target": "oak_log",
-        "times": 1,
-        "tool": null
-      },
-      "episode_id": "D/h3/L8",
-      "id": "D/h3/L8/8",
-      "observed": {
-        "block_removed": true,
-        "drops": {
-          "oak_log": 1
-        }
-      },
-      "world_id": "w3919c"
-    },
-    {
-      "action": {
-        "kind": "mine",
-        "target": "oak_log",
-        "times": 1,
-        "tool": null
-      },
-      "episode_id": "D/h3/L8",
-      "id": "D/h3/L8/9",
-      "observed": {
-        "block_removed": true,
-        "drops": {
-          "oak_log": 1
-        }
-      },
-      "world_id": "w3919c"
+      "world_id": "w4b81a"
     },
     {
       "action": {
@@ -2787,14 +2698,14 @@
         "tool": null
       },
       "episode_id": "D/h3/L8",
-      "id": "D/h3/L8/10",
+      "id": "D/h3/L8/8",
       "observed": {
         "inventory_delta": {
           "oak_log": -1,
           "oak_planks": 4
         }
       },
-      "world_id": "w3919c"
+      "world_id": "w4b81a"
     },
     {
       "action": {
@@ -2804,7 +2715,7 @@
         "tool": null
       },
       "episode_id": "D/h3/L8",
-      "id": "D/h3/L8/23",
+      "id": "D/h3/L8/9",
       "observed": {
         "inventory_delta": {
           "oak_planks": -3,
@@ -2812,7 +2723,7 @@
           "wooden_pickaxe": 1
         }
       },
-      "world_id": "w3919c"
+      "world_id": "w4b81a"
     },
     {
       "action": {
@@ -2822,12 +2733,12 @@
         "tool": "wooden_pickaxe"
       },
       "episode_id": "D/h3/L8",
-      "id": "D/h3/L8/24",
+      "id": "D/h3/L8/10",
       "observed": {
         "block_removed": true,
         "drops": {}
       },
-      "world_id": "w3919c"
+      "world_id": "w4b81a"
     },
     {
       "action": {
@@ -2837,14 +2748,14 @@
         "tool": "wooden_pickaxe"
       },
       "episode_id": "D/h3/L8",
-      "id": "D/h3/L8/25",
+      "id": "D/h3/L8/11",
       "observed": {
         "block_removed": true,
         "drops": {
           "cobblestone": 1
         }
       },
-      "world_id": "w3919c"
+      "world_id": "w4b81a"
     },
     {
       "action": {
@@ -2854,14 +2765,14 @@
         "tool": "wooden_pickaxe"
       },
       "episode_id": "D/h3/L8",
-      "id": "D/h3/L8/26",
+      "id": "D/h3/L8/12",
       "observed": {
         "block_removed": true,
         "drops": {
           "cobblestone": 1
         }
       },
-      "world_id": "w3919c"
+      "world_id": "w4b81a"
     },
     {
       "action": {
@@ -2871,253 +2782,14 @@
         "tool": "wooden_pickaxe"
       },
       "episode_id": "D/h3/L8",
-      "id": "D/h3/L8/27",
+      "id": "D/h3/L8/13",
       "observed": {
         "block_removed": true,
         "drops": {
           "cobblestone": 1
         }
       },
-      "world_id": "w3919c"
-    },
-    {
-      "action": {
-        "kind": "mine",
-        "target": "oak_log",
-        "times": 1,
-        "tool": null
-      },
-      "episode_id": "D/h3/L8",
-      "id": "D/h3/L8/28",
-      "observed": {
-        "block_removed": true,
-        "drops": {
-          "oak_log": 1
-        }
-      },
-      "world_id": "w3919c"
-    },
-    {
-      "action": {
-        "kind": "mine",
-        "target": "oak_log",
-        "times": 1,
-        "tool": null
-      },
-      "episode_id": "D/h3/L8",
-      "id": "D/h3/L8/29",
-      "observed": {
-        "block_removed": true,
-        "drops": {
-          "oak_log": 1
-        }
-      },
-      "world_id": "w3919c"
-    },
-    {
-      "action": {
-        "kind": "mine",
-        "target": "oak_log",
-        "times": 1,
-        "tool": null
-      },
-      "episode_id": "D/h3/L8",
-      "id": "D/h3/L8/35",
-      "observed": {
-        "block_removed": true,
-        "drops": {
-          "oak_log": 1
-        }
-      },
-      "world_id": "w3919c"
-    },
-    {
-      "action": {
-        "kind": "craft",
-        "target": "oak_planks",
-        "times": 1,
-        "tool": null
-      },
-      "episode_id": "D/h3/L8",
-      "id": "D/h3/L8/36",
-      "observed": {
-        "inventory_delta": {
-          "oak_log": -1,
-          "oak_planks": 4
-        }
-      },
-      "world_id": "w3919c"
-    },
-    {
-      "action": {
-        "kind": "craft",
-        "target": "stick",
-        "times": 1,
-        "tool": null
-      },
-      "episode_id": "D/h3/L8",
-      "id": "D/h3/L8/37",
-      "observed": {
-        "inventory_delta": {
-          "oak_planks": -2,
-          "stick": 4
-        }
-      },
-      "world_id": "w3919c"
-    },
-    {
-      "action": {
-        "kind": "mine",
-        "target": "oak_log",
-        "times": 1,
-        "tool": null
-      },
-      "episode_id": "D/h3/L8",
-      "id": "D/h3/L8/38",
-      "observed": {
-        "block_removed": true,
-        "drops": {
-          "oak_log": 1
-        }
-      },
-      "world_id": "w3919c"
-    },
-    {
-      "action": {
-        "kind": "craft",
-        "target": "oak_planks",
-        "times": 1,
-        "tool": null
-      },
-      "episode_id": "D/h3/L8",
-      "id": "D/h3/L8/39",
-      "observed": {
-        "inventory_delta": {
-          "oak_log": -1,
-          "oak_planks": 4
-        }
-      },
-      "world_id": "w3919c"
-    },
-    {
-      "action": {
-        "kind": "craft",
-        "target": "crafting_table",
-        "times": 1,
-        "tool": null
-      },
-      "episode_id": "D/h3/L8",
-      "id": "D/h3/L8/40",
-      "observed": {
-        "inventory_delta": {
-          "crafting_table": 1,
-          "oak_planks": -4
-        }
-      },
-      "world_id": "w3919c"
-    },
-    {
-      "action": {
-        "kind": "mine",
-        "target": "oak_log",
-        "times": 1,
-        "tool": null
-      },
-      "episode_id": "D/h3/L8",
-      "id": "D/h3/L8/43",
-      "observed": {
-        "block_removed": true,
-        "drops": {
-          "oak_log": 1
-        }
-      },
-      "world_id": "w3919c"
-    },
-    {
-      "action": {
-        "kind": "craft",
-        "target": "oak_planks",
-        "times": 1,
-        "tool": null
-      },
-      "episode_id": "D/h3/L8",
-      "id": "D/h3/L8/44",
-      "observed": {
-        "inventory_delta": {
-          "oak_log": -1,
-          "oak_planks": 4
-        }
-      },
-      "world_id": "w3919c"
-    },
-    {
-      "action": {
-        "kind": "craft",
-        "target": "wooden_pickaxe",
-        "times": 1,
-        "tool": null
-      },
-      "episode_id": "D/h3/L8",
-      "id": "D/h3/L8/45",
-      "observed": {
-        "inventory_delta": {
-          "oak_planks": -3,
-          "stick": -2,
-          "wooden_pickaxe": 1
-        }
-      },
-      "world_id": "w3919c"
-    },
-    {
-      "action": {
-        "kind": "mine",
-        "target": "stone",
-        "times": 1,
-        "tool": "wooden_pickaxe"
-      },
-      "episode_id": "D/h3/L8",
-      "id": "D/h3/L8/46",
-      "observed": {
-        "block_removed": true,
-        "drops": {
-          "cobblestone": 1
-        }
-      },
-      "world_id": "w3919c"
-    },
-    {
-      "action": {
-        "kind": "mine",
-        "target": "stone",
-        "times": 1,
-        "tool": "wooden_pickaxe"
-      },
-      "episode_id": "D/h3/L8",
-      "id": "D/h3/L8/47",
-      "observed": {
-        "block_removed": true,
-        "drops": {
-          "cobblestone": 1
-        }
-      },
-      "world_id": "w3919c"
-    },
-    {
-      "action": {
-        "kind": "mine",
-        "target": "stone",
-        "times": 1,
-        "tool": "wooden_pickaxe"
-      },
-      "episode_id": "D/h3/L8",
-      "id": "D/h3/L8/48",
-      "observed": {
-        "block_removed": true,
-        "drops": {
-          "cobblestone": 1
-        }
-      },
-      "world_id": "w3919c"
+      "world_id": "w4b81a"
     },
     {
       "action": {
@@ -3127,7 +2799,7 @@
         "tool": null
       },
       "episode_id": "D/h3/L8",
-      "id": "D/h3/L8/49",
+      "id": "D/h3/L8/14",
       "observed": {
         "inventory_delta": {
           "cobblestone": -3,
@@ -3135,7 +2807,7 @@
           "stone_pickaxe": 1
         }
       },
-      "world_id": "w3919c"
+      "world_id": "w4b81a"
     },
     {
       "action": {
@@ -3145,14 +2817,14 @@
         "tool": "stone_pickaxe"
       },
       "episode_id": "D/h3/L8",
-      "id": "D/h3/L8/50",
+      "id": "D/h3/L8/15",
       "observed": {
         "block_removed": true,
         "drops": {
           "coal": 1
         }
       },
-      "world_id": "w3919c"
+      "world_id": "w4b81a"
     },
     {
       "action": {
@@ -3162,14 +2834,14 @@
         "tool": null
       },
       "episode_id": "D/h3/L8",
-      "id": "D/h3/L8/51",
+      "id": "D/h3/L8/16",
       "observed": {
         "inventory_delta": {
           "oak_planks": -2,
           "stick": 4
         }
       },
-      "world_id": "w3919c"
+      "world_id": "w4b81a"
     },
     {
       "action": {
@@ -3179,7 +2851,7 @@
         "tool": null
       },
       "episode_id": "D/h3/L8",
-      "id": "D/h3/L8/52",
+      "id": "D/h3/L8/17",
       "observed": {
         "inventory_delta": {
           "coal": -1,
@@ -3187,7 +2859,7 @@
           "torch": 4
         }
       },
-      "world_id": "w3919c"
+      "world_id": "w4b81a"
     }
   ]
 }
