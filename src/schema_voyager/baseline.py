@@ -84,7 +84,6 @@ def run_skill_only(
             "llm_plan", attempt=attempt + 1, summary=summary, tokens=episode.llm.total_tokens - tokens_before,
             actions=[a.describe() for a in actions],
         )
-        episode.backend.say(f"Plan attempt {attempt + 1}: {len(actions)} actions.")
 
         errors, ran = [], []
         for action in actions:

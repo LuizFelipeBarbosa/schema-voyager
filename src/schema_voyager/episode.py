@@ -121,6 +121,4 @@ class Episode:
             used_skills=self.used_skills,
         )
         self.log.event("episode_end", **result.to_dict())
-        if result.success:
-            self.backend.say(f"Goal reached: {self.task.goal_count} {self.task.goal_item}.")
         return result

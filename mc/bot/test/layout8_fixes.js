@@ -6,7 +6,8 @@
 //          mines the next nearest log, and /reset_episode clears the skip
 //          list so the out-of-reach log is the target again.
 //   chat:  a burst of narration (D's instant replans sent one line each and
-//          got the bot kicked for spam) is cut short instead of kicking it.
+//          got the bot kicked for spam) is queued and all of it is sent,
+//          paced so that vanilla does not kick the bot.
 //
 // Starts its own bot (FixBot on 3102, viewer off), clears the arena interior
 // and works 12 blocks from spawn, away from SchemaBot. Run it only while no
@@ -86,14 +87,20 @@ async function mineCase (checker) {
 }
 
 async function chatCase (checker, kicks) {
-  const burst = []
-  for (let i = 1; i <= CHAT_BURST; i++) burst.push((await post(API_PORT, '/chat', { message: `layout8_fixes chat ${i}/${CHAT_BURST}` })).body)
-  await sleep(2000)
-  const dropped = burst.filter((body) => body.dropped).length
-  const health = await (await fetch(`http://127.0.0.1:${API_PORT}/health`)).json()
-  checker.check('chat: the burst was cut short', dropped >= CHAT_BURST / 2, dropped)
-  checker.check('chat: not kicked', health.connected === true && kicks.length === 0, { health, kicks })
-  return { sent: CHAT_BURST - dropped, dropped }
+  const startedAt = Date.now()
+  for (let i = 1; i <= CHAT_BURST; i++) await post(API_PORT, '/chat', { message: `layout8_fixes chat ${i}/${CHAT_BURST}` })
+  let health = null
+  while (Date.now() - startedAt < 30000) {
+    health = await (await fetch(`http://127.0.0.1:${API_PORT}/health`)).json()
+    if (health.chat_queued === 0) break
+    await sleep(500)
+  }
+  await sleep(2000) // a kick would arrive within a tick or two of the last message
+  const drainedMs = Date.now() - startedAt - 2000
+  checker.check('chat: every message was sent', health.chat_queued === 0, health)
+  checker.check('chat: paced, not sent at once', drainedMs >= 8000, drainedMs)
+  checker.check('chat: not kicked', kicks.length === 0, kicks)
+  return { messages: CHAT_BURST, drained_ms: drainedMs }
 }
 
 async function main () {

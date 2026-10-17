@@ -137,23 +137,37 @@ async function resetEpisode () {
 
 // Vanilla kicks a non-op player for chat spam once a score reaches 200: +20
 // per message, -1 per tick. A kick mid-episode reconnects the bot with a
-// broken inventory view, so narration that would take the score past
-// CHAT_SCORE_LIMIT is dropped instead (as in a fast replan loop).
+// broken inventory view. So every message is queued and sent, in order, as
+// soon as sending it keeps the score at or under CHAT_SCORE_LIMIT: a burst of
+// 8 goes out at once, then about one a second.
 const CHAT_SCORE_PER_MESSAGE = 20
 const CHAT_SCORE_LIMIT = 160
+const MAX_CHAT_QUEUE = 500 // only a runaway loop gets here; the oldest are dropped
+const chatQueue = []
 const chatScore = { value: 0, at: Date.now() }
+let chatTimer = null
 
 function chat ({ message }) {
-  const now = Date.now()
-  chatScore.value = Math.max(0, chatScore.value - (now - chatScore.at) / 50)
-  chatScore.at = now
-  if (chatScore.value + CHAT_SCORE_PER_MESSAGE > CHAT_SCORE_LIMIT) {
-    log(`chat dropped to stay under the spam kick: ${message}`)
-    return { ok: true, dropped: true }
+  chatQueue.push(message.slice(0, 250))
+  if (chatQueue.length > MAX_CHAT_QUEUE) log(`chat queue full, dropped: ${chatQueue.shift()}`)
+  sendQueuedChat()
+  return { ok: true, queued: chatQueue.length }
+}
+
+function sendQueuedChat () {
+  if (chatTimer) return
+  while (chatQueue.length) {
+    const now = Date.now()
+    chatScore.value = Math.max(0, chatScore.value - (now - chatScore.at) / 50)
+    chatScore.at = now
+    const overBy = chatScore.value + CHAT_SCORE_PER_MESSAGE - CHAT_SCORE_LIMIT
+    if (overBy > 0 || !connected) {
+      chatTimer = setTimeout(() => { chatTimer = null; sendQueuedChat() }, connected ? overBy * 50 : 1000)
+      return
+    }
+    chatScore.value += CHAT_SCORE_PER_MESSAGE
+    bot.chat(chatQueue.shift())
   }
-  chatScore.value += CHAT_SCORE_PER_MESSAGE
-  bot.chat(message.slice(0, 250))
-  return { ok: true }
 }
 
 // --- HTTP ------------------------------------------------------------------
@@ -223,7 +237,7 @@ const app = express()
 app.use(express.json())
 
 app.get('/health', (req, res) => {
-  res.json({ ok: true, connected, username: config.username, version: config.version })
+  res.json({ ok: true, connected, username: config.username, version: config.version, chat_queued: chatQueue.length })
 })
 
 action('/observe', validators.none, () => observe())

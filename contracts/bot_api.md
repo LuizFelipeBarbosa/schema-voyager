@@ -32,8 +32,10 @@ RCON from Python, not through this API.
 ## GET /health
 
 ```json
-{"ok": true, "connected": true, "username": "SchemaBot", "version": "1.21.1"}
+{"ok": true, "connected": true, "username": "SchemaBot", "version": "1.21.1", "chat_queued": 0}
 ```
+
+`chat_queued`: `/chat` messages not sent yet (see `/chat`).
 
 ## POST /observe  `{}`
 
@@ -138,13 +140,15 @@ start position. Stops early at barriers or after 30 s.
 
 ## POST /chat  `{"message": "..."}`
 
-`bot.chat(message)`, truncated to 250 characters. Used to narrate the plan and
-mismatches in game. `{"ok": true}`.
+Queues `message`, truncated to 250 characters, for `bot.chat`, and answers at
+once with `{"ok": true, "queued": n}` (messages still waiting). The Python side
+sends every trace line, so the chat shows each step, plan, mismatch and
+revision.
 
 Vanilla kicks a non-op player whose chat spam score reaches 200 (+20 per
-message, -1 per tick). A message that would take the bot's score past 160 is
-not sent: `{"ok": true, "dropped": true}`, and the bot logs it. That allows a
-burst of 8 messages, then about one a second.
+message, -1 per tick). Queued messages go out in order as soon as sending one
+keeps the bot's score at or under 160: a burst of 8 at once, then about one a
+second. Nothing is dropped unless 500 are waiting.
 
 ## POST /reset_episode  `{}`
 

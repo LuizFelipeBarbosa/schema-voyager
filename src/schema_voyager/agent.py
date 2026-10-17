@@ -87,10 +87,7 @@ def _narrate_learning(
     lines = _learning_lines(episode, store, certified, changed_skill)
     if not lines:
         return
-    messages = _learning_messages(lines)
-    episode.log.event("learned", lines=messages)
-    for message in messages:
-        episode.backend.say(message)
+    episode.log.event("learned", lines=_learning_messages(lines))
 
 
 def _learning_lines(
@@ -199,8 +196,6 @@ def _log_plan(episode: Episode, store: SchemaStore, plan: list[PlanStep]) -> Non
         steps=[{"action": s.action.describe(), "rule": s.rule.id, "experimental": s.experimental} for s in plan],
         skills=skills,
     )
-    first = plan[0].action.describe() if plan else "nothing"
-    episode.backend.say(f"Plan: {len(plan)} steps, starting with {first}.")
 
 
 def _revise(episode: Episode, store: SchemaStore, step: PlanStep, result: Check, transition_id: str) -> None:
@@ -210,7 +205,6 @@ def _revise(episode: Episode, store: SchemaStore, step: PlanStep, result: Check,
         "contradiction", rule=rule.id, transition=transition_id, detail=result.detail,
         predicted=result.predicted, observed=result.observed, flagged=flagged,
     )
-    episode.backend.say(f"Unexpected: {result.detail}. Rule {rule.id} no longer trusted here.")
 
     counterexample = {"action": step.action.to_dict(), "predicted": result.predicted, "observed": result.observed}
     known_items = sorted({item for r in store.usable_rules(episode.world_id) for item in r.yields()})
@@ -233,8 +227,6 @@ def _revise(episode: Episode, store: SchemaStore, step: PlanStep, result: Check,
         summaries.append({"rank": hypothesis.rank + 1, "id": hypothesis.id, "kept": kept,
                           "summary": _summarize(hypothesis), "rule": hypothesis.to_dict()})
     episode.log.event("revision", rule=rule.id, hypotheses=summaries, tokens=episode.llm.total_tokens - tokens_before)
-    if summaries:
-        episode.backend.say(f"Hypothesis 1: {summaries[0]['summary']}")
 
 
 def _summarize(rule: Rule) -> str:

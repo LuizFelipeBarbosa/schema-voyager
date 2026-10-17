@@ -3,6 +3,7 @@ import json
 import pytest
 
 from schema_voyager.agent import seed_prior_rules
+from schema_voyager.baseline import SkillLibrary
 from schema_voyager.demo import Runner
 from schema_voyager.environment import SimulatedWorld
 from schema_voyager.llm import LLM
@@ -89,3 +90,31 @@ def test_world_id_is_rejected_for_training(tmp_path):
     runner, store, _ = _runner(tmp_path)
     with pytest.raises(ValueError):
         runner.run("D", get_task("t1"), 1, store=store, world_id="w123")
+
+
+def test_every_action_and_decision_goes_to_chat(tmp_path):
+    runner, store, world = _runner(tmp_path)
+    for task in training_tasks():
+        for seed in (1, 2):
+            runner.run("D", task, seed, store=store)
+    world.messages.clear()
+    result = runner.run("D", get_task("h3"), 6, store=store)
+
+    chat = world.messages
+    assert all(0 < len(message) <= 240 for message in chat)
+    assert len([message for message in chat if message.startswith("#")]) == result.actions
+    assert any(message.startswith("#10 mine coal_ore with wooden_pickaxe") and "MISMATCH" in message for message in chat)
+    assert any(message.startswith("contradiction: ") for message in chat)
+    assert any(message.startswith("LLM revision") for message in chat)
+    assert any(message.startswith("1. mine coal_ore with") for message in chat)
+    assert len([message for message in chat if message.startswith("plan (")]) == 2
+    assert chat[-2].startswith("SUCCESS") and chat[-1].startswith("Kept for this world:")
+
+
+def test_the_baselines_plans_and_feedback_go_to_chat(tmp_path):
+    world = RecordingWorld()
+    runner = Runner(world, LLM(mode="fake"), tmp_path)
+    runner.run("B+", get_task("h3"), 6, library=SkillLibrary())
+    assert any(message.startswith("LLM plan attempt 1") for message in world.messages)
+    assert any(message.startswith("feedback: ") for message in world.messages)
+    assert all(len(message) <= 240 for message in world.messages)

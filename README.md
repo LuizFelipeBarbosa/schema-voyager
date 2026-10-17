@@ -35,8 +35,8 @@ cp .env.example .env             # then put your ANTHROPIC_API_KEY in .env
 
 Watch it in the browser viewer at http://localhost:3007, or join `localhost`
 from a Minecraft **1.21.1** client (offline-mode server) and run
-`.venv/bin/schema-voyager spectate <your-name>`. The bot narrates its plan,
-mismatches and hypotheses in chat.
+`.venv/bin/schema-voyager spectate <your-name>`. The bot says every trace line in
+chat: each plan, step and result, mismatch, ranked hypothesis, and what it learned.
 
 No server? `schema-voyager demo --backend sim` runs the same code against the
 simulator (label it as such). `--llm fake` needs no API key; `--llm replay`
