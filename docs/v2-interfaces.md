@@ -382,10 +382,11 @@ uses, so travel pickups (dirt, cobblestone) don't force a replan after every min
 `Outcome.travel` goes into the trace (a `travel` event before the step event,
 and a `travel` field on the step event) and never into a `Transition`.
 In natural mode, `hazard` is handled like `not_found`: look, then explore in
-another direction. **v2.1:** when the look sees none of the target and the bot
-isn't under open sky, the first explore is `Action("explore", direction="up")`
-(back to the surface: logs and most surface resources are only found there),
-then the horizontal directions as before. `NaturalWorld` implements "up" the
+another direction. **v2.1:** when the look sees none of the target, the first
+fallback explore for that target is `Action("explore", direction="up")` (back
+to open sky, a no-op when already there: logs and most surface resources are
+only found at the surface), once per target, then the horizontal directions as
+before. `NaturalWorld` implements "up" the
 same way (moves the bot to the surface above it). `evaluator.failure_signature` ignores steps whose check is
 `stochastic` or `quarantined`, so a grass mine with no drop isn't a "failure".
 
