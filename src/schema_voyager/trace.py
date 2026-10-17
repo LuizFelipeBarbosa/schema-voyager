@@ -47,6 +47,16 @@ class EpisodeLog:
             )
             skills = f" skills={','.join(d['skills'])}" if d.get("skills") else ""
             return f"{tag} {self._c(_CYAN, 'plan')} ({len(d['steps'])} steps{skills}): {steps}"
+        if kind == "goal":
+            return (f"\n{tag} {self._c(_BOLD, 'goal')} g{d['index']:03d}: {d['count']} {d['item']} "
+                    f"({d['reason']}) budget={d['budget']}")
+        if kind == "travel":
+            return f"{tag}  {self._c(_DIM, 'travel ' + self._travel_summary(d))}"
+        if kind == "look":
+            where = f"toward {d['direction']}" if d["seen"] else f"nothing in sight, trying {d['direction']}"
+            return f"{tag}  {self._c(_DIM, 'look for ' + str(d['target']) + ': ' + where)}"
+        if kind == "quarantined":
+            return f"{tag}  {self._c(_YELLOW, 'quarantined')}: {d['reason']}; replanning, not evidence"
         if kind == "step":
             rule = f" [{d['rule']}]" if d.get("rule") else ""
             return f"{tag}  #{d['index']:02d} {d['action']}{self._c(_DIM, rule)} -> {self._step_result(d)}"
@@ -79,7 +89,19 @@ class EpisodeLog:
                     f"walked={d['blocks_walked']} repeated_failures={d['repeated_failures']}")
         return None
 
+    @staticmethod
+    def _travel_summary(d: dict[str, Any]) -> str:
+        parts = [f"{d.get('distance', 0):.0f} blocks"]
+        for label, key in (("dug", "dug"), ("placed", "placed"), ("picked up", "picked_up")):
+            if d.get(key):
+                parts.append(f"{label} {sum(d[key].values())}")
+        return ", ".join(parts)
+
     def _step_result(self, d: dict[str, Any]) -> str:
+        if d.get("check") == "quarantined":
+            return self._c(_YELLOW, "quarantined (not evidence)")
+        if d.get("check") == "stochastic":
+            return f"{self._c(_CYAN, 'stochastic')} {json.dumps(d['observed'])}"
         if not d["ok"]:
             return self._c(_YELLOW, f"failed: {d['error']}")
         if d.get("check") == "mismatch":

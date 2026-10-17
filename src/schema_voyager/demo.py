@@ -5,6 +5,7 @@
     schema-voyager episode --system D --task h3 --layout 6 --store runs/<run>/store_D_2_after_training.json
     schema-voyager arena --layout 6 --task h3   # build a layout on the server
     schema-voyager spectate <player>            # put your client in spectator mode
+    schema-voyager life --backend mc|sim --llm live|replay|fake   # one continuous life in a natural world
     schema-voyager report runs/<run>
     schema-voyager panel                        # trace panel on http://127.0.0.1:8765
     schema-voyager export runs/<run>            # results/ folder and the field guide's numbers
@@ -15,12 +16,14 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import shutil
 import subprocess
 import sys
 import time
 from functools import partial
 from pathlib import Path
+from typing import Mapping
 
 from dotenv import load_dotenv
 
@@ -30,6 +33,7 @@ from .baseline import SkillLibrary, run_skill_only
 from .episode import Episode
 from .evaluator import summarize
 from .layouts import load_layout
+from .life import LifeConfig, run_life
 from .llm import LLM, LLMError, fixture_prior_rules
 from .models import EpisodeResult, Task
 from .planner import PlanningError, make_plan
@@ -215,6 +219,54 @@ def run_episode(args: argparse.Namespace) -> None:
     print(summarize([r for r in runner.results if r.task_id == task.task_id]))
 
 
+# Ports of the live demo, which a life must never touch.
+DEMO_BOT_PORT = "3000"
+DEMO_RCON_PORT = "25575"
+
+
+def check_instance_ports(env: Mapping[str, str] = os.environ) -> tuple[int, int]:
+    """The bot and RCON ports of this v2 instance (SV2_BOT_PORT, SV2_RCON_PORT). Refuses to
+    go on when either is unset or is the live demo's port; returns (bot port, rcon port)."""
+    bot_port, rcon_port = env.get("SV2_BOT_PORT"), env.get("SV2_RCON_PORT")
+    for name, value in (("SV2_BOT_PORT", bot_port), ("SV2_RCON_PORT", rcon_port)):
+        if not value:
+            sys.exit(f"{name} is not set. A life needs its own instance's ports (see docs/v2-interfaces.md), "
+                     "so it can't touch the live demo by accident.")
+    if bot_port == DEMO_BOT_PORT:
+        sys.exit(f"SV2_BOT_PORT={DEMO_BOT_PORT} is the live demo's bot port; use the instance's (3200 or 3210).")
+    if rcon_port == DEMO_RCON_PORT:
+        sys.exit(f"SV2_RCON_PORT={DEMO_RCON_PORT} is the live demo's RCON port; use the instance's (25576 or 25577).")
+    return int(bot_port), int(rcon_port)
+
+
+def run_life_command(args: argparse.Namespace) -> None:
+    if args.backend == "mc":
+        bot_port, _ = check_instance_ports()
+        from .mineflayer_backend import MineflayerBackend
+
+        backend = MineflayerBackend(api_url=f"http://127.0.0.1:{bot_port}", natural=True)
+        seed = args.seed or os.environ.get("SV2_SEED", "unknown")
+    else:
+        from .environment import NaturalWorld
+
+        backend = NaturalWorld(seed=args.sim_seed)
+        seed = args.seed or f"sim{args.sim_seed}"
+
+    if args.resume and not args.run_dir:
+        sys.exit("--resume needs --run-dir: the life to continue.")
+    run_dir = args.run_dir or Path("runs") / time.strftime("life-%Y%m%d-%H%M%S")
+    _record_commit(run_dir)
+    llm = LLM(mode=args.llm, cache_path=run_dir / "llm_cache.jsonl")
+    config = LifeConfig(
+        run_dir=run_dir, world_id=f"life-{seed}-{time.strftime('%Y%m%d-%H%M')}", max_goals=args.goals,
+        wall_clock_s=args.minutes * 60, spend_cap_usd=args.cap_usd,
+    )
+    print(f"SchemaVoyager life: backend={args.backend} llm={args.llm} model={llm.model} run_dir={run_dir}")
+    summary = run_life(backend, llm, config, resume=args.resume)
+    _banner(f"Life over: {summary['stop_reason']}")
+    print(json.dumps(summary, indent=2))
+
+
 def describe_store(store: SchemaStore) -> str:
     store.certify()
     lines = []
@@ -325,6 +377,17 @@ def main(argv: list[str] | None = None) -> None:
     episode.add_argument("--llm", choices=["live", "replay", "fake"], default="live")
     episode.add_argument("--run-dir", type=Path)
 
+    life = sub.add_parser("life", help="one continuous life in a natural world, choosing its own goals")
+    life.add_argument("--backend", choices=["sim", "mc"], default="sim")
+    life.add_argument("--llm", choices=["live", "replay", "fake"], default="live")
+    life.add_argument("--run-dir", type=Path)
+    life.add_argument("--resume", action="store_true", help="continue the life saved in --run-dir")
+    life.add_argument("--goals", type=int, help="stop after this many goals")
+    life.add_argument("--minutes", type=float, default=30, help="wall-clock limit of this session")
+    life.add_argument("--cap-usd", type=float, default=10, help="LLM spend cap")
+    life.add_argument("--seed", help="the running world's level seed, for the world id")
+    life.add_argument("--sim-seed", type=int, default=1, help="seed of the simulated natural world")
+
     arena = sub.add_parser("arena", help="build a layout on the server and set its world rules")
     arena.add_argument("--layout", type=int, default=6)
     arena.add_argument("--task", default="h3")
@@ -348,6 +411,8 @@ def main(argv: list[str] | None = None) -> None:
             run_demo(args)
         elif args.command == "episode":
             run_episode(args)
+        elif args.command == "life":
+            run_life_command(args)
         elif args.command == "arena":
             from .arena import Arena
 

@@ -8,6 +8,9 @@ revise a contradicted rule. While predictions hold, execution makes no calls.
 
 from __future__ import annotations
 
+from typing import Callable
+
+from . import normalize
 from .episode import Episode
 from .llm import LLM, LLMError
 from .models import Action, EpisodeResult, Outcome, Rule, Skill
@@ -25,43 +28,74 @@ def seed_prior_rules(store: SchemaStore, llm: LLM) -> list[Rule]:
     return rules
 
 
-def run_schemavoyager(episode: Episode, store: SchemaStore) -> EpisodeResult:
-    """Run one episode, replanning from the current state after any step that fails or surprises."""
+MAX_CHAT_MESSAGES = 3  # per burst
+MAX_CHAT_CHARS = 240
+
+BeforeStep = Callable[[Episode, PlanStep, list[PlanStep]], None]
+
+
+def run_schemavoyager(episode: Episode, store: SchemaStore, before_step: BeforeStep | None = None) -> EpisodeResult:
+    """Run one episode, replanning from the current state after any step that fails or surprises.
+
+    `before_step(episode, step, plan)` is called before each step runs. What a
+    step's check says decides what happens next:
+
+    | status      | recorded?               | then                                   |
+    | match       | yes, kind "exact"       | next step                              |
+    | stochastic  | yes, kind "stochastic"  | next step (replan if items deviate)    |
+    | mismatch    | yes                     | demote, revise (one LLM call), replan  |
+    | quarantined | never                   | log it, replan, no revision            |
+    | failed      | no                      | replan (tolerant)                      |
+    """
     task = episode.task
     episode.log.event(
         "episode_start", system=episode.system, task=task.task_id, description=task.description,
         world_id=episode.world_id, budget=task.budget, layout=episode.layout_seed,
     )
     completed: list[tuple[Action, str]] = []
+    narrate_plan = True  # a goal's first plan, and the plan after each revision
 
-    while not episode.goal_met and episode.budget_left > 0:
+    while not episode.goal_met and episode.can_act:
         try:
             plan = make_plan(
-                task.goal_item, task.goal_count, episode.inventory, store.usable_rules(episode.world_id), store.skill_for
+                task.goal_item, task.goal_count, episode.counts, store.usable_rules(episode.world_id), store.skill_for
             )
         except PlanningError as error:
             episode.log.event("plan_failed", reason=str(error))
             break
-        _log_plan(episode, store, plan)
+        if not plan:
+            episode.log.event("plan_failed", reason=f"empty plan, but {task.goal_item} is not held")
+            break
+        _log_plan(episode, store, plan, narrate=narrate_plan or not episode.natural)
+        narrate_plan = False
 
-        for step in plan:
-            if episode.budget_left <= 0:
+        for position, step in enumerate(plan):
+            if not episode.can_act:
                 break
+            if before_step is not None:
+                before_step(episode, step, plan)
             verdict: dict[str, Check] = {}
             outcome = episode.act(step.action, annotate=lambda o, s=step: _annotate(s, o, verdict))
             result = verdict["check"]
             if result.status == "failed":
                 break  # tolerant: replan from the current state
+            if result.status == "quarantined":
+                _log_quarantine(episode, outcome, result)
+                break  # not evidence: nothing recorded, nothing revised
 
             transition_id = f"{episode.episode_id}/{episode.actions}"
             store.record_transition(
-                Transition(transition_id, episode.episode_id, episode.world_id, step.action, result.observed)
+                Transition(
+                    transition_id, episode.episode_id, episode.world_id, step.action, result.observed,
+                    kind="stochastic" if result.status == "stochastic" else "exact",
+                )
             )
             if result.status == "mismatch":
                 _revise(episode, store, step, result, transition_id)
+                narrate_plan = True
                 break
             completed.append((step.action, step.rule.id))
-            if outcome.inventory != step.expected_inventory:
+            if _deviates(episode, outcome, step, plan[position + 1:]):
                 break  # a drop rolled out of reach; replan without revising anything
 
     result = episode.finish()
@@ -87,8 +121,7 @@ def _narrate_learning(
         return
     messages = _learning_messages(lines)
     episode.log.event("learned", lines=messages)
-    for message in messages:
-        episode.backend.say(message)
+    _say(episode, messages)
 
 
 def _learning_lines(
@@ -175,6 +208,40 @@ def _learning_messages(lines: list[str], limit: int = 240) -> list[str]:
     return messages
 
 
+def _say(episode: Episode, messages: list[str]) -> None:
+    """One burst of chat: at most 3 messages of 240 characters."""
+    for message in messages[:MAX_CHAT_MESSAGES]:
+        episode.backend.say(message[:MAX_CHAT_CHARS])
+
+
+def _deviates(episode: Episode, outcome: Outcome, step: PlanStep, remaining: list[PlanStep]) -> bool:
+    """Whether the inventory differs from what the plan expected. In a natural world,
+    only the items the remaining plan uses count, so pickups on the way (dirt,
+    cobblestone) don't force a replan after every mine."""
+    if not episode.natural:
+        return outcome.inventory != step.expected_inventory
+    used = _items_used(remaining)
+    actual = normalize.counts(outcome.inventory)
+    return any(actual.get(item, 0) != step.expected_inventory.get(item, 0) for item in used)
+
+
+def _items_used(steps: list[PlanStep]) -> set[str]:
+    used: set[str] = set()
+    for step in steps:
+        rule = step.rule
+        used.update(rule.preconditions.get("consumes", {}))
+        used.update(rule.yields())
+        if rule.preconditions.get("station"):
+            used.add(rule.preconditions["station"])
+        used.update(item for item in (step.action.tool, step.action.fuel) if item)
+    return used
+
+
+def _log_quarantine(episode: Episode, outcome: Outcome, result: Check) -> None:
+    reason = ", ".join(sorted({event["type"] for event in outcome.events})) or result.detail or "interference"
+    episode.log.event("quarantined", index=episode.actions, reason=reason)
+
+
 def _annotate(step: PlanStep, outcome: Outcome, verdict: dict[str, Check]) -> dict:
     result = check(step.rule, step.action, outcome)
     verdict["check"] = result
@@ -184,7 +251,7 @@ def _annotate(step: PlanStep, outcome: Outcome, verdict: dict[str, Check]) -> di
     }
 
 
-def _log_plan(episode: Episode, store: SchemaStore, plan: list[PlanStep]) -> None:
+def _log_plan(episode: Episode, store: SchemaStore, plan: list[PlanStep], narrate: bool = True) -> None:
     plan_rules = {step.rule.id for step in plan}
     skills = [
         skill.id
@@ -197,8 +264,9 @@ def _log_plan(episode: Episode, store: SchemaStore, plan: list[PlanStep]) -> Non
         steps=[{"action": s.action.describe(), "rule": s.rule.id, "experimental": s.experimental} for s in plan],
         skills=skills,
     )
-    first = plan[0].action.describe() if plan else "nothing"
-    episode.backend.say(f"Plan: {len(plan)} steps, starting with {first}.")
+    if narrate:
+        first = plan[0].action.describe() if plan else "nothing"
+        _say(episode, [f"Plan: {len(plan)} steps, starting with {first}."])
 
 
 def _revise(episode: Episode, store: SchemaStore, step: PlanStep, result: Check, transition_id: str) -> None:
@@ -208,15 +276,14 @@ def _revise(episode: Episode, store: SchemaStore, step: PlanStep, result: Check,
         "contradiction", rule=rule.id, transition=transition_id, detail=result.detail,
         predicted=result.predicted, observed=result.observed, flagged=flagged,
     )
-    episode.backend.say(f"Unexpected: {result.detail}. Rule {rule.id} no longer trusted here.")
+    _say(episode, [f"Unexpected: {result.detail}. Rule {rule.id} no longer trusted here."])
 
     counterexample = {"action": step.action.to_dict(), "predicted": result.predicted, "observed": result.observed}
     known_items = sorted({item for r in store.usable_rules(episode.world_id) for item in r.yields()})
     tokens_before = episode.llm.total_tokens
     try:
-        hypotheses = episode.llm.revise_rule(
-            rule, store.evidence_summary(rule), counterexample, known_items, episode.world_id
-        )
+        revise = episode.llm.revise_rule_v2 if episode.natural else episode.llm.revise_rule
+        hypotheses = revise(rule, store.evidence_summary(rule), counterexample, known_items, episode.world_id)
     except LLMError as error:
         episode.log.event("plan_failed", reason=f"revision call failed: {error}")
         hypotheses = []
@@ -232,7 +299,7 @@ def _revise(episode: Episode, store: SchemaStore, step: PlanStep, result: Check,
                           "summary": _summarize(hypothesis), "rule": hypothesis.to_dict()})
     episode.log.event("revision", rule=rule.id, hypotheses=summaries, tokens=episode.llm.total_tokens - tokens_before)
     if summaries:
-        episode.backend.say(f"Hypothesis 1: {summaries[0]['summary']}")
+        _say(episode, [f"Hypothesis 1: {summaries[0]['summary']}"])
 
 
 def _summarize(rule: Rule) -> str:

@@ -10,7 +10,10 @@ from .models import EpisodeResult
 
 
 def failure_signature(step: dict[str, Any]) -> tuple | None:
-    """A step that failed outright, or mined a block that dropped nothing."""
+    """A step that failed outright, or mined a block that dropped nothing. Stochastic
+    steps (random drops) and quarantined ones (not evidence) never count."""
+    if step.get("check") in ("stochastic", "quarantined"):
+        return None
     action = step["action_obj"]
     key = (action["kind"], action["target"], action["tool"])
     if not step["ok"]:
