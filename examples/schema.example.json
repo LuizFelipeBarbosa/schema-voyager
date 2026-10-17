@@ -1,0 +1,19 @@
+{
+  "skill": {
+    "skill_id": "skill_stone_pickaxe",
+    "goal_item": "stone_pickaxe",
+    "preconditions": ["task.goal_item matches skill goal"],
+    "steps": ["move", "mine", "craft"],
+    "postconditions": ["inventory[stone_pickaxe] >= 1"],
+    "validator": "replay action transitions and check postcondition",
+    "version": 1,
+    "evidence": ["t2_stone_pickaxe"]
+  },
+  "rule": {
+    "rule_id": "craft:stone_pickaxe",
+    "preconditions": ["inventory[cobblestone] >= 3", "inventory[sticks] >= 2"],
+    "predicted_effects": ["inventory[stone_pickaxe] += 1"],
+    "evidence": ["t2_stone_pickaxe"],
+    "confidence": 2
+  }
+}
