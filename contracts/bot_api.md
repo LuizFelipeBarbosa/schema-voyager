@@ -289,6 +289,14 @@ Without `direction`, it's the v1 spiral. With it, the bot walks up to
 barriers, before lava, or after 30 s. Response: v1 fields plus `travel`,
 `events`. `unreachable` when it moved less than 1 block.
 
+`{"direction": "up", "dig_through": true, "scaffold": [...]}` (v2.1) returns
+the bot to open sky: it climbs, digs upward and pillars (with `scaffold`
+blocks only) until it stands where nothing solid is above it, within 60 s.
+Already under open sky: `ok: true`, nothing moves. It never digs straight
+down, and stops before water or lava overhead. Response as above plus
+`"sky": true|false` (whether it reached open sky); `unreachable` when it
+gained less than 1 block of height and isn't under open sky.
+
 ## POST /look  `{"blocks": ["coal_ore", "deepslate_coal_ore"], "radius": 64}`
 
 For each of 8 directions, the nearest block of each requested id within
@@ -351,6 +359,9 @@ Errors: `missing_ingredients`, `missing_crafting_table`, `craft_failed`.
 ## POST /status  `{"since": 40}`
 
 Doesn't need the action lock (it answers while an action runs).
+
+`/observe` (v2.1) also reports `"sky": true|false`: whether nothing solid is
+above the bot.
 
 ```jsonc
 {

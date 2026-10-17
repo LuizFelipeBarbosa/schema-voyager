@@ -248,7 +248,7 @@ class Action:
     times: int = 1                 # craft and smelt
     fuel: str | None = None        # smelt only (may be a group)
     ingredient: str | None = None  # smelt only: the input item (may be a group)
-    direction: str | None = None   # explore only: N, NE, E, SE, S, SW, W, NW; None = v1 spiral
+    direction: str | None = None   # explore only: N, NE, E, SE, S, SW, W, NW, or "up" (v2.1); None = v1 spiral
 
 @dataclass
 class Outcome:
@@ -382,7 +382,11 @@ uses, so travel pickups (dirt, cobblestone) don't force a replan after every min
 `Outcome.travel` goes into the trace (a `travel` event before the step event,
 and a `travel` field on the step event) and never into a `Transition`.
 In natural mode, `hazard` is handled like `not_found`: look, then explore in
-another direction. `evaluator.failure_signature` ignores steps whose check is
+another direction. **v2.1:** when the look sees none of the target and the bot
+isn't under open sky, the first explore is `Action("explore", direction="up")`
+(back to the surface: logs and most surface resources are only found there),
+then the horizontal directions as before. `NaturalWorld` implements "up" the
+same way (moves the bot to the surface above it). `evaluator.failure_signature` ignores steps whose check is
 `stochastic` or `quarantined`, so a grass mine with no drop isn't a "failure".
 
 ## Curriculum (`curriculum.py`)
