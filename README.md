@@ -104,6 +104,14 @@ prediction, observation, contradiction and revision), store snapshots
 Model: `claude-sonnet-5-5` for every system (override with
 `SCHEMA_VOYAGER_MODEL`). Token counts come from API usage.
 
+`SCHEMA_VOYAGER_PROVIDER=crusoe` sends every system's calls to Crusoe Managed
+Inference instead, through its OpenAI-compatible chat completions endpoint
+(Nemotron 3 Super by default; settings in `.env.example`). Structured output is
+used when the server accepts it, otherwise the schema goes in the prompt and
+the reply is checked. Nemotron thinks before a revision, not before a plan.
+Recordings are keyed by model, so Claude and Nemotron runs never mix. Present a
+Nemotron run next to the Claude results, not instead of them.
+
 ## Layout
 
 ```text

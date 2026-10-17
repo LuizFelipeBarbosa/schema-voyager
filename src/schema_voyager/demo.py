@@ -109,7 +109,8 @@ def run_demo(args: argparse.Namespace) -> None:
     runner = Runner(make_backend(args.backend), LLM(mode=args.llm, cache_path=LLM_CACHE), run_dir)
     systems = args.systems.split(",")
     holdout_seeds = _seeds(args.holdout_layouts)
-    print(f"SchemaVoyager demo: backend={args.backend} llm={args.llm} model={runner.llm.model} run_dir={run_dir}")
+    print(f"SchemaVoyager demo: backend={args.backend} llm={args.llm} provider={runner.llm.provider} "
+          f"model={runner.llm.model} run_dir={run_dir}")
 
     if args.from_run:
         store, libraries = _reuse_training(runner, args.from_run, systems)

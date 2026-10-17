@@ -32,7 +32,7 @@ def main() -> None:
     parser.add_argument("--n", type=int, default=5)
     args = parser.parse_args()
     llm = LLM(mode="live")
-    print(f"model={llm.model} effort={llm.effort}")
+    print(f"provider={llm.provider} model={llm.model} effort={llm.effort}")
 
     priors = {rule.id: rule for rule in llm.propose_prior_rules(MINEABLE_BLOCKS, CRAFTABLE_ITEMS)}
     print(f"\nPrior rules ({llm.calls[-1].tokens} tokens):")

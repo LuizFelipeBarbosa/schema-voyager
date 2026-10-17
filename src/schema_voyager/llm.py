@@ -1,10 +1,14 @@
-"""Claude calls for SchemaVoyager: prior rules, ranked revisions, and the
+"""LLM calls for SchemaVoyager: prior rules, ranked revisions, and the
 skill-only baseline's planner. Every call is metered from API usage and
 recorded so a run can be replayed without spending tokens.
 
 Modes: "live" calls the API and records; "replay" only reads recorded
 responses (and reports their original usage); "fake" is a deterministic
 offline stand-in for tests and dry runs.
+
+Providers (SCHEMA_VOYAGER_PROVIDER): "anthropic", Claude, the default; or
+"crusoe", Crusoe Managed Inference through its OpenAI-compatible chat
+completions endpoint (Nemotron by default). Every system uses the same one.
 """
 
 from __future__ import annotations
@@ -12,6 +16,9 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
+import urllib.error
+import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -20,6 +27,10 @@ from .models import Action, Rule
 
 DEFAULT_MODEL = "claude-sonnet-5-5"
 DEFAULT_EFFORT = "medium"
+CRUSOE_BASE_URL = "https://api.inference.crusoecloud.com/v1"
+CRUSOE_MODEL = "nvidia/NVIDIA-Nemotron-3-Super-120B-A12B"
+CRUSOE_THINKING = {"revise_rule"}  # Nemotron thinks before a revision, not before a plan or the prior rules
+REQUEST_TIMEOUT_S = 120
 DATA_DIR = Path(__file__).parent / "data"
 
 WORLD_MODEL_SYSTEM = """You are the world-model module of an agent playing Minecraft Java Edition 1.21 in survival mode.
@@ -100,6 +111,15 @@ class LLMError(RuntimeError):
     pass
 
 
+class _RequestRejected(LLMError):
+    """The server refused a request field, such as structured output."""
+
+
+# Request fields only some OpenAI-compatible servers accept.
+_OPTIONAL_FIELDS = ("response_format", "json_schema", "chat_template_kwargs")
+_JSON_ONLY = "Reply with only a JSON object, no other text, that matches this JSON schema:"
+
+
 @dataclass
 class CallRecord:
     purpose: str
@@ -115,12 +135,16 @@ class CallRecord:
 @dataclass
 class LLM:
     mode: str = "live"
-    model: str = field(default_factory=lambda: os.environ.get("SCHEMA_VOYAGER_MODEL", DEFAULT_MODEL))
+    provider: str = field(default_factory=lambda: os.environ.get("SCHEMA_VOYAGER_PROVIDER", "anthropic"))
+    model: str = field(default_factory=lambda: os.environ.get("SCHEMA_VOYAGER_MODEL", ""))
     effort: str = field(default_factory=lambda: os.environ.get("SCHEMA_VOYAGER_EFFORT", DEFAULT_EFFORT))
     cache_path: Path = Path("runs/llm_cache.jsonl")
     calls: list[CallRecord] = field(default_factory=list)
 
     def __post_init__(self) -> None:
+        if self.provider not in ("anthropic", "crusoe"):
+            raise LLMError(f'unknown SCHEMA_VOYAGER_PROVIDER "{self.provider}"; use anthropic or crusoe')
+        self.model = self.model or (CRUSOE_MODEL if self.provider == "crusoe" else DEFAULT_MODEL)
         self._client = None
         self._cache = _load_cache(self.cache_path) if self.mode != "fake" else {}
 
@@ -207,28 +231,34 @@ class LLM:
             self.calls.append(CallRecord(purpose, cached["input_tokens"], cached["output_tokens"], replayed=True))
             return cached["payload"]
 
+        if self.provider == "crusoe":
+            payload, input_tokens, output_tokens = self._crusoe_json(purpose, system, user, schema)
+        else:
+            payload, input_tokens, output_tokens = self._anthropic_json(purpose, system, user, schema)
+        self.calls.append(CallRecord(purpose, input_tokens, output_tokens))
+        record = {"key": key, "purpose": purpose, "payload": payload,
+                  "input_tokens": input_tokens, "output_tokens": output_tokens}
+        self._cache[key] = record
+        self.cache_path.parent.mkdir(parents=True, exist_ok=True)
+        with self.cache_path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(record) + "\n")
+        return payload
+
+    def _anthropic_json(self, purpose: str, system: str, user: str, schema: dict[str, Any]) -> tuple[Any, int, int]:
+        """The payload and the input and output tokens of one Claude call."""
         response = self._create(system, user, schema)
         if response.stop_reason == "refusal":
             raise LLMError(f"{purpose} call was refused: {response.stop_details}")
         if response.stop_reason == "max_tokens":
             raise LLMError(f"{purpose} call hit max_tokens")
         text = next(block.text for block in response.content if block.type == "text")
-        payload = json.loads(text)
-
         usage = response.usage
         input_tokens = (
             usage.input_tokens
             + (usage.cache_creation_input_tokens or 0)
             + (usage.cache_read_input_tokens or 0)
         )
-        self.calls.append(CallRecord(purpose, input_tokens, usage.output_tokens))
-        record = {"key": key, "purpose": purpose, "payload": payload,
-                  "input_tokens": input_tokens, "output_tokens": usage.output_tokens}
-        self._cache[key] = record
-        self.cache_path.parent.mkdir(parents=True, exist_ok=True)
-        with self.cache_path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(record) + "\n")
-        return payload
+        return json.loads(text), input_tokens, usage.output_tokens
 
     def _create(self, system: str, user: str, schema: dict[str, Any]):
         import anthropic
@@ -251,6 +281,67 @@ class LLM:
             raise LLMError(f"Anthropic API error {error.status_code}: {error.message}") from error
         except anthropic.APIConnectionError as error:
             raise LLMError(f"could not reach the Anthropic API: {error}") from error
+
+    def _crusoe_json(self, purpose: str, system: str, user: str, schema: dict[str, Any]) -> tuple[Any, int, int]:
+        """The payload and the input and output tokens of one Crusoe call, summed
+        over the requests it took. If the server rejects structured output, the
+        schema goes in the prompt instead; a reply that does not fit the schema
+        is asked for once more."""
+        usage = [0, 0]
+        options: dict[str, Any] = {
+            "response_format": {"type": "json_schema", "json_schema": {"name": "answer", "schema": schema, "strict": True}},
+            "chat_template_kwargs": {"enable_thinking": purpose in CRUSOE_THINKING},
+        }
+        try:
+            payload = _parse_json(self._chat(system, user, options, usage))
+        except _RequestRejected:
+            system, options = f"{system}\n\n{_JSON_ONLY}\n{json.dumps(schema)}", {}
+            payload = _parse_json(self._chat(system, user, options, usage))
+        if not _matches(payload, schema):
+            payload = _parse_json(self._chat(system, user, options, usage))
+            if not _matches(payload, schema):
+                raise LLMError(f"{purpose} reply from {self.model} did not match the schema twice")
+        return payload, usage[0], usage[1]
+
+    def _chat(self, system: str, user: str, options: dict[str, Any], usage: list[int]) -> str:
+        """One chat completions request: adds its tokens to `usage` and returns the reply text."""
+        api_key = os.environ.get("CRUSOE_API_KEY")
+        if not api_key:
+            raise LLMError("CRUSOE_API_KEY missing; set it in .env")
+        base_url = os.environ.get("SCHEMA_VOYAGER_BASE_URL", CRUSOE_BASE_URL).rstrip("/")
+        body = {
+            "model": self.model,
+            "max_tokens": 16000,
+            "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
+            **options,
+        }
+        request = urllib.request.Request(
+            base_url + "/chat/completions",
+            data=json.dumps(body).encode("utf-8"),
+            headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"},
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT_S) as response:
+                data = json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as error:
+            detail = error.read().decode("utf-8", "replace")[:300]
+            if error.code in (400, 422) and options and any(name in detail for name in _OPTIONAL_FIELDS):
+                raise _RequestRejected(detail) from error
+            raise LLMError(f"Crusoe API error {error.code}: {detail}") from error
+        except (urllib.error.URLError, TimeoutError) as error:
+            raise LLMError(f"could not reach {base_url}: {error}") from error
+
+        tokens = data.get("usage") or {}
+        usage[0] += tokens.get("prompt_tokens", 0)
+        usage[1] += tokens.get("completion_tokens", 0)
+        choice = data["choices"][0]
+        if choice.get("finish_reason") == "length":
+            raise LLMError(f"{self.model} hit max_tokens")
+        message = choice["message"]
+        if message.get("refusal"):
+            raise LLMError(f"{self.model} refused: {message['refusal']}")
+        # Thinking can leak into the reply text.
+        return re.sub(r"<think>.*?</think>", "", message.get("content") or "", flags=re.S).strip()
 
     def _meter_fake(self, purpose: str, text: str) -> None:
         estimate = max(1, len(text) // 4)
@@ -317,6 +408,34 @@ def _fake_revisions(rule: Rule, counterexample: dict[str, Any]) -> list[dict[str
         {**base, "tool_any": tiers[2:], "rationale": "needs an iron-tier pickaxe"},
         {**base, "tool_any": [], "yields": [], "rationale": "drops nothing in this world"},
     ]
+
+
+def _parse_json(text: str) -> Any:
+    """The JSON object in a reply, also inside a code fence or prose; None if there is none."""
+    start, end = text.find("{"), text.rfind("}")
+    if start < 0 or end < start:
+        return None
+    try:
+        return json.loads(text[start:end + 1])
+    except json.JSONDecodeError:
+        return None
+
+
+def _matches(value: Any, schema: dict[str, Any]) -> bool:
+    """Whether `value` fits the part of JSON Schema the prompts use: objects with
+    required properties, arrays, strings with an optional enum, and integers."""
+    kind = schema.get("type")
+    if kind == "object":
+        properties = schema.get("properties", {})
+        return (isinstance(value, dict) and all(key in value for key in schema.get("required", []))
+                and all(_matches(value[key], sub) for key, sub in properties.items() if key in value))
+    if kind == "array":
+        return isinstance(value, list) and all(_matches(item, schema["items"]) for item in value)
+    if kind == "string":
+        return isinstance(value, str) and value in schema.get("enum", [value])
+    if kind == "integer":
+        return isinstance(value, int) and not isinstance(value, bool)
+    return True
 
 
 def _cache_key(*parts: Any) -> str:
