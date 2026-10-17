@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from .episode import Episode
 from .llm import LLM, LLMError
-from .models import Action, EpisodeResult, Outcome, Rule
+from .models import Action, EpisodeResult, Outcome, Rule, Skill
 from .planner import PlanningError, PlanStep, make_plan
 from .schema_store import SchemaStore, Transition, applies
 from .verifier import Check, check, predict
@@ -70,10 +70,106 @@ def run_schemavoyager(episode: Episode, store: SchemaStore, verify: bool = True)
     result = episode.finish()
     certified = store.certify()
     episode.log.event("certified", rules=certified)
+    changed_skill: Skill | None = None
     if result.success and task.split == "train":
+        existing = store.skills.get(f"skill_{task.goal_item}")
+        previous_rule_ids = list(existing.rule_ids) if existing is not None else None
         skill = store.compile_skill(task.goal_item, task.goal_count, completed, episode.episode_id)
         episode.log.event("skill", skill=skill.id, rule_ids=skill.rule_ids)
+        if previous_rule_ids is None or previous_rule_ids != skill.rule_ids:
+            changed_skill = skill
+    _narrate_learning(episode, store, certified, changed_skill)
     return result
+
+
+def _narrate_learning(
+    episode: Episode, store: SchemaStore, certified: list[str], changed_skill: Skill | None
+) -> None:
+    lines = _learning_lines(episode, store, certified, changed_skill)
+    if not lines:
+        return
+    messages = _learning_messages(lines)
+    episode.log.event("learned", lines=messages)
+    for message in messages:
+        episode.backend.say(message)
+
+
+def _learning_lines(
+    episode: Episode, store: SchemaStore, certified: list[str], changed_skill: Skill | None
+) -> list[str]:
+    lines: list[str] = []
+    if certified:
+        details = []
+        for rule_id in certified:
+            rule = store.rules[rule_id]
+            confirmed, _ = store.replay(rule)
+            episodes = len({transition.episode_id for transition in confirmed})
+            details.append(f"{_display_rule_id(rule_id)} ({episodes} episodes)")
+        lines.append(f"Certified: {', '.join(details)}")
+
+    if changed_skill is not None:
+        lines.append(_skill_learning_line(store, changed_skill))
+
+    if episode.task.split == "holdout":
+        kept = []
+        for rule in store.rules.values():
+            if rule.scope != episode.world_id or rule.source != "revision" or rule.status != "hypothesis":
+                continue
+            confirmed, _ = store.replay(rule)
+            if not confirmed:
+                continue
+            count = len(confirmed)
+            confirmation = "once" if count == 1 else f"{count} times"
+            kept.append(
+                f"{_display_rule_id(rule.id)} ({_revision_description(rule)}), "
+                f"confirmed {confirmation}"
+            )
+        if kept:
+            lines.append(f"Kept for this world: {'; '.join(kept)}")
+    return lines
+
+
+def _skill_learning_line(store: SchemaStore, skill: Skill) -> str:
+    candidates = [
+        other
+        for other in store.skills.values()
+        if other.id != skill.id and other.status == "ok" and set(other.rule_ids) <= set(skill.rule_ids)
+    ]
+    base = max(candidates, key=lambda item: (len(item.rule_ids), item.id), default=None)
+    covered = set(base.rule_ids) if base is not None else set()
+    relies = [_display_rule_id(rule_id) for rule_id in skill.rule_ids if rule_id not in covered]
+    description = f"builds on {base.id}, " if base is not None else ""
+    return f"Learned {skill.id}: {description}relies on {', '.join(relies)}"
+
+
+def _revision_description(rule: Rule) -> str:
+    tools = rule.preconditions.get("tool_any", [])
+    if rule.kind == "mine":
+        return f"{rule.subject} needs {', '.join(tools) if tools else 'no special tool'}"
+    return f"craft {rule.subject}"
+
+
+def _display_rule_id(rule_id: str) -> str:
+    return rule_id.split("@", 1)[0]
+
+
+def _learning_messages(lines: list[str], limit: int = 240) -> list[str]:
+    messages: list[str] = []
+    current = ""
+    for line in lines:
+        candidate = line if not current else f"{current} | {line}"
+        if len(candidate) <= limit:
+            current = candidate
+            continue
+        if current:
+            messages.append(current)
+        while len(line) > limit:
+            messages.append(line[:limit])
+            line = line[limit:]
+        current = line
+    if current:
+        messages.append(current)
+    return messages
 
 
 def _annotate(step: PlanStep, outcome: Outcome, verdict: dict[str, Check], verify: bool) -> dict:
