@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
 from .models import Action, Rule, Skill
-from .verifier import CheckKind, predict
+from .normalize import family
+from .verifier import CheckKind, evaluate
 
 TRAIN_WORLD = "train"
 MIN_CONFIRMATIONS = 2
@@ -39,7 +40,7 @@ class Epoch:
 
 
 def epoch_key(world_id: str, kind: str, subject: str) -> str:
-    raise NotImplementedError("schema_store.epoch_key: rules lane")
+    return f"{world_id}/{kind}:{family(subject)}"
 
 
 @dataclass
@@ -58,12 +59,17 @@ class SchemaStore:
     epochs: dict[str, list[Epoch]] = field(default_factory=dict)  # epoch key -> opened epochs, in order
 
     def current_epoch(self, key: str) -> int:
-        raise NotImplementedError("SchemaStore.current_epoch: rules lane")
+        opened = self.epochs.get(key, [])
+        return opened[-1].number if opened else 0
 
     def epoch_of(self, transition: Transition) -> int:
-        raise NotImplementedError("SchemaStore.epoch_of: rules lane")
+        key = epoch_key(transition.world_id, transition.action.kind, transition.action.target or "")
+        started = [e.number for e in self.epochs.get(key, []) if e.start_seq <= transition.seq]
+        return max(started, default=0)
 
     def add_rule(self, rule: Rule) -> None:
+        if rule.source == "revision":
+            rule.epoch = self.current_epoch(epoch_key(rule.scope, rule.kind, rule.subject))
         self.rules[rule.id] = rule
 
     def usable_rules(self, world_id: str) -> list[Rule]:
@@ -75,11 +81,14 @@ class SchemaStore:
         ]
 
     def record_transition(self, transition: Transition) -> None:
+        transition.seq = len(self.transitions)
         self.transitions.append(transition)
 
     def demote(self, rule_id: str, transition_id: str, world_id: str) -> list[str]:
         """Demote a rule in one world and flag every skill that cites it."""
         rule = self.rules[rule_id]
+        if rule.status == "certified" or self.replay(rule)[0]:
+            self._open_epoch(rule, transition_id, world_id)
         self.demoted_in.setdefault(world_id, {})[rule_id] = transition_id
         if rule.scope == world_id:
             rule.status = "demoted"
@@ -93,6 +102,17 @@ class SchemaStore:
                 skill.flagged_by = rule_id
                 flagged.append(skill.id)
         return flagged
+
+    def _open_epoch(self, rule: Rule, transition_id: str, world_id: str) -> None:
+        """A contradicted rule that had earned trust means the world changed: evidence
+        gathered before the contradicting transition no longer speaks for new rules."""
+        key = epoch_key(world_id, rule.kind, rule.subject)
+        transition = next((t for t in self.transitions if t.id == transition_id), None)
+        start_seq = transition.seq if transition is not None else len(self.transitions)
+        opened = self.epochs.setdefault(key, [])
+        if opened and opened[-1].start_seq == start_seq:
+            return  # the same transition already opened this epoch
+        opened.append(Epoch(key, self.current_epoch(key) + 1, start_seq, transition_id, rule.id))
 
     def certify(self) -> list[str]:
         """Replay in scope and promote hypotheses that pass all three tests:
@@ -116,9 +136,12 @@ class SchemaStore:
         for transition in self.transitions:
             if transition.world_id != rule.scope or not applies(rule, transition.action):
                 continue
-            if transition.observed == predict(rule, transition.action):
+            if self.epoch_of(transition) < rule.epoch:
+                continue
+            verdict = evaluate(rule, transition.action, transition.observed)
+            if verdict == "confirm":
                 confirmed.append(transition)
-            else:
+            elif verdict == "contradict":
                 contradicted.append(transition)
         return confirmed, contradicted
 
@@ -161,6 +184,7 @@ class SchemaStore:
             "rules": [rule.to_dict() for rule in self.rules.values()],
             "skills": [skill.to_dict() for skill in self.skills.values()],
             "demoted_in": self.demoted_in,
+            "epochs": {key: [asdict(e) for e in opened] for key, opened in self.epochs.items()},
             "transitions": [
                 {
                     "id": t.id,
@@ -168,6 +192,8 @@ class SchemaStore:
                     "world_id": t.world_id,
                     "action": t.action.to_dict(),
                     "observed": t.observed,
+                    "kind": t.kind,
+                    "seq": t.seq,
                 }
                 for t in self.transitions
             ],
@@ -184,17 +210,21 @@ class SchemaStore:
             rules={r["id"]: Rule.from_dict(r) for r in payload["rules"]},
             skills={s["id"]: Skill.from_dict(s) for s in payload["skills"]},
             transitions=[
-                Transition(t["id"], t["episode_id"], t["world_id"], Action(**t["action"]), t["observed"])
-                for t in payload["transitions"]
+                Transition(
+                    t["id"], t["episode_id"], t["world_id"], Action(**t["action"]), t["observed"],
+                    kind=t.get("kind", "exact"), seq=t.get("seq", position),
+                )
+                for position, t in enumerate(payload["transitions"])
             ],
             demoted_in=payload["demoted_in"],
+            epochs={key: [Epoch(**e) for e in opened] for key, opened in payload.get("epochs", {}).items()},
         )
 
 
 def applies(rule: Rule, action: Action) -> bool:
     """Whether a rule makes a prediction for this action: same action and
     subject, and for mining, a tool the rule's preconditions allow."""
-    if action.kind != rule.kind or action.target != rule.subject:
+    if action.kind != rule.kind or action.target is None or family(action.target) != family(rule.subject):
         return False
     if rule.kind == "mine":
         tools = rule.preconditions.get("tool_any", [])
