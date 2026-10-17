@@ -469,8 +469,8 @@ class NaturalWorld:
 
     def _smelt(self, action: Action) -> Outcome:
         try:
-            ingredient = normalize.resolve(action.ingredient or "", self._inventory())
-            fuel = normalize.resolve(action.fuel or "", self._inventory())
+            ingredient = _held_member(action.ingredient or "", self._inventory())
+            fuel = _held_member(action.fuel or "", self._inventory())
         except ValueError:
             return self._fail("missing_ingredients")
         item = SMELTS.get(ingredient)
@@ -899,3 +899,13 @@ class NaturalWorld:
 
 def _empty_travel() -> dict[str, Any]:
     return {"distance": 0.0, "dug": {}, "placed": {}, "picked_up": {}}
+
+
+def _held_member(name: str, inventory: dict[str, int]) -> str:
+    """A smelt's fuel or ingredient: for a group, the member held most (ties by name)."""
+    if not name.startswith("#"):
+        return name
+    held = {member: inventory.get(member, 0) for member in normalize.members(name) if inventory.get(member, 0) > 0}
+    if not held:
+        raise ValueError(f"cannot resolve {name}: no matching item is held")
+    return min(held, key=lambda member: (-held[member], member))

@@ -21,7 +21,7 @@ from .agent import run_schemavoyager
 from .curriculum import Curriculum, Goal
 from .episode import Episode
 from .llm import LLM, SpendCapReached
-from .models import EpisodeResult, Task
+from .models import EpisodeResult, Observation, Task
 from .planner import PlanStep
 from .schema_store import SchemaStore
 from .trace import EpisodeLog
@@ -102,8 +102,10 @@ class _Life:
             if self._remaining_s() <= 0:
                 return "wall_clock"
             try:
-                inventory = self._learn_priors()
-                goal = self.curriculum.next_goal(inventory, self.store, self.world_id)
+                observation = self._learn_priors()
+                goal = self.curriculum.next_goal(
+                    normalize.counts(observation.inventory), self.store, self.world_id, normalize.counts(observation.nearby)
+                )
                 if goal is None:
                     if self._expand_frontier():
                         continue
@@ -124,15 +126,15 @@ class _Life:
 
     # -- what the LLM is asked ---------------------------------------------
 
-    def _learn_priors(self) -> dict[str, int]:
+    def _learn_priors(self) -> Observation:
         """Ask for prior rules, in one batched call per round, until every family the
-        agent needs has been asked about once. Returns the normalized inventory."""
+        agent needs has been asked about once. Returns the observation it learned from."""
         observation = self.backend.observe()
         self.observed_blocks |= {normalize.family(block) for block in observation.nearby}
         while True:
             families = self._unasked_families()
             if not families:
-                return normalize.counts(observation.inventory)
+                return observation
             rules = self.llm.propose_prior_rules_v2(families, sorted(self.observed_blocks), self.world_id)
             self.asked.update(families)
             for rule in rules:

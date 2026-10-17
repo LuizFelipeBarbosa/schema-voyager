@@ -44,9 +44,11 @@ class Curriculum:
     failures: dict[str, int] = field(default_factory=dict)
     skipped: dict[str, str] = field(default_factory=dict)  # item -> why
 
-    def next_goal(self, inventory: dict[str, int], store: SchemaStore, world_id: str) -> Goal | None:
+    def next_goal(
+        self, inventory: dict[str, int], store: SchemaStore, world_id: str, visible: dict[str, int] | None = None
+    ) -> Goal | None:
         """The cheapest frontier goal whose plan uses an uncertified rule (ties: fewest
-        uncertified rules, then name). Skipped items and items that can't be planned
+        uncertified rules, then name), planned with the producers in `visible` preferred. Skipped items and items that can't be planned
         from here are passed over."""
         held = normalize.counts(inventory)
         rules = store.usable_rules(world_id)
@@ -56,7 +58,7 @@ class Curriculum:
                 continue
             count = held.get(item, 0) + 1
             try:
-                plan = make_plan(item, count, held, rules, store.skill_for)
+                plan = make_plan(item, count, held, rules, store.skill_for, visible=visible)
             except PlanningError:
                 continue
             uncertified = tuple(sorted({step.rule.id for step in plan if step.rule.status != "certified"}))
