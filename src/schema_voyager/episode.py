@@ -17,6 +17,8 @@ from .trace import EpisodeLog
 MAX_EXPLORES_PER_TARGET = 3
 MAX_NATURAL_EXPLORES_PER_TARGET = 4
 LOOK_RADIUS = 64
+# A hit this far above the bot's feet is reached by climbing to open sky, not by walking toward it.
+HIT_ABOVE_BLOCKS = 4
 # Failures of pathing, digging or the bot itself, which say nothing about the
 # world's rules: retried after an explore, so the bot tries from somewhere else.
 RETRIED_ERRORS = frozenset({"unreachable", "craft_failed", "dig_failed", "timeout"})
@@ -87,6 +89,7 @@ class Episode:
         outcome = self._act_once(action, annotate)
         explores = retries = 0
         went_up = False
+        previous_direction: str | None = None
         max_explores = MAX_NATURAL_EXPLORES_PER_TARGET if self.natural else MAX_EXPLORES_PER_TARGET
         while not outcome.ok and self.budget_left >= 2 and not self.out_of_time:
             # A natural world's hazard (lava or water next to the target) means "look elsewhere" too.
@@ -94,8 +97,9 @@ class Episode:
             if searching and explores < max_explores:
                 explores += 1
                 if self.natural and action.kind == "mine":
-                    explore = self._explore_toward(action.target, may_go_up=not went_up)
+                    explore = self._explore_toward(action.target, not went_up, previous_direction)
                     went_up = went_up or explore.direction == "up"
+                    previous_direction = explore.direction
                 else:
                     explore = Action("explore")
             elif outcome.error in RETRIED_ERRORS and retries < MAX_RETRIES:
@@ -107,17 +111,20 @@ class Episode:
             outcome = self._act_once(action, annotate)
         return outcome
 
-    def _explore_toward(self, target: str | None, may_go_up: bool) -> Action:
+    def _explore_toward(self, target: str | None, may_go_up: bool, previous: str | None) -> Action:
         """Natural mode: look for the target's raw ids and explore toward the nearest
-        hit; with none in sight, first back up to open sky (once per target: most
+        hit, or up when that hit is well above the bot (it is out of a mine's reach
+        until the bot is back near the surface). Never straight back where the
+        previous explore of this target came from, unless that is the only hit.
+        With none in sight, first back up to open sky (once per target: most
         resources are at the surface), then try the next compass direction."""
         hits = self.backend.look(normalize.members(target), LOOK_RADIUS)  # type: ignore[attr-defined]
-        nearest = min(
-            ((found["distance"], direction) for direction, blocks in hits.items() for found in blocks.values()),
-            default=None,
-        )
+        seen = [(found["distance"], direction, found) for direction, blocks in hits.items() for found in blocks.values()]
+        not_behind = [hit for hit in seen if hit[1] != _opposite(previous)]
+        nearest = min(not_behind or seen, key=lambda hit: hit[0], default=None)
         if nearest is not None:
-            direction = nearest[1]
+            above = "y" in nearest[2] and nearest[2]["y"] - self.backend.observe().position[1] > HIT_ABOVE_BLOCKS
+            direction = "up" if above and may_go_up else nearest[1]
         elif may_go_up:
             direction = "up"
         else:
@@ -181,6 +188,12 @@ class Episode:
         if result.success:
             self.backend.say(f"Goal reached: {self.task.goal_count} {self.task.goal_item}.")
         return result
+
+
+def _opposite(direction: str | None) -> str | None:
+    if direction not in DIRECTIONS:
+        return None
+    return DIRECTIONS[(DIRECTIONS.index(direction) + len(DIRECTIONS) // 2) % len(DIRECTIONS)]
 
 
 def _moved(travel: dict[str, Any]) -> bool:

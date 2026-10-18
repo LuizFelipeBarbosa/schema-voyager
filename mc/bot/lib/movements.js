@@ -15,6 +15,49 @@ const NEIGHBOUR_OFFSETS = [
 // Blocks that fall when unsupported (the pathfinder only knows sand).
 const FALLING_BLOCKS = /^(sand|red_sand|gravel|suspicious_sand|suspicious_gravel|.*_concrete_powder|anvil|chipped_anvil|damaged_anvil)$/
 
+// Tool tiers, cheapest first; an unknown material counts as the dearest.
+const TOOL_TIERS = ['wooden', 'golden', 'stone', 'iron', 'diamond', 'netherite']
+// A tool is worth using on a block the bare hand can also harvest only when it is
+// at least this many times faster.
+const WORTH_USING_SPEEDUP = 3
+// A tool with this much durability left or less is kept: one more block would break it.
+const MIN_DURABILITY_LEFT = 2
+
+const toolTier = (item) => {
+  const tier = TOOL_TIERS.indexOf(item.name.split('_')[0])
+  return tier === -1 ? TOOL_TIERS.length : tier
+}
+
+// A replacement for the pathfinder's `bestHarvestTool` (which picks the fastest
+// tool, wearing out the best pickaxe on dirt): for each block, the lowest-tier
+// tool that still harvests it, or the bare hand when the block drops without a
+// tool or no harvesting tool is at least WORTH_USING_SPEEDUP times faster.
+// Never a tool that the dig would break. The pathfinder digs with whatever is
+// held when this returns null, so the hand is an item that digs like one (a
+// block), else nothing equipped.
+function cheapestHarvestTool (bot) {
+  const digTime = (block, item) => block.digTime(item ? item.type : null, false, false, false, [], bot.entity.effects)
+
+  return (block) => {
+    const items = bot.inventory.items()
+    const durableTools = items.filter((item) => item.maxDurability && item.maxDurability - (item.durabilityUsed || 0) >= MIN_DURABILITY_LEFT)
+    const handHarvests = Boolean(block.canHarvest(null))
+    const handTime = digTime(block, null)
+    const usable = durableTools
+      .filter((tool) => block.canHarvest(tool.type))
+      .filter((tool) => !handHarvests || handTime >= WORTH_USING_SPEEDUP * digTime(block, tool))
+      .sort((a, b) => toolTier(a) - toolTier(b) || digTime(block, a) - digTime(block, b))
+    if (usable.length > 0) return usable[0]
+
+    const held = bot.heldItem
+    if (!held || !held.maxDurability) return null // already bare-handed in effect
+    const filler = items.find((item) => !item.maxDurability)
+    if (filler) return filler
+    bot.unequip('hand').catch(() => {})
+    return null
+  }
+}
+
 // Movements for a request with dig_through. On top of the pathfinder's own
 // safety rules (dontCreateFlow, dontMineUnderFallingBlock, lava in
 // blocksToAvoid) it:
@@ -89,4 +132,4 @@ class GoalBesideBlock extends goals.Goal {
   }
 }
 
-module.exports = { DiggingMovements, GoalBesideBlock }
+module.exports = { DiggingMovements, GoalBesideBlock, cheapestHarvestTool }
