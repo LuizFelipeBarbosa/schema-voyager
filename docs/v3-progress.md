@@ -422,5 +422,4 @@ pushed to `origin` until the user says so.
     served 200 only), glass or torch designs (Claude chose wood and a door only).
   - Dirt scaffold pillars stay beside the house (`travel.placed` has names, not positions).
   - Grass under the walls decays to dirt: house checks must use `builder.mismatches`, not identical scans.
-  - `!yes` answers "Approved" even if `mark` loses a race; the life's own goal counts `pursue` steps of a build in
-    its plan length only as `gather_steps`.
+  - `!yes` answers "Approved" even if `mark` loses a race with a panel discard.
