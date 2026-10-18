@@ -164,6 +164,7 @@ def _life_args(tmp_path, **overrides):
 
 
 def test_the_life_command_refuses_to_start_when_the_pack_is_not_ready(tmp_path, monkeypatch):
+    monkeypatch.setenv("SV2_HOME", str(tmp_path))  # the instance lock lives under SV2_HOME; never the real one
     monkeypatch.setenv("SV2_BOT_PORT", "3200")
     monkeypatch.setenv("SV2_RCON_PORT", "25576")
     monkeypatch.setattr(demo, "rcon_factory", lambda port: FakeRcon(enabled=["vanilla"]).factory())
