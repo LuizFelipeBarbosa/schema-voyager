@@ -17,7 +17,7 @@ import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 from . import blueprint, normalize
 from .models import Action, GoalKind, GoalSpec, Rule, Unsupported
@@ -167,6 +167,15 @@ RULES_SCHEMA_V2 = {
     "required": ["rules"],
     "additionalProperties": False,
 }
+# Prior rules for mobs (v3.3d): the same request plus kill rules. Without mobs the v2 request above is sent unchanged.
+WORLD_MODEL_KILL_ADDENDUM = """
+
+Kill rules, for the mobs you are asked about:
+- action_type "kill": subject is the mob's entity id. consumes is empty, station is "" and fuel_any is empty. check is "stochastic".
+- allowed is required and lists every item one kill can drop: min is the fewest of it one kill always drops (a cow: beef 1, leather 0) and max is the most, without Looting."""
+WORLD_MODEL_KILL_SYSTEM_V2 = WORLD_MODEL_SYSTEM_V2 + WORLD_MODEL_KILL_ADDENDUM
+RULES_KILL_SCHEMA_V2 = copy.deepcopy(RULES_SCHEMA_V2)
+RULES_KILL_SCHEMA_V2["properties"]["rules"]["items"]["properties"]["action_type"]["enum"].append("kill")
 ITEMS_SCHEMA = {
     "type": "object",
     "properties": {"items": {"type": "array", "items": {"type": "string"}}},
@@ -375,10 +384,13 @@ class LLM:
 
     # -- v2: a continuous life in a natural world -------------------------
 
-    def propose_prior_rules_v2(self, families: list[str], known_blocks: list[str], world_id: str) -> list[Rule]:
+    def propose_prior_rules_v2(
+        self, families: list[str], known_blocks: list[str], world_id: str, mobs: Sequence[str] = ()
+    ) -> list[Rule]:
         """Prior rules for a batch of families (blocks to mine, items to craft or smelt),
         normalized, with `scope=world_id`. `known_blocks` are the block families the
-        agent has seen so far; an empty list is shown as "none observed yet"."""
+        agent has seen so far; an empty list is shown as "none observed yet".
+        For each of `mobs`, also a kill rule."""
         user = (
             f"Block families the agent has seen near it so far: {', '.join(known_blocks) or 'none observed yet'}.\n"
             f"Write the vanilla rules for these names: {', '.join(families)}.\n"
@@ -386,11 +398,18 @@ class LLM:
             "Write exactly one rule per name, and also one rule for each raw ingredient an item needs "
             "that is not a name above, so the agent can plan from blocks it can mine."
         )
+        system, schema = WORLD_MODEL_SYSTEM_V2, RULES_SCHEMA_V2
+        if mobs:
+            user += (
+                f"\nMobs the agent has seen: {', '.join(mobs)}. "
+                "Write exactly one kill rule per mob, with the mob's entity id as subject."
+            )
+            system, schema = WORLD_MODEL_KILL_SYSTEM_V2, RULES_KILL_SCHEMA_V2
         if self.mode == "fake":
-            payload = _fake_priors_v2(families)
+            payload = _fake_priors_v2(families, mobs)
             self._meter_fake("prior_rules", user + json.dumps(payload))
         else:
-            payload = self._json_call("prior_rules", WORLD_MODEL_SYSTEM_V2, user, RULES_SCHEMA_V2)
+            payload = self._json_call("prior_rules", system, user, schema)
         return [_to_rule_v2(raw, source="prior", scope=world_id) for raw in payload["rules"]]
 
     def revise_rule_v2(
@@ -402,6 +421,8 @@ class LLM:
         world_id: str,
     ) -> list[Rule]:
         """Up to 3 ranked alternatives for a contradicted rule, in normalized names."""
+        if rule.kind == "kill":  # a kill rule never mismatches
+            return []
         if self.mode == "fake":
             payload = {"rules": _fake_revisions_v2(rule, counterexample)}
             self._meter_fake("revise_rule", json.dumps(payload))
@@ -429,6 +450,8 @@ class LLM:
     def repair_rule_v2(self, rule: Rule, dead_items: list[str], obtainable: list[str], world_id: str) -> list[Rule]:
         """Up to 3 ranked alternatives for a rule that needs items nothing the agent knows
         produces (so it can never be executed, and never contradicted)."""
+        if rule.kind == "kill":
+            return []
         if self.mode == "fake":
             payload = {"rules": _fake_repairs_v2(rule)}
             self._meter_fake("repair_rule", json.dumps(payload))
@@ -693,14 +716,20 @@ def _fake_revisions(rule: Rule, counterexample: dict[str, Any]) -> list[dict[str
     ]
 
 
-def _fake_priors_v2(families: list[str]) -> dict[str, Any]:
-    """The whitelist's vanilla rules whose subject family was asked for, or that yield an asked item."""
+def _fake_priors_v2(families: list[str], mobs: Sequence[str] = ()) -> dict[str, Any]:
+    """The whitelist's vanilla rules whose subject family was asked for, or that yield an asked item;
+    a kill rule only for a mob that was sent."""
     asked = {normalize.family(name) for name in families}
-    rules = [
-        raw
-        for raw in json.loads((DATA_DIR / "prior_rules_v2.json").read_text(encoding="utf-8"))["rules"]
-        if normalize.family(raw["subject"]) in asked or any(normalize.family(y["item"]) in asked for y in raw["yields"])
-    ]
+    rules = []
+    for raw in json.loads((DATA_DIR / "prior_rules_v2.json").read_text(encoding="utf-8"))["rules"]:
+        if raw["action_type"] == "kill":
+            wanted = raw["subject"] in mobs
+        else:
+            wanted = normalize.family(raw["subject"]) in asked or any(
+                normalize.family(y["item"]) in asked for y in raw["yields"]
+            )
+        if wanted:
+            rules.append(raw)
     return {"rules": rules}
 
 
@@ -720,6 +749,18 @@ def _to_rule_v2(raw: dict[str, Any], source: str, scope: str) -> Rule:
         if check == "stochastic":
             allowed = {normalize.family(a["item"]): [a["min"], a["max"]] for a in raw.get("allowed", [])}
             effects["allowed"] = allowed or {item: [0, n] for item, n in drops.items()}
+    elif kind == "kill":
+        action = {"type": "kill", "mob": subject}
+        preconditions = {"tool_any": []}
+        allowed = {normalize.family(a["item"]): [a["min"], a["max"]] for a in raw.get("allowed", [])}
+        # Without `allowed` the drops are only a guess, so nothing is guaranteed and nothing is planned from them.
+        allowed = allowed or {item: [0, n] for item, n in _sum_counts(raw["yields"]).items()}
+        effects = {
+            "killed": True,
+            "drops": {item: lo for item, (lo, _) in allowed.items() if lo >= 1},
+            "allowed": allowed,
+        }
+        check = "stochastic"
     else:
         action = {"type": kind, "item": subject}
         station = raw["station"] or ("furnace" if kind == "smelt" else None)
@@ -806,6 +847,18 @@ def _items_file() -> dict[str, Any]:
 def vanilla_items() -> frozenset[str]:
     """Every vanilla 1.21.1 item id."""
     return frozenset(_items_file()["items"])
+
+
+def vanilla_mobs() -> dict[str, str]:
+    """Entity name -> its minecraft-data type (hostile, animal, mob, passive, water_creature, ambient, player, ...).
+    entities_1_21_1.json is `name` -> `type` from minecraft-data's pc/1.20.5/entities.json (the file its
+    dataPaths.json uses for pc 1.21.1), in mc/bot/node_modules."""
+    return dict(_entities_file())
+
+
+@functools.cache
+def _entities_file() -> dict[str, str]:
+    return json.loads((DATA_DIR / "entities_1_21_1.json").read_text(encoding="utf-8"))
 
 
 def vanilla_foods() -> dict[str, int]:
