@@ -67,7 +67,7 @@ test('validateTactics: [] is fine; a non-array, non-string, unknown or repeated 
   const registry = { a: () => ({}), b: () => ({}) }
   assert.equal(validateTactics(['b', 'a'], registry), null)
   assert.match(validateTactics(['a', 'b', 'a'], registry), /repeated/)
-  assert.deepEqual([...TACTICS], ['wtap', 'strafe', 'shield', 'crit'])
+  assert.deepEqual([...TACTICS], ['wtap', 'strafe', 'shield', 'crit', 'disengage'])
   assert.deepEqual([...DEFAULT_TACTICS], [])
 })
 
@@ -472,7 +472,7 @@ test('wtap + crit: the hooks run in REGISTRY order, so both name orders apply th
 const scripted = (...values) => () => values.shift()
 
 test('strafe: it is registered between wtap and crit, and valid with crit', () => {
-  assert.deepEqual([...TACTICS], ['wtap', 'strafe', 'shield', 'crit'])
+  assert.deepEqual([...TACTICS], ['wtap', 'strafe', 'shield', 'crit', 'disengage'])
   assert.equal(validateTactics(['crit', 'strafe']), null)
 })
 
@@ -551,7 +551,7 @@ const swing = (bot, target) => bot.emit('entitySwingArm', target)
 const shieldCalls = (calls) => calls.filter((call) => /^(de)?activate$|^attack$/.test(call))
 
 test('shield: it is registered between strafe and crit, and valid with crit', () => {
-  assert.deepEqual([...TACTICS], ['wtap', 'strafe', 'shield', 'crit'])
+  assert.deepEqual([...TACTICS], ['wtap', 'strafe', 'shield', 'crit', 'disengage'])
   assert.equal(validateTactics(['crit', 'shield']), null)
 })
 

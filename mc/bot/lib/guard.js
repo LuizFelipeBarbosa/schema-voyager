@@ -166,7 +166,8 @@ function watchFight (bot, target, { timeoutMs, shouldStop, outOfReachMs, fleeBel
 // `weapon`: the item name to prefer over the best sword or axe.
 // `tactics`: a controller from lib/tactics.js, attached right after pvp.attack and detached first in the cleanup.
 // `fleeBelow`: the health under which the fight ends `fled`.
-async function fight (bot, target, { pvp = bot.pvp, timeoutMs = 30000, movements = null, eventLog = null, shouldStop = () => false, deadline = Infinity, outOfReachMs = OUT_OF_REACH_MS, flee: fleeAfterLost = true, sprint = false, weapon: preferredWeapon = null, tactics = null, fleeBelow = LOW_HEALTH } = {}) {
+// `fleeMs`, `fleeDistance`: the time limit and the distance of the flight after a `fled` or a `lost`.
+async function fight (bot, target, { pvp = bot.pvp, timeoutMs = 30000, movements = null, eventLog = null, shouldStop = () => false, deadline = Infinity, outOfReachMs = OUT_OF_REACH_MS, flee: fleeAfterLost = true, sprint = false, weapon: preferredWeapon = null, tactics = null, fleeBelow = LOW_HEALTH, fleeMs = 10000, fleeDistance = SCAN_BLOCKS } = {}) {
   // `deadline` (ms since the epoch) bounds the whole call: the window wait, the fight and the flight after a `fled`.
   const startedAt = Date.now()
   const windowDeadline = Math.min(startedAt + WINDOW_WAIT_MS, deadline)
@@ -201,7 +202,7 @@ async function fight (bot, target, { pvp = bot.pvp, timeoutMs = 30000, movements
   }
   const outOfReach = outcome === 'lost' && watch.wasOutOfReach()
   eventLog?.record('fight_end', { target: target.name, id: target.id, ...result })
-  if (outcome === 'fled' || (outOfReach && fleeAfterLost)) await flee(bot, target, { minDistance: SCAN_BLOCKS, timeoutMs: Math.max(0, Math.min(10000, deadline - Date.now())), movements })
+  if (outcome === 'fled' || (outOfReach && fleeAfterLost)) await flee(bot, target, { minDistance: fleeDistance, timeoutMs: Math.max(0, Math.min(fleeMs, deadline - Date.now())), movements })
   return { ...result, out_of_reach: outOfReach }
 }
 

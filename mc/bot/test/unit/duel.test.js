@@ -325,3 +325,88 @@ test('runDuel: duration of a kill is measured to the opponent death, not to the 
   assert.equal(result.reason, 'killed')
   assert.ok(result.duration >= 0.2 && result.duration <= 0.3, `duration ${result.duration}`)
 })
+
+// ---- disengage ----
+
+const APPLE = { name: 'golden_apple' }
+
+// A bot with an inventory holding `items`; consume removes the apple. `calls` records equip and consume.
+function disengageBot (items) {
+  const { bot } = fakeBot()
+  bot.calls = []
+  bot.inventory = { items: () => items }
+  bot.equip = async (item, slot) => { bot.calls.push(['equip', item.name, slot]) }
+  bot.consume = async () => {
+    bot.calls.push(['consume'])
+    items.splice(0, items.length)
+  }
+  return bot
+}
+
+// A fight that answers each call with the next outcome, then waits for the end like waitingFight.
+function scriptedFight (...outcomes) {
+  const calls = []
+  const fight = async (bot, target, options) => {
+    calls.push({ options })
+    const outcome = outcomes.shift()
+    if (outcome) return { outcome }
+    while (!options.shouldStop()) await new Promise((resolve) => setTimeout(resolve, 10))
+    return { outcome: 'lost' }
+  }
+  fight.calls = calls
+  return fight
+}
+
+const disengageOptions = { fleeBelow: 6, fleeMs: 2000, fleeDistance: 6 }
+
+test('runDuel disengage: a fled eats the apple, records duel_ate, and fights on with fleeBelow 0', async () => {
+  const bot = disengageBot([APPLE])
+  bot.health = 4
+  const fight = scriptedFight('fled')
+  setTimeout(() => bot.emit('entityDead', { id: OPPONENT_ID }), 300)
+  const { result, eventLog } = await run(bot, { tactics: ['disengage'] }, { fight, killGraceMs: 10 })
+  assert.deepEqual(bot.calls, [['equip', 'golden_apple', 'hand'], ['consume']])
+  assert.deepEqual(eventLog.events.find((event) => event.type === 'duel_ate'), { type: 'duel_ate', item: 'golden_apple', health: 4 })
+  assert.equal(result.retreats, 1)
+  assert.equal(result.engagements, 2)
+  const { fleeBelow, fleeMs, fleeDistance } = fight.calls[0].options
+  assert.deepEqual({ fleeBelow, fleeMs, fleeDistance }, disengageOptions)
+  assert.equal(fight.calls[1].options.fleeBelow, 0)
+  assert.equal(fight.calls[1].options.fleeMs, undefined)
+})
+
+test('runDuel disengage: no flee options without the tactic (retreats 0), and fleeBelow 0 without an apple', async () => {
+  for (const [tacticNames, items] of [[[], [APPLE]], [['disengage'], []]]) {
+    const bot = disengageBot(items)
+    const fight = waitingFight({ onStart: (b) => setTimeout(() => b.emit('entityDead', { id: OPPONENT_ID }), 30) })
+    const { result } = await run(bot, { tactics: tacticNames }, { fight, killGraceMs: 10 })
+    assert.deepEqual(fight.calls[0].options.fleeBelow, 0)
+    assert.equal(fight.calls[0].options.fleeMs, undefined)
+    assert.equal(fight.calls[0].options.fleeDistance, undefined)
+    assert.equal(result.retreats, 0)
+    assert.deepEqual(bot.calls, [])
+  }
+})
+
+test('runDuel disengage: a death during the flight ends the duel without eating', async () => {
+  const bot = disengageBot([APPLE])
+  const fight = async () => {
+    bot.emit('death')
+    return { outcome: 'fled' }
+  }
+  const { result } = await run(bot, { tactics: ['disengage'] }, { fight })
+  assert.equal(result.reason, 'died')
+  assert.deepEqual(bot.calls, [])
+})
+
+test('runDuel disengage: a consume that rejects goes on and the duel re-engages', async () => {
+  const bot = disengageBot([APPLE])
+  bot.consume = async () => { throw new Error('not edible') }
+  const fight = scriptedFight('fled')
+  setTimeout(() => bot.emit('entityDead', { id: OPPONENT_ID }), 300)
+  const { result, eventLog } = await run(bot, { tactics: ['disengage'] }, { fight, killGraceMs: 10 })
+  assert.equal(result.reason, 'killed')
+  assert.equal(result.engagements, 2)
+  assert.equal(eventLog.events.some((event) => event.type === 'duel_ate'), false)
+  assert.equal(fight.calls[1].options.fleeBelow, 6) // the apple is still in the inventory
+})
