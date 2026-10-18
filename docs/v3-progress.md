@@ -44,7 +44,7 @@ pushed to `origin` until the user says so.
 | S07 survival | running | b | Lanes: entities-bot, guard-core, survival-plugins, handler-abort, then guard-wire, smelt-abort, python-survival, sim-threats, then difficulty-env, whitelist, death-handling (after S06 life-queue), live |
 | S08 combat and hunting | not started | b | |
 | S09 building foundations | done | a | Contract v3.4a and bot API v3.4; 5 lanes merged (pytest 821, bot 258); `runs/s09-place-live` ALL PASS (16 checks) from `main`; not pushed |
-| S10 build goals | not started | a | |
+| S10 build goals | running | a | v3.4b contract (protected boxes, `/survey`, approval, build runner); lanes: build-order, survey-bot, blueprint-llm, panel-preview, then survey-backend, protect-bot, protect-backend, then build-run, build-life; live `runs/v3-build-live` |
 | S11 duels | not started | b | |
 | S12 home, storage, composite goals | not started | a | |
 
