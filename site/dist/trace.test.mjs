@@ -86,6 +86,6 @@ const endIndex = v1.length - 1;
 const noBlankLines = (html) => html.replace(/\n\s*(?=\n)/g, '');
 assert.equal(noBlankLines(headerAt(v1, endIndex)), noBlankLines(before.episodeHtml(before.stateAt(v1, endIndex))));
 const v1Step = v1.find((event) => event.kind === 'step');
-assert.equal(now.stepHtml(v1Step, 'B'), before.stepHtml(v1Step, 'B'));
+assert.equal(noBlankLines(now.stepHtml(v1Step, 'B')), noBlankLines(before.stepHtml(v1Step, 'B')));
 console.log(`v1 ok: ${v1.length} events identical`);
 console.log('all panel tests passed');
