@@ -128,6 +128,7 @@ class Episode:
         went_up = False
         previous_direction: str | None = None
         natural_mine = self.natural and action.kind == "mine"
+        natural_kill = self.natural and action.kind == "kill"
         max_explores = MAX_NATURAL_EXPLORES_PER_TARGET if self.natural else MAX_EXPLORES_PER_TARGET
         while not outcome.ok and self.budget_left >= 2 and not self.out_of_time:
             # A natural world's hazard (lava or water next to the target) means "look elsewhere" too.
@@ -135,7 +136,7 @@ class Episode:
             explore_toward_target = False
             if searching and explores < max_explores:
                 explores += 1
-                explore_toward_target = natural_mine
+                explore_toward_target = natural_mine or natural_kill
             elif outcome.error == "interrupted":
                 if interrupts >= MAX_INTERRUPTS:
                     break
@@ -154,14 +155,18 @@ class Episode:
                 approach_retries += 1
                 outcome = self._act_once(action, annotate)
                 continue
+            elif natural_kill and outcome.error in ("escaped", "timeout") and retries < MAX_RETRIES:
+                retries += 1  # the mob is still around: again, in place
+                outcome = self._act_once(action, annotate)
+                continue
             elif outcome.error in RETRIED_ERRORS and retries < MAX_RETRIES:
                 retries += 1
-                # Only an unreachable mine heads for the target; a timeout says nothing about where it is.
-                explore_toward_target = natural_mine and outcome.error == "unreachable"
+                # Only an unreachable mine or kill heads for the target; a timeout says nothing about where it is.
+                explore_toward_target = (natural_mine or natural_kill) and outcome.error == "unreachable"
             else:
                 break
             if explore_toward_target:
-                toward = self._explore_toward(action.target, not went_up, previous_direction)
+                toward = self._explore_toward(action.target, not went_up, previous_direction, mob=natural_kill)
                 if toward is None:
                     self._search_exhausted = True  # every direction is dead: fail now, not at the deadline
                     break
@@ -200,7 +205,9 @@ class Episode:
         )
         return True
 
-    def _explore_toward(self, target: str | None, may_go_up: bool, previous: str | None) -> Action | None:
+    def _explore_toward(
+        self, target: str | None, may_go_up: bool, previous: str | None, mob: bool = False
+    ) -> Action | None:
         """Natural mode: look for the target's raw ids and explore toward the nearest
         hit in a live direction, or up when that hit is well above the bot (it is out
         of a mine's reach until the bot is back near the surface). Never straight back
@@ -209,7 +216,10 @@ class Episode:
         With no live hit in sight: with nothing seen at all, first back up to open sky
         (once per target: most resources are at the surface), then the live compass direction
         furthest from the dead ones; when every direction is dead, None."""
-        hits = self.backend.look(normalize.members(target), LOOK_RADIUS)  # type: ignore[attr-defined]
+        if mob:  # a kill's target is a mob type: look for the entity, not block families
+            hits = self.backend.look([], LOOK_RADIUS, mobs=[target])  # type: ignore[attr-defined]
+        else:
+            hits = self.backend.look(normalize.members(target), LOOK_RADIUS)  # type: ignore[attr-defined]
         seen = [(found["distance"], direction, found) for direction, blocks in hits.items() for found in blocks.values()]
         live = [hit for hit in seen if hit[1] not in self._dead_directions]
         not_behind = [hit for hit in live if hit[1] != _opposite(previous)]
@@ -344,7 +354,7 @@ def _fled_hurt(outcome: Outcome) -> bool:
     last `damage` event's)."""
     if outcome.detail.get("outcome") != "fled":
         return False
-    for kind in ("fled", "damage"):
+    for kind in ("fled", "fight_end", "damage"):
         healths = [event["health"] for event in outcome.events if event.get("type") == kind and "health" in event]
         if healths:
             return healths[-1] < REST_BELOW_HEALTH

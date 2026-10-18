@@ -10,6 +10,7 @@ import time
 import urllib.error
 import urllib.request
 from collections import Counter
+from collections.abc import Sequence
 from typing import Any
 
 from . import normalize
@@ -39,6 +40,7 @@ _sleep = time.sleep
 _monotonic = time.monotonic
 
 MINE_MAX_DISTANCE = 32
+KILL_MAX_DISTANCE = 32  # v3.3: how far /attack walks to its quarry
 EXPLORE_DISTANCE = 32
 GOTO_RANGE = 3
 
@@ -78,6 +80,8 @@ class MineflayerBackend:
             return self._goto(action)
         if self.natural:
             return self._act_natural(action)
+        if action.kind == "kill":  # v3.3: only the natural bot fights
+            return Outcome(ok=False, error="unknown_action")
         if action.kind == "mine":
             body = self._post("/mine", self._with_protect({"block": action.target, "tool": action.tool}))
             return Outcome(
@@ -231,12 +235,23 @@ class MineflayerBackend:
             alive=body.get("alive", True),
             events=body.get("events") or [],
             last_seq=body.get("last_seq", 0),
+            follow=body.get("follow"),
         )
 
-    def look(self, blocks: list[str], radius: int = 64) -> LookResult:
-        body = self._post("/look", self._with_protect({"blocks": blocks, "radius": radius}))
+    def look(self, blocks: list[str], radius: int = 64, mobs: Sequence[str] = ()) -> LookResult:
+        payload: dict[str, Any] = {"blocks": blocks, "radius": radius}
+        if mobs:
+            payload["mobs"] = list(mobs)
+        body = self._post("/look", self._with_protect(payload))
         directions = body.get("directions") or {}
         return {direction: directions.get(direction) or {} for direction in DIRECTIONS}
+
+    def follow(self, player: str | None, distance: float = 3.0) -> str | None:
+        body = self._post("/follow", {"player": player, "distance": distance})
+        return body["player"] if body["ok"] else None
+
+    def stop_follow(self) -> None:
+        self._post("/follow/stop", {})
 
     def probe(self, grid: list[list[str | None]]) -> dict[str, Any]:
         return self._post("/probe", {"grid": grid})
@@ -248,6 +263,8 @@ class MineflayerBackend:
             return self._craft_natural(action)
         if action.kind == "smelt":
             return self._smelt_natural(action)
+        if action.kind == "kill":
+            return self._kill_natural(action)
         return self._explore_natural(action)
 
     def _mine_natural(self, action: Action) -> Outcome:
@@ -267,6 +284,29 @@ class MineflayerBackend:
             ok=body["ok"],
             error=body.get("error"),
             block_removed=body.get("block_removed"),
+            drops=body.get("drops") or {},
+            picked_up=body.get("picked_up") or {},
+            inventory_delta=body.get("picked_up") or {},
+            inventory=self._inventory(body),
+            blocks_walked=body.get("blocks_walked", 0.0),
+            detail=detail,
+            travel=body.get("travel") or {},
+            events=body.get("events") or [],
+        )
+
+    def _kill_natural(self, action: Action) -> Outcome:
+        body = self._post("/attack", self._with_protect({
+            "mob": action.target,
+            "weapon": action.tool,
+            "max_distance": KILL_MAX_DISTANCE,
+        }))
+        detail = _detail(
+            body, "killed", "mob", "target", "weapon_used", "death_position", "inventory_before_step", "position", "detail"
+        )
+        return Outcome(
+            ok=body["ok"],
+            error=body.get("error"),
+            block_removed=False,
             drops=body.get("drops") or {},
             picked_up=body.get("picked_up") or {},
             inventory_delta=body.get("picked_up") or {},
