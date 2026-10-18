@@ -202,7 +202,7 @@ async function main () {
       assert.equal(bogus.status, 400, `bogus mode answered ${bogus.status} ${short(bogus.body)}`)
 
       const off = await post('/guard', { mode: 'off' })
-      assert.deepEqual(off.body, { ok: true, mode: 'off' })
+      assert.deepEqual({ ok: off.body.ok, mode: off.body.mode }, { ok: true, mode: 'off' }) // v3.6 adds `tactics`
       assert.equal((await getStatus()).guard.mode, 'off')
 
       const since = (await getStatus()).last_seq
@@ -212,7 +212,7 @@ async function main () {
       assert.equal(fought, null, `fight_start with the guard off: ${short(fought && fought.events)}`)
 
       const on = await post('/guard', { mode: 'defend' })
-      assert.deepEqual(on.body, { ok: true, mode: 'defend' })
+      assert.deepEqual({ ok: on.body.ok, mode: on.body.mode }, { ok: true, mode: 'defend' }) // v3.6 adds `tactics`
       assert.equal((await getStatus()).guard.mode, 'defend')
       return `bogus ${bogus.status}, off ${short(off.body)}, no fight_start in ${NO_FIGHT_WINDOW_MS} ms, back to ${short(on.body)}`
     })
