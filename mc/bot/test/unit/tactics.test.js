@@ -4,7 +4,7 @@ const { EventEmitter } = require('node:events')
 const { Vec3 } = require('vec3')
 const { goals } = require('mineflayer-pathfinder')
 const { PVP } = require('mineflayer-pvp/lib/PVP')
-const { TACTICS, DEFAULT_TACTICS, validateTactics, createTactics, isSafeStep } = require('../../lib/tactics')
+const { TACTICS, DEFAULT_TACTICS, jumpTimeline, validateTactics, createTactics, isSafeStep } = require('../../lib/tactics')
 const { fakeWorldBot } = require('./world_fixture')
 
 // A flat stone floor at y 9 under a bot at y 10, facing -z (yaw 0); `without` lists floor cells to remove.
@@ -67,7 +67,7 @@ test('validateTactics: [] is fine; a non-array, non-string, unknown or repeated 
   const registry = { a: () => ({}), b: () => ({}) }
   assert.equal(validateTactics(['b', 'a'], registry), null)
   assert.match(validateTactics(['a', 'b', 'a'], registry), /repeated/)
-  assert.deepEqual([...TACTICS], Object.keys({}))
+  assert.deepEqual([...TACTICS], ['crit'])
   assert.deepEqual([...DEFAULT_TACTICS], [])
 })
 
@@ -278,4 +278,134 @@ test('detach: restores pvp, the listeners and the controls, and ends an in-fligh
   await flush()
   assert.equal(attacks(), 0)
   assert.ok(!calls.includes('activate'))
+})
+
+// crit: the bot walks in from 3 blocks; with the iron sword's 13-tick cooldown and no shield the strike
+// lead is 1, so the jump is due once 13 - (7 + 1 - 1) = 6 ticks have passed since the last strike.
+const CRIT_JUMP_AT = 6
+
+test('crit: it is registered and valid', () => {
+  assert.ok(TACTICS.includes('crit'))
+  assert.equal(validateTactics(['crit']), null)
+  const { bot, pvp } = fightFixture()
+  assert.deepEqual(createTactics(bot, ['crit'], { pvp }).names, ['crit'])
+})
+
+test('jumpTimeline: rises for 6 ticks, descends from the 7th and lands on the 12th', () => {
+  assert.deepEqual(jumpTimeline(), { descendsAt: 7, landsAt: 12 })
+})
+
+test('crit: with the cooldown nearly full the mover jumps with sprint released; far from full it does not', async (t) => {
+  fakeTimers(t)
+  const { bot, pvp, target } = fightFixture()
+  const tactics = createTactics(bot, ['crit'], { pvp })
+  tactics.attach(target)
+  await tickBot(t, bot, 1) // no strike yet: the cooldown counts as full
+  assert.equal(bot.controls.jump, true)
+  assert.ok(!bot.controls.sprint)
+  assert.equal(bot.controls.forward, true)
+  tactics.detach()
+})
+
+test('crit: the jump is due when the cooldown has CRIT_JUMP_AT ticks to go, and sprint goes first', async (t) => {
+  fakeTimers(t)
+  const { bot, pvp, target, attacks } = fightFixture()
+  bot.controlState = bot.controls // the real bot's name for the pressed controls
+  const tactics = createTactics(bot, ['crit'], { pvp })
+  tactics.attach(target)
+  bot.entity.onGround = false // arrive airborne: the first strike is a falling one
+  bot.entity.velocity.y = -0.1
+  await tickBot(t, bot, 1)
+  assert.equal(attacks(), 1)
+  bot.entity.onGround = true
+  bot.entity.velocity.y = 0
+  let jumpedAt = null
+  for (let sinceStrike = 1; sinceStrike < 13 && jumpedAt === null; sinceStrike++) {
+    await tickBot(t, bot, 1)
+    if (bot.controls.jump) jumpedAt = sinceStrike
+  }
+  // sprint was pressed by the walk-in, so the first due tick only releases it; the jump follows a tick later
+  assert.equal(jumpedAt, CRIT_JUMP_AT + 1)
+  assert.equal(bot.controls.sprint, false)
+  assert.equal(bot.controls.forward, true)
+  tactics.detach()
+})
+
+test('crit: on the ground with a jump planned there is no strike; descending, there is, with sprint released', async (t) => {
+  fakeTimers(t)
+  const { bot, pvp, target, attacks } = fightFixture()
+  const tactics = createTactics(bot, ['crit'], { pvp })
+  tactics.attach(target)
+  await tickBot(t, bot, 1) // jump requested, the fake bot stays put
+  assert.equal(bot.controls.jump, true)
+  assert.equal(attacks(), 0)
+  bot.entity.onGround = false // rising: still no strike (2 ticks in, the lead is 1)
+  bot.entity.velocity.y = 0.3
+  await tickBot(t, bot, 1)
+  assert.equal(attacks(), 0)
+  bot.entity.velocity.y = -0.1
+  await tickBot(t, bot, 1)
+  assert.equal(attacks(), 1)
+  assert.ok(!bot.controls.sprint)
+  tactics.detach()
+})
+
+test('crit: a jump that is rising into the fall opens the gate early; with a shield 3 ticks, not 1', async (t) => {
+  fakeTimers(t)
+  const { bot, pvp, target, attacks } = fightFixture({ shield: true })
+  const tactics = createTactics(bot, ['crit'], { pvp })
+  tactics.attach(target)
+  await tickBot(t, bot, 1) // jump requested at tick 1
+  bot.entity.onGround = false
+  bot.entity.velocity.y = 0.3
+  await tickBot(t, bot, 3) // 3 sims in: 3 + 3 < 8
+  assert.equal(attacks(), 0)
+  await tickBot(t, bot, 1) // 4 sims in: 4 + 3 < 8 still; one more
+  assert.equal(attacks(), 0)
+  await tickBot(t, bot, 1) // 5 + 3 >= 8
+  assert.equal(attacks(), 1)
+  tactics.detach()
+})
+
+test('crit: a ceiling, or a target out of jumping range, means no jump and a ground strike after the fallback', async (t) => {
+  fakeTimers(t)
+  const cases = [
+    ['a ceiling', { distance: 3, blocks: floorBlocks([], { '0,12,0': 'stone' }) }],
+    ['a target 6 blocks away', { distance: 6 }]
+  ]
+  for (const [label, options] of cases) {
+    const { bot, pvp, target, attacks } = fightFixture(options)
+    pvp.attackRange = 7
+    const tactics = createTactics(bot, ['crit'], { pvp })
+    tactics.attach(target)
+    await tickBot(t, bot, 10)
+    assert.equal(attacks(), 0, `${label}: still waiting`)
+    await tickBot(t, bot, 2)
+    assert.equal(attacks(), 1, `${label}: struck on the ground`)
+    assert.ok(!bot.controls.jump, label)
+    tactics.detach()
+  }
+})
+
+test('crit: a jump that lands without a strike allows the ground strike, and no new jump', async (t) => {
+  fakeTimers(t)
+  const { bot, pvp, target, attacks } = fightFixture()
+  const tactics = createTactics(bot, ['crit'], { pvp })
+  tactics.attach(target)
+  await tickBot(t, bot, 1) // jump requested
+  assert.equal(attacks(), 0)
+  await tickBot(t, bot, 1) // still on the ground after the jump tick: it never left
+  assert.equal(attacks(), 1)
+  assert.ok(!bot.controls.jump)
+  tactics.detach()
+})
+
+test('baseline: without crit nothing jumps', async (t) => {
+  fakeTimers(t)
+  const { bot, pvp, target } = fightFixture()
+  const tactics = createTactics(bot, [], { pvp })
+  tactics.attach(target)
+  await tickBot(t, bot, 20)
+  assert.ok(!bot.controls.jump)
+  tactics.detach()
 })
