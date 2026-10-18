@@ -58,8 +58,12 @@ class EpisodeLog:
         if kind == "travel":
             return f"{tag}  {self._c(_DIM, 'travel ' + self._travel_summary(d))}"
         if kind == "look":
-            where = f"toward {d['direction']}" if d["seen"] else f"nothing in sight, trying {d['direction']}"
-            return f"{tag}  {self._c(_DIM, 'look for ' + str(d['target']) + ': ' + where)}"
+            if d["direction"] is None:
+                where = "every direction is dead, giving up"
+            else:
+                where = f"toward {d['direction']}" if d["seen"] else f"nothing in sight, trying {d['direction']}"
+            dead = f" (dead: {', '.join(d['dead'])})" if d.get("dead") else ""
+            return f"{tag}  {self._c(_DIM, 'look for ' + str(d['target']) + ': ' + where + dead)}"
         if kind == "quarantined":
             return f"{tag}  {self._c(_YELLOW, 'quarantined')}: {d['reason']}; replanning, not evidence"
         if kind == "step":
