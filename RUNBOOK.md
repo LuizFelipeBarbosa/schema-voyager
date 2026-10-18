@@ -85,6 +85,16 @@ Caveats to say out loud:
 | Panel shows an older episode | Pick "Follow the newest episode" in its menu; it switches when the next trace starts. |
 | Viewer empty | Cmd+Shift+R in the Live tab. |
 
+### Stopping the bot and the life
+
+`screen -S sv2-<inst>-<x> -X quit` stops neither the node bot nor the Python life; both outlive
+their screen. Stop each by its pid, never by name or pattern (`pkill`, `killall`):
+
+- the bot: the pid in `run/bot-<inst>.pid`, `kill <pid>` (`scripts/v2-down.sh` does this, then stops the server);
+- the life: the pid in `run/lock-<inst>` (a JSON line), `kill -INT <pid>` so it saves its state and releases the lock
+  (`scripts/v2-demo.sh stop` does this from its own pid file, with SIGTERM, then kill, as fallbacks).
+  `v2-down.sh` does not stop the life; `v2-demo.sh stop --all` does both.
+
 ## Recording a backup video
 
 Open the Live tab full screen, start a screen recording (Cmd+Shift+5), then run

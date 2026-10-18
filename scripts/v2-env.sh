@@ -129,6 +129,21 @@ sv2_level_name() {
   fi
 }
 
+# Reads the integer out of the reply to the `seed` command ("Seed: [2024]", possibly negative)
+# on stdin; fails when there is none.
+sv2_parse_seed() {
+  local seed; seed=$(sed -n 's/^.*\[\(-\{0,1\}[0-9][0-9]*\)\].*$/\1/p' | head -n 1)
+  [ -n "$seed" ] || return 1
+  echo "$seed"
+}
+
+# Prints the seed a snapshot directory recorded in its sv2-seed file; fails when it has none.
+sv2_snapshot_seed() {
+  local seed; seed=$(head -n 1 "$1/sv2-seed" 2>/dev/null) || return 1
+  [[ "$seed" =~ ^-?[0-9]+$ ]] || return 1
+  echo "$seed"
+}
+
 # Usage: sv2_rcon "command"   (prints the reply)
 sv2_rcon() {
   "$SV2_PYTHON" -I -c '
