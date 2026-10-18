@@ -9,15 +9,17 @@ offline stand-in for tests and dry runs.
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import json
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from . import normalize
-from .models import Action, Rule
+from .models import Action, GoalKind, GoalSpec, Rule, Unsupported
 
 DEFAULT_MODEL = "claude-sonnet-5-5"
 DEFAULT_EFFORT = "medium"
@@ -171,6 +173,38 @@ ITEMS_SCHEMA = {
     "additionalProperties": False,
 }
 FAKE_EXPANSION_SIZE = 3
+
+# v3.1e: parsing what the user typed.
+SUPPORTED_GOAL_KINDS: frozenset[GoalKind] = frozenset({"obtain"})  # M3 adds kill and guard, M4 build
+MAX_GOAL_COUNT = 256
+
+PARSE_GOAL_SYSTEM = """You turn a request typed to a Minecraft Java Edition 1.21.1 bot into one goal.
+- kind "obtain": get items. item is a vanilla item id without the "minecraft:" prefix, or "#planks" / "#log" for any kind of wood. count is how many MORE to get, whatever the inventory holds: "get me 20 torches" while holding 8 means count 20.
+- kind "build": build something. kind "kill": kill mobs (target is the mob id, count how many). kind "guard": guard a player (target is the player name).
+- kind "unsupported": anything else. reply is one short, friendly sentence saying what you can do. Never use "#" in a reply.
+Set unused fields to "" or 1."""
+
+PARSE_GOAL_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "kind": {"type": "string", "enum": ["obtain", "build", "kill", "guard", "unsupported"]},
+        "item": {"type": "string"},  # obtain: a vanilla item id, or "#planks" / "#log" for any wood; else ""
+        "count": {"type": "integer"},  # obtain: how many more (D5); kill: how many; else 1
+        "target": {"type": "string"},  # kill: mob id; guard: player name; else ""
+        "reply": {"type": "string"},  # unsupported: a short, friendly reply saying what it can do; else ""
+    },
+    "required": ["kind", "item", "count", "target", "reply"],
+    "additionalProperties": False,
+}
+
+_TRY_FETCH = 'I can fetch items: try "get me 10 torches".'
+_DEFAULT_UNSUPPORTED_REPLY = 'I can only fetch items for now: try "get me 10 torches".'
+_UNSUPPORTED_KIND_REPLIES = {
+    "build": f"I can't build yet. {_TRY_FETCH}",
+    "kill": f"I can't hunt yet. {_TRY_FETCH}",
+    "guard": f"I can't guard anyone yet. {_TRY_FETCH}",
+}
+_MAX_REPLY_CHARS = 240
 
 
 class LLMError(RuntimeError):
@@ -390,6 +424,22 @@ class LLM:
             for raw in payload["actions"]
         ]
         return payload["summary"], actions
+
+    # -- goals (v3.1e) -----------------------------------------------------
+
+    def parse_goal(self, text: str, inventory: dict[str, int], known_items: frozenset[str], *,
+                   goal_id: str) -> GoalSpec | Unsupported:
+        """Turn typed text into an obtain goal, or say why the bot can't do it. `known_items` is
+        what an obtain item may be (besides the groups); LLMError from the call propagates."""
+        if self.mode == "fake":
+            self._meter_fake("parse_goal", text)
+            kind, item, count = _fake_parse_goal(text, known_items)
+            reply = ""
+        else:
+            user = f"Request: {text}\nInventory: {json.dumps(inventory, sort_keys=True)}"
+            payload = self._json_call("parse_goal", PARSE_GOAL_SYSTEM, user, PARSE_GOAL_SCHEMA)
+            kind, item, count, reply = payload["kind"], payload["item"], payload["count"], payload["reply"]
+        return _checked_goal(goal_id, text, kind, item, count, reply, known_items)
 
     # -- transport --------------------------------------------------------
 
@@ -631,3 +681,57 @@ def _load_cache(path: Path) -> dict[str, dict[str, Any]]:
         return {}
     records = (json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip())
     return {record["key"]: record for record in records}
+
+
+@functools.cache
+def _items_file() -> dict[str, Any]:
+    return json.loads((DATA_DIR / "items_1_21_1.json").read_text(encoding="utf-8"))
+
+
+def vanilla_items() -> frozenset[str]:
+    """Every vanilla 1.21.1 item id."""
+    return frozenset(_items_file()["items"])
+
+
+def vanilla_foods() -> dict[str, int]:
+    """Food item -> food points."""
+    return dict(_items_file()["foods"])
+
+
+def _is_group(name: str) -> bool:
+    return name.startswith("#") and normalize.members(name) != [name]
+
+
+def _fake_parse_goal(text: str, known_items: frozenset[str]) -> tuple[str, str, int]:
+    """Offline stand-in for the model: (kind, item, count), by the rule in v3.1e."""
+    text = text.lower()
+    words = text.split()
+    if words and words[0] in ("build", "kill", "guard"):
+        return words[0], "", 1
+    match = re.search(r"(\d+)?\s*([a-z_]+)\s*$", text)
+    if match is None:
+        return "obtain", "", 1
+    count, word = int(match.group(1) or 1), match.group(2)
+    candidates = [word, word[:-1], word[:-2], "#" + word, "#" + word[:-1]]
+    item = next((name for name in candidates if name in known_items or _is_group(name)), word)
+    return "obtain", item, count
+
+
+def _checked_goal(goal_id: str, text: str, kind: str, item: str, count: int, reply: str,
+                  known_items: frozenset[str]) -> GoalSpec | Unsupported:
+    """The checks every mode shares, in the order of v3.1e; replies lose "#" and are cut."""
+    def unsupported(message: str) -> Unsupported:
+        return Unsupported(message.replace("#", "")[:_MAX_REPLY_CHARS])
+
+    if kind == "unsupported":
+        return unsupported(reply or _DEFAULT_UNSUPPORTED_REPLY)
+    if kind not in SUPPORTED_GOAL_KINDS:
+        return unsupported(_UNSUPPORTED_KIND_REPLIES[kind])
+
+    item = item.strip().removeprefix("minecraft:").strip()
+    if item not in known_items and not _is_group(item):
+        return unsupported(f"I don't know an item called {item.replace('#', '')}.")
+    if count > MAX_GOAL_COUNT:
+        return unsupported(f"That's more than I can carry. Ask for {MAX_GOAL_COUNT} or fewer.")
+    return GoalSpec(id=goal_id, kind="obtain", source="user", text=text,
+                    item=normalize.family(item), count=max(1, count))
