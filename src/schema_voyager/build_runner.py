@@ -9,6 +9,7 @@ Place, clear and goto go through `Episode.act` but are never rule evidence (D1):
 from __future__ import annotations
 
 import math
+from collections import Counter
 from dataclasses import dataclass, field
 from typing import Callable
 
@@ -228,6 +229,8 @@ class _BuildRun:
         mixed species. Gathering everything else first leaves the bulk of the planks held, and some species has 6."""
         if "#door" in needs:
             self.pursue_needs({item: count for item, count in needs.items() if item != "#door"})
+            if not self.episode.counts.get("#door"):
+                self.ensure_door_planks()
         self.pursue_needs(needs)
         held = self.episode.counts
         short = [_label(item, count) for item, count in needs.items() if held.get(item, 0) < count]
@@ -236,6 +239,30 @@ class _BuildRun:
         if not self.episode.can_act:
             return self.out_of_budget()
         return "couldn't get " + ", ".join(short)
+
+    def ensure_door_planks(self) -> None:
+        """Hold 6 planks of one species, which the planner can't see (it counts #planks across species). Craft them
+        from the species with the most planks plus 4 per log; if none reaches 6, gather 2 more logs and look again
+        (twice at most). A direct step, not evidence for a rule; a failed craft leaves the door to fail."""
+        for round_number in range(3):
+            planks: Counter[str] = Counter()
+            logs: Counter[str] = Counter()
+            for raw, count in self.episode.inventory.items():
+                if normalize.family(raw) == "#planks":
+                    planks[normalize.species(raw)] += count
+                elif normalize.family(raw) == "#log":
+                    logs[normalize.species(raw)] += count
+            if any(count >= normalize.DOOR_PLANKS for count in planks.values()):
+                return
+            potential = {kind: planks[kind] + 4 * logs[kind] for kind in planks.keys() | logs.keys()}
+            if potential:
+                best = min(potential, key=lambda kind: (-potential[kind], kind))
+                if potential[best] >= normalize.DOOR_PLANKS:
+                    times = math.ceil((normalize.DOOR_PLANKS - planks[best]) / 4)
+                    self.episode.act(Action("craft", f"{best}_planks", times=times))
+                    return
+            if round_number < 2:
+                self.pursue_needs({"#log": self.episode.counts.get("#log", 0) + 2})
 
     def pursue_needs(self, needs: dict[str, int]) -> None:
         pursue(
