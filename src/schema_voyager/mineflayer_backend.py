@@ -19,7 +19,7 @@ from .arena import Arena
 from .blueprint import Box
 from .inventory import SCAFFOLD_BLOCKS
 from .layouts import Layout
-from .models import Action, Observation, Outcome, Site, Status, Task
+from .models import Action, ChestResult, Observation, Outcome, Site, Status, Task
 
 # Longer than an interrupted action's worst case (the bot's own 120 s timeout, up to
 # 10 s for the handler to settle, then up to 30 s of fighting), so a slow action comes
@@ -60,6 +60,7 @@ class MineflayerBackend:
         self._latest_inventory: dict[str, int] | None = None
         self._keep_out: tuple[tuple[int, int, int], tuple[int, int, int]] | None = None
         self._protected: list[Box] = []
+        self._stations: dict[str, tuple[int, int, int]] = {}
 
     def reset(self, task: Task, layout: Layout) -> Observation:
         self.arena.prepare_world()
@@ -78,6 +79,8 @@ class MineflayerBackend:
             return self._build_step(action)
         if action.kind == "goto":
             return self._goto(action)
+        if action.kind == "withdraw":
+            return self._withdraw(action)
         if self.natural:
             return self._act_natural(action)
         if action.kind == "kill":  # v3.3: only the natural bot fights
@@ -129,6 +132,16 @@ class MineflayerBackend:
         boxes = [{"origin": list(origin), "size": list(size)} for origin, size in self._protected]
         return payload | {"protect": boxes}
 
+    def set_stations(self, stations: dict[str, tuple[int, int, int]]) -> None:
+        """The home crafting_table and furnace (v3.5), sent with every craft and smelt they apply to."""
+        self._stations = dict(stations)
+
+    def _with_station(self, payload: dict[str, Any], kind: str) -> dict[str, Any]:
+        """The payload with the protected boxes and the home station of that kind, when there are any."""
+        payload = self._with_protect(payload)
+        station = self._stations.get(kind)
+        return payload | {"station": list(station)} if station else payload
+
     def scan(self, origin: tuple[int, int, int], size: tuple[int, int, int]) -> dict[tuple[int, int, int], str | None]:
         body = self._post("/scan", {"origin": list(origin), "size": list(size)})
         ox, oy, oz = origin
@@ -162,6 +175,46 @@ class MineflayerBackend:
             inventory=inventory,
             blocks_walked=travel.get("distance", 0.0),
             detail=_detail(body, "arrived", "inventory_before_step", "detail") | {"target": {"x": x, "y": y, "z": z}},
+            travel=travel,
+            events=body.get("events") or [],
+        )
+
+    def deposit(self, pos: tuple[int, int, int], items: dict[str, int]) -> ChestResult:
+        """Put items in the chest at pos (v3.5). Action errors come back in the result; only a lost bot raises."""
+        body = self._post("/deposit", self._with_protect({"pos": list(pos), "items": items}))
+        if "inventory" in body:
+            self._latest_inventory = body["inventory"]
+        if not body["ok"]:
+            rest = {key: value for key, value in body.items() if key not in ("ok", "error")}
+            return ChestResult(moved={}, contents={}, error=body.get("error"), detail=rest)
+        return ChestResult(
+            moved=body.get("deposited") or {},
+            contents=body.get("chest") or {},
+            detail=_detail(body, "chest_full", "chest_free_slots", "free_slots", "travel"),
+        )
+
+    def _withdraw(self, action: Action) -> Outcome:
+        """Take `times` of the target out of the chest at pos, the same in both modes."""
+        if action.pos is None:
+            raise ValueError("a withdraw action needs a pos")
+        x, y, z = action.pos
+        body = self._post("/withdraw", self._with_protect({"pos": [x, y, z], "items": {action.target: action.times}}))
+        detail = _detail(body, "withdrawn", "chest", "inventory_full", "detail") | {"target": {"x": x, "y": y, "z": z}}
+        error = body.get("error")
+        withdrawn = body.get("withdrawn") or {}
+        taken = withdrawn.get(action.target, 0)
+        if body["ok"]:
+            detail.setdefault("withdrawn", withdrawn)
+            if taken < action.times:
+                error = "not_found"
+        travel = body.get("travel") or {}
+        return Outcome(
+            ok=body["ok"] and taken >= action.times,
+            error=error,
+            inventory_delta={item: count for item, count in withdrawn.items() if count > 0},
+            inventory=self._inventory(body),
+            blocks_walked=travel.get("distance", 0.0),
+            detail=detail,
             travel=travel,
             events=body.get("events") or [],
         )
@@ -326,7 +379,7 @@ class MineflayerBackend:
 
         bodies: list[dict[str, Any]] = []
         for item, times in parts:
-            body = self._post("/craft", {"item": item, "times": times})
+            body = self._post("/craft", self._with_station({"item": item, "times": times}, "crafting_table"))
             bodies.append(body)
             self._inventory(body)
             if not body["ok"]:
@@ -342,6 +395,10 @@ class MineflayerBackend:
             values = [body[key] for body in bodies if body.get(key) is not None]
             if values:
                 detail[key] = values[-1] if key != "table_retrieved" else all(values)
+        for key in ("used_home_station", "station_gone", "station_unreachable"):
+            values = [body[key] for body in bodies if body.get(key) is not None]
+            if values:
+                detail[key] = any(values)
         if failed and (interruption := _interruption(failed)):
             detail.pop("detail", None)
             detail.update(interruption)
@@ -391,9 +448,9 @@ class MineflayerBackend:
             }
         except ValueError:
             return Outcome(ok=False, error="missing_ingredients", inventory=inventory)
-        body = self._post("/smelt", request, timeout=SMELT_TIMEOUT_S + SMELT_TIMEOUT_PER_ITEM_S * action.times)
+        body = self._post("/smelt", self._with_station(request, "furnace"), timeout=SMELT_TIMEOUT_S + SMELT_TIMEOUT_PER_ITEM_S * action.times)
         detail = _detail(
-            body, "position", "missing", "used_furnace", "furnace_retrieved", "fuel", "fuel_used", "smelted", "item", "inventory_before_step", "detail"
+            body, "position", "missing", "used_furnace", "furnace_retrieved", "used_home_station", "station_gone", "station_unreachable", "fuel", "fuel_used", "smelted", "item", "inventory_before_step", "detail"
         )
         if body.get("tools_broken"):
             detail["tools_broken"] = body["tools_broken"]

@@ -13,7 +13,7 @@ from .adapter import DIRECTIONS, LookResult
 from .blueprint import AIR_BLOCKS, REPLACEABLE, Box
 from .inventory import slots_used, stack_size
 from .layouts import ARENA_RADIUS, GROUND_Y, Layout
-from .models import Action, Observation, Outcome, Site, Status, Task
+from .models import Action, ChestResult, Observation, Outcome, Site, Status, Task
 
 # Vanilla 1.21 rules for the items in the benchmark. Only the simulator reads
 # these; the planner and agents must learn them through actions.
@@ -262,7 +262,7 @@ STEP_DAMAGE_CHANCE = 0.005
 # Threats, food and entities (off peaceful, except the animals).
 THREAT_CHANCE = {"peaceful": 0.0, "easy": 0.06, "normal": 0.10, "hard": 0.15}
 FIGHT_DAMAGE = {"easy": (1, 3), "normal": (2, 5), "hard": (3, 7)}  # total damage of a fight
-THREATENED_ACTIONS = ("mine", "craft", "smelt", "explore", "place", "clear", "goto", "kill")
+THREATENED_ACTIONS = ("mine", "craft", "smelt", "explore", "place", "clear", "goto", "kill", "withdraw")
 THREAT_MOBS = ("zombie", "skeleton", "spider", "creeper")
 ANIMALS = ("cow", "sheep", "pig", "chicken")
 ANIMAL_ESCAPE_CHANCE = 0.05
@@ -289,6 +289,8 @@ LIQUIDS = frozenset({"water", "lava"})
 TERRAIN_BLOCKS = frozenset({"grass_block", "dirt", "stone", "deepslate"})
 UNLISTED_NEARBY = frozenset({"air", "cave_air", "grass_block", "dirt", "bedrock", "barrier", "short_grass", "tall_grass"})
 GOTO_RANGE = 3
+CHEST_RANGE = 2
+CHEST_SLOTS = 27
 SURVEY_WINDOW = 12  # a survey looks this far above and below the bot's feet
 SURVEY_MAX_STEP = 3
 SURVEY_MAX_SITES = 10
@@ -363,6 +365,9 @@ class NaturalWorld:
         self._keep_out: tuple[Pos, Pos] | None = None
         self._protected: list[Box] = []
         self._skipped: set[Pos] = set()
+        self._chests: dict[Pos, Counter[str]] = {}
+        self._stations: dict[str, Pos] = {}
+        self.unreachable_cells: set[Pos] = set()  # test hook: a chest call or home-station walk to one is unreachable
         self._events: list[dict[str, Any]] = []
         self._seq = 0
         self._spiral_leg = 0
@@ -493,7 +498,7 @@ class NaturalWorld:
         return {"ok": True, "error": None, "output": output, "inventory_delta": {}, "events": []}
 
     def act(self, action: Action) -> Outcome:
-        if action.kind in ("place", "clear", "goto") and action.pos is None:
+        if action.kind in ("place", "clear", "goto", "withdraw") and action.pos is None:
             raise ValueError(f"{action.kind} needs a pos")
         self.health = min(20.0, self.health + 1)
         if self.difficulty != "peaceful":
@@ -519,6 +524,8 @@ class NaturalWorld:
             return self._goto(action)
         if action.kind == "kill":
             return self._kill(action)
+        if action.kind == "withdraw":
+            return self._withdraw(action)
         return self._fail("unknown_action")
 
     def scan(self, origin: Pos, size: Pos) -> dict[Pos, str | None]:
@@ -537,6 +544,82 @@ class NaturalWorld:
     def set_protected(self, boxes: list[Box]) -> None:
         """What the bot built (v3.4b): never mined, dug through, looked at or surveyed over."""
         self._protected = list(boxes)
+
+    def set_stations(self, stations: dict[str, Pos]) -> None:
+        """The home crafting_table and furnace (v3.5): craft and smelt walk to one when none is held."""
+        self._stations = dict(stations)
+
+    def deposit(self, pos: Pos, items: dict[str, int]) -> ChestResult:
+        """Put items in the chest at pos, in dict order, a stack at a time, until it has no room."""
+        walk = self._walk_to_chest(pos)
+        if isinstance(walk, str):
+            return ChestResult(moved={}, contents={}, error=walk, detail={"travel": _empty_travel()})
+        travel, _events = walk
+        chest = self._chests.setdefault(pos, Counter())
+        moved: Counter[str] = Counter()
+        chest_full = False
+        for item, count in items.items():
+            held = min(count, self.inventory[item])
+            fits = min(held, self._room(chest, CHEST_SLOTS, item))
+            if fits > 0:
+                chest[item] += fits
+                self.inventory[item] -= fits
+                moved[item] = fits
+            if fits < held:
+                chest_full = True
+                break
+        return ChestResult(
+            moved=dict(moved),
+            contents={item: count for item, count in sorted(chest.items()) if count > 0},
+            detail={
+                "chest_full": chest_full, "chest_free_slots": CHEST_SLOTS - slots_used(chest),
+                "free_slots": _free_slots(self.inventory), "travel": travel,
+            },
+        )
+
+    def _withdraw(self, action: Action) -> Outcome:
+        """Take up to `times` of the target out of the chest at pos, as much as the inventory has room for."""
+        item, pos = action.target or "", action.pos
+        walk = self._walk_to_chest(pos)
+        if isinstance(walk, str):
+            return self._fail(walk, target=_xyz(pos))
+        travel, events = walk
+        chest = self._chests.setdefault(pos, Counter())
+        available = min(action.times, chest[item])
+        taken = min(available, self._room(self.inventory, INVENTORY_SLOTS, item))
+        before_step = self._inventory()
+        if taken > 0:
+            chest[item] -= taken
+            self.inventory[item] += taken
+        self._roll_damage("step", STEP_DAMAGE_CHANCE, events)
+        return Outcome(
+            ok=taken >= action.times,
+            error=None if taken >= action.times else "not_found",
+            inventory_delta={item: taken} if taken else {},
+            inventory=self._inventory(),
+            blocks_walked=round(self.blocks_walked, 1),
+            detail={
+                "withdrawn": {item: taken} if taken else {},
+                "chest": {name: count for name, count in sorted(chest.items()) if count > 0},
+                "inventory_full": taken < available,
+                "target": _xyz(pos),
+                "inventory_before_step": before_step,
+            },
+            travel=travel,
+            events=events,
+        )
+
+    def _walk_to_chest(self, pos: Pos) -> tuple[dict[str, Any], list[dict[str, Any]]] | str:
+        """Walk next to the chest (like goto, range 2): the travel and events, or the error code."""
+        walk = None if pos in self.unreachable_cells else self._walk_near(pos, CHEST_RANGE)
+        if walk is None:
+            return "unreachable"
+        return walk if self.block_at(pos) == "chest" else "not_found"
+
+    @staticmethod
+    def _room(contents: Counter[str], slots: int, item: str) -> int:
+        """How many more of the item fit in a container of that many slots holding contents."""
+        return -contents[item] % stack_size(item) + max(0, slots - slots_used(contents)) * stack_size(item)
 
     def survey(self, size: tuple[int, int], radius: int = 24) -> list[Site]:
         return self._rank_sites(size, radius, protected=self._protected)
@@ -728,6 +811,8 @@ class NaturalWorld:
         before_step = self._inventory()
         for cell in cells:
             self._changes[cell] = block
+        if block == "chest":
+            self._chests[pos] = Counter()
         if block == "torch" and support != below:
             self._changes[pos] = "wall_torch"
         self.inventory[block] -= 1
@@ -754,6 +839,7 @@ class NaturalWorld:
             self._roll_damage("travel", TRAVEL_DAMAGE_CHANCE, events)
         before_step = self._inventory()
         self._changes[pos] = "air"
+        self._chests.pop(pos, None)
         if found.endswith("_door"):
             for other in ((pos[0], pos[1] + 1, pos[2]), (pos[0], pos[1] - 1, pos[2])):
                 if self.block_at(other) == found:
@@ -767,23 +853,31 @@ class NaturalWorld:
     def _goto(self, action: Action) -> Outcome:
         pos = action.pos
         detail = {"target": _xyz(pos), "inventory_before_step": self._inventory()}
+        walk = self._walk_near(pos, GOTO_RANGE)
+        if walk is None:
+            return self._fail("unreachable", arrived=False, **detail)
+        travel, events = walk
+        return self._built(delta={}, travel=travel, events=events, arrived=True, **detail)
+
+    def _walk_near(self, pos: Pos, reach: int) -> tuple[dict[str, Any], list[dict[str, Any]]] | None:
+        """Walk to the standable cell nearest to the bot within reach of pos: the travel and events, or None
+        when there is none."""
         stands = [
             cell
-            for dx, dy, dz in itertools.product(range(-GOTO_RANGE, GOTO_RANGE + 1), repeat=3)
-            if math.sqrt(dx * dx + dy * dy + dz * dz) <= GOTO_RANGE and self._standable(cell := (pos[0] + dx, pos[1] + dy, pos[2] + dz))
+            for dx, dy, dz in itertools.product(range(-reach, reach + 1), repeat=3)
+            if math.sqrt(dx * dx + dy * dy + dz * dz) <= reach and self._standable(cell := (pos[0] + dx, pos[1] + dy, pos[2] + dz))
         ]
         if not stands:
-            return self._fail("unreachable", arrived=False, **detail)
+            return None
 
         stand = min(stands, key=lambda cell: (self._distance_to(cell), cell))
         distance = math.hypot(stand[0] - self._cell[0], stand[2] - self._cell[2])
         self.blocks_walked += distance
         self._cell = stand
-        travel = {**_empty_travel(), "distance": round(distance, 1)}
         events: list[dict[str, Any]] = []
         if distance:
             self._roll_damage("travel", TRAVEL_DAMAGE_CHANCE, events)
-        return self._built(delta={}, travel=travel, events=events, arrived=True, **detail)
+        return {**_empty_travel(), "distance": round(distance, 1)}, events
 
     def _standable(self, cell: Pos) -> bool:
         """Whether the bot can stand with its feet in the cell: room for its body, a floor under it."""
@@ -836,8 +930,13 @@ class NaturalWorld:
         payment, missing = self._pay(ingredients, action.times, ingredient_species)
         if missing:
             return self._fail("missing_ingredients", missing=missing)
+        station_detail: dict[str, Any] = {"used_table": needs_table, **({"table_retrieved": True} if needs_table else {})}
+        walk = None
         if needs_table and self.inventory["crafting_table"] < 1:
-            return self._fail("missing_crafting_table")
+            walk = self._walk_to_home_station("crafting_table", "missing_crafting_table")
+            if isinstance(walk, Outcome):
+                return walk
+            station_detail = {"used_table": True, "table_retrieved": None, "used_home_station": True}
 
         gains: Counter[str] = Counter()
         if key == "#planks":  # planks take the species of the log consumed
@@ -846,7 +945,7 @@ class NaturalWorld:
             item = max(gains, key=lambda planks: gains[planks])
         else:
             gains[item] = self._output_count(key, output) * action.times
-        return self._finish_recipe(payment, gains, item, {"used_table": needs_table, **({"table_retrieved": True} if needs_table else {})})
+        return self._finish_recipe(payment, gains, item, station_detail, walk)
 
     def _smelt(self, action: Action) -> Outcome:
         try:
@@ -867,14 +966,32 @@ class NaturalWorld:
         missing = {name: need - self.inventory[name] for name, need in payment.items() if self.inventory[name] < need}
         if missing:
             return self._fail("missing_ingredients", missing=missing)
+        station_detail: dict[str, Any] = {"used_furnace": True, "furnace_retrieved": True}
+        walk = None
         if self.inventory["furnace"] < 1:
-            return self._fail("missing_furnace")
+            walk = self._walk_to_home_station("furnace", "missing_furnace")
+            if isinstance(walk, Outcome):
+                return walk
+            station_detail = {"used_furnace": True, "furnace_retrieved": None, "used_home_station": True}
         return self._finish_recipe(
             payment,
             Counter({item: action.times}),
             item,
-            {"used_furnace": True, "furnace_retrieved": True, "fuel": fuel, "fuel_used": fuel_used},
+            {**station_detail, "fuel": fuel, "fuel_used": fuel_used},
+            walk,
         )
+
+    def _walk_to_home_station(self, block: str, missing_error: str) -> Outcome | tuple[dict[str, Any], list[dict[str, Any]]]:
+        """Walk next to the home station of that kind: the travel and events, or the failed Outcome."""
+        station = self._stations.get(block)
+        if station is None:
+            return self._fail(missing_error)
+        if self.block_at(station) != block:
+            return self._fail(missing_error, station_gone=True)
+        walk = None if station in self.unreachable_cells else self._walk_near(station, CHEST_RANGE)
+        if walk is None:
+            return self._fail("unreachable", station_unreachable=True)
+        return walk
 
     def _explore(self, action: Action) -> Outcome:
         if action.direction == "up":
@@ -1057,8 +1174,15 @@ class NaturalWorld:
                 missing[ingredient] = need
         return payment, missing
 
-    def _finish_recipe(self, payment: Counter[str], gains: Counter[str], item: str, detail: dict[str, Any]) -> Outcome:
-        events: list[dict[str, Any]] = []
+    def _finish_recipe(
+        self,
+        payment: Counter[str],
+        gains: Counter[str],
+        item: str,
+        detail: dict[str, Any],
+        walk: tuple[dict[str, Any], list[dict[str, Any]]] | None = None,
+    ) -> Outcome:
+        travel, events = walk if walk else (_empty_travel(), [])
         before_step = self._inventory()
         delta: Counter[str] = Counter(gains)
         delta.subtract(payment)
@@ -1072,7 +1196,7 @@ class NaturalWorld:
             inventory=self._inventory(),
             blocks_walked=round(self.blocks_walked, 1),
             detail={**detail, "item": item, "inventory_before_step": before_step},
-            travel=_empty_travel(),
+            travel=travel,
             events=events,
         )
 
