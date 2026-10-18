@@ -1115,9 +1115,12 @@ the duel ends:
  "position": {...}, "events": [...]}
 ```
 
-- `winner`: the bot's username, the opponent's, or `null` (`timeout`, `stopped`, `no_opponent`).
-- `reason`: `killed` (the opponent died; `winner` is the bot), `died` (the bot died), `timeout`, `stopped`, or
-  `no_opponent` (the player is online but its entity wasn't in view for 10 s in a row).
+- `winner`: the bot's username, the opponent's, or `null` (`both_died`, `timeout`, `stopped`, `no_opponent`).
+- `reason`: `killed` (the opponent died; `winner` is the bot), `died` (the bot died), `both_died`, `timeout`,
+  `stopped`, or `no_opponent` (the player is online but its entity wasn't in view for 10 s in a row).
+  **Double KOs** are common between equal bots: the server takes a strike from a player who died the same tick.
+  So `killed` is only recorded 0.5 s after the opponent's death; if the bot dies within that time, the duel ends
+  `both_died`. A bot whose own death comes first records `died` at once, as below.
 - `duration`: seconds from the start, one decimal.
 - `swings`: strikes the bot made. `hits`: hurt events on the opponent during the duel. `crits`: critical-hit effects
   on the opponent.

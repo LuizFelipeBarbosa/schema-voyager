@@ -2138,8 +2138,10 @@ its pid in `run/bot2-<inst>.pid`, logs to `logs/bot2-<inst>.log`, and stops it b
 - **Each duel:** over RCON, heal both bots and give each the same kit: iron sword, shield in the off-hand, full iron
   armor, one golden apple. Teleport them 10 blocks apart on the floor, facing each other. The bots swap sides every
   duel, and the two sets swap bots every 2 duels, so 4 duels cover every pairing.
-- **The result:** a death decides a duel; neither dying by `timeout_s` is a draw. Both answers are cross-checked;
-  a duel whose answers disagree, or with a bot that didn't answer, is invalid and run again.
+- **The result:** a death decides a duel; both dying (a double KO) or neither dying by `timeout_s` is a draw. A bot
+  died when its `duel_end` says `died` or `both_died`, or when its event log shows a `death` during the duel (the
+  runner reads it 1.5 s after both answers). A duel whose answers disagree, or with a bot that didn't answer, is
+  invalid and run again. Each reset first waits until both bots are alive again.
 - **The table:** for each set, wins, losses, draws, the win rate (a draw counts half), its Wilson 95% interval,
   mean duration, swings, hits, crits and damage per duel, and the A set's wins split by bot and by side.
 - **The keep rule:** a tactic is kept when `best + tactic` against `best` reaches a win rate of 60% or more over at
