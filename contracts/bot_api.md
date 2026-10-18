@@ -638,6 +638,8 @@ action. A walk that falls short is not an error: `ok: true`,
     starts an eat on a `health` or `playerCollect` event, and one that came while a hold was open is dropped.
   - `onIdleTick()` (called by the guard tick while nothing holds the lock) runs `equipAll()` and `eat()`, at most
     once every 2 s.
+- The bot's pathing sprints only on peaceful: off peaceful sprinting drains food, and health only regenerates at food
+  18 or more.
 - **auto-eat** options: `startAt: 14`, raised to 17 while health is below 20 (health only regenerates at food 18 or
   more, so at 14 the bot would sit at food 15-17 and never heal), the plugin's default ban list,
   `equipOldItem: false`, and `offhand: false` (the default `true` would push the shield out of the off-hand).

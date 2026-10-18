@@ -1,7 +1,7 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
 const { Vec3 } = require('vec3')
-const { DiggingMovements, GoalBesideBlock } = require('../../lib/movements')
+const { DiggingMovements, GoalBesideBlock, sprintAllowed } = require('../../lib/movements')
 const { fakeWorldBot, registry } = require('./world_fixture')
 
 // Solid stone everywhere except the bot's own 1x2 space at y 10-11.
@@ -21,8 +21,18 @@ test('DiggingMovements: drop limit, scaffold from the request only, towers only 
   assert.equal(withDirt.allow1by1towers, true)
 })
 
-test('DiggingMovements never sprints (sprinting costs hunger)', () => {
-  assert.equal(new DiggingMovements(stoneWorld()).allowSprinting, false)
+test('DiggingMovements sprints on peaceful only (off peaceful sprinting costs hunger)', () => {
+  const peaceful = stoneWorld()
+  peaceful.game = { difficulty: 'peaceful' }
+  assert.equal(new DiggingMovements(peaceful).allowSprinting, true)
+
+  const easy = stoneWorld()
+  easy.game = { difficulty: 'easy' }
+  assert.equal(new DiggingMovements(easy).allowSprinting, false)
+})
+
+test('sprintAllowed is false when the bot has no game state yet', () => {
+  assert.equal(sprintAllowed({}), false)
 })
 
 test('DiggingMovements treats gravel, sand and powder as gravity blocks', () => {

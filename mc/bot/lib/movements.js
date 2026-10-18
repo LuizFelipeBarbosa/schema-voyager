@@ -58,6 +58,11 @@ function cheapestHarvestTool (bot) {
   }
 }
 
+// Off peaceful sprinting drains food; on peaceful food never drains, so it is free.
+function sprintAllowed (bot) {
+  return bot.game?.difficulty === 'peaceful'
+}
+
 // Movements for a request with dig_through. On top of the pathfinder's own
 // safety rules (dontCreateFlow, dontMineUnderFallingBlock, lava in
 // blocksToAvoid) it:
@@ -70,7 +75,7 @@ class DiggingMovements extends Movements {
   constructor (bot, { scaffoldNames = [], protectedBlock = null } = {}) {
     super(bot)
     this.canDig = true
-    this.allowSprinting = false // sprinting costs hunger; walking does not
+    this.allowSprinting = sprintAllowed(bot)
     this.dontCreateFlow = true
     this.dontMineUnderFallingBlock = true
     this.maxDropDown = MAX_DROP_DOWN
@@ -134,4 +139,4 @@ class GoalBesideBlock extends goals.Goal {
   }
 }
 
-module.exports = { DiggingMovements, GoalBesideBlock, cheapestHarvestTool }
+module.exports = { DiggingMovements, sprintAllowed, GoalBesideBlock, cheapestHarvestTool }
