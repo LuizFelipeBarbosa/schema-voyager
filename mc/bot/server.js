@@ -22,7 +22,7 @@ const { deposit, readChest, validateChest, validateDeposit, validateWithdraw, wi
 const { createUnreachableMemory, look } = require('./lib/targets')
 const { attachEventTracker, createEventLog } = require('./lib/events')
 const { attachChatCommands } = require('./lib/chat_commands')
-const { attachSurvival } = require('./lib/survival')
+const { attachSurvival, validateKeptFood } = require('./lib/survival')
 const { createFollow, validateFollow } = require('./lib/follow')
 const { DUEL_TIMEOUT_S, runDuel, validateDuel } = require('./lib/duel')
 const { MODES, createGuard } = require('./lib/guard')
@@ -461,6 +461,16 @@ app.post('/guard', (req, res) => {
 })
 
 // Follows a player, or stops following; doesn't take the action lock and never answers 409.
+// Keeps auto-eat from eating raw items a smelt needs; doesn't take the action lock.
+app.post('/keep_food', (req, res) => {
+  const body = req.body || {}
+  const respond = responder('/keep_food', body, res)
+  const problem = validateKeptFood(body.items)
+  if (problem) return respond(400, { ok: false, error: 'bad_request', detail: problem })
+  if (!survival) return respond(200, { ok: false, error: 'not_connected' })
+  respond(200, { ok: true, kept: survival.setKeptFood(body.items) })
+})
+
 app.post('/follow', (req, res) => {
   const body = req.body || {}
   const respond = responder('/follow', body, res)

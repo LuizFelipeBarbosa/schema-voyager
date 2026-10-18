@@ -1038,37 +1038,60 @@ class _Life:
             goal = self._start_queued_goal(spec, observation)
             if goal is None:
                 return False  # cancelled meanwhile: no goal index used, nothing recorded
-        budget = max(MIN_GOAL_BUDGET, BUDGET_PER_PLAN_STEP * goal.plan_length)
-        goal_clock_s = self.config.goal_wall_clock_s
-        if spec.source != "curriculum":
-            goal_clock_s = max(goal_clock_s, GOAL_SECONDS_PER_PLAN_STEP * goal.plan_length)
-        task = Task(
-            task_id=name, split="train", goal_item=goal.item, goal_count=goal.count,
-            start_inventory=dict(observation.inventory), world_rules=(), budget=budget,
-            description=f"Obtain {goal.count} {goal.item}",
-        )
-        log = EpisodeLog(
-            self.config.run_dir / "episodes" / f"D_life_{name}_{goal.item.replace('#', '')}.jsonl",
-            label=f"{name} {goal.item}", say=self.backend.say,
-        )
-        life_clock_limits_goal = self._remaining_s() <= goal_clock_s
-        episode = Episode(
-            episode_id=f"D/life/{name}-{goal.item}", system="D", task=task, layout_seed=0, world_id=self.world_id,
-            backend=self.backend, llm=self.llm, log=log, inventory=dict(observation.inventory), natural=True,
-            deadline=time.monotonic() + min(goal_clock_s, max(self._remaining_s(), 0.0)), home=self._home_stock(),
-        )
-        self._log_goal_start(log, spec, goal, task, index, observation, free_slots_before, tossed, stored)
+        kept_food = self._kept_food_for(spec)
+        if kept_food:
+            self.backend.keep_food(kept_food)  # before the first action; a lost bot goes the way any goal's call does
+        try:
+            budget = max(MIN_GOAL_BUDGET, BUDGET_PER_PLAN_STEP * goal.plan_length)
+            goal_clock_s = self.config.goal_wall_clock_s
+            if spec.source != "curriculum":
+                goal_clock_s = max(goal_clock_s, GOAL_SECONDS_PER_PLAN_STEP * goal.plan_length)
+            task = Task(
+                task_id=name, split="train", goal_item=goal.item, goal_count=goal.count,
+                start_inventory=dict(observation.inventory), world_rules=(), budget=budget,
+                description=f"Obtain {goal.count} {goal.item}",
+            )
+            log = EpisodeLog(
+                self.config.run_dir / "episodes" / f"D_life_{name}_{goal.item.replace('#', '')}.jsonl",
+                label=f"{name} {goal.item}", say=self.backend.say,
+            )
+            life_clock_limits_goal = self._remaining_s() <= goal_clock_s
+            episode = Episode(
+                episode_id=f"D/life/{name}-{goal.item}", system="D", task=task, layout_seed=0, world_id=self.world_id,
+                backend=self.backend, llm=self.llm, log=log, inventory=dict(observation.inventory), natural=True,
+                deadline=time.monotonic() + min(goal_clock_s, max(self._remaining_s(), 0.0)), home=self._home_stock(),
+            )
+            self._log_goal_start(log, spec, goal, task, index, observation, free_slots_before, tossed, stored)
 
-        # `goal` is left out for a curriculum goal (its default None): v2's tests stub run_schemavoyager without it.
-        goal_arg = {} if spec.source == "curriculum" else {"goal": spec}
-        result, interrupt = self._run_until_interrupted(
-            spec, episode,
-            lambda: run_schemavoyager(episode, self.store, self._before_step, excluded=self._excluded_rules(), **goal_arg),
-            life_clock_limits_goal,
-        )
-        self._end_goal(spec, goal, index, budget, started_at, episode, result, tossed, interrupt, stored=stored)
-        steps = [event for event in log.events if event["kind"] == "step"]
-        return not result.success and interrupt is None and bool(steps) and steps[-1]["error"] in MISSING_RESOURCE_ERRORS
+            # `goal` is left out for a curriculum goal (its default None): v2's tests stub run_schemavoyager without it.
+            goal_arg = {} if spec.source == "curriculum" else {"goal": spec}
+            result, interrupt = self._run_until_interrupted(
+                spec, episode,
+                lambda: run_schemavoyager(episode, self.store, self._before_step, excluded=self._excluded_rules(), **goal_arg),
+                life_clock_limits_goal,
+            )
+            self._end_goal(spec, goal, index, budget, started_at, episode, result, tossed, interrupt, stored=stored)
+            steps = [event for event in log.events if event["kind"] == "step"]
+            return not result.success and interrupt is None and bool(steps) and steps[-1]["error"] in MISSING_RESOURCE_ERRORS
+        finally:
+            if kept_food and not self._bot_gone:
+                try:
+                    self.backend.keep_food([])
+                except BackendError as error:
+                    print(f"life: could not clear keep_food: {error}")
+
+    def _kept_food_for(self, spec: GoalSpec) -> list[str]:
+        """v3.0i: the raw items auto-eat must leave alone for an obtain goal for a food: the ingredients of every
+        usable smelt rule that yields it. Empty for any other goal, or a backend without `keep_food`."""
+        if spec.item not in vanilla_foods() or not hasattr(self.backend, "keep_food"):
+            return []
+        ingredients = {
+            ingredient
+            for rule in self.store.usable_rules(self.world_id)
+            if rule.kind == "smelt" and spec.item in rule.yields()
+            for ingredient in rule.preconditions.get("consumes", {})
+        }
+        return sorted(ingredients)
 
     def _run_build_goal(
         self, spec: GoalSpec, index: int, started_at: float, observation: Observation, tossed: dict[str, int],

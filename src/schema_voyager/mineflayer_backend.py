@@ -315,6 +315,9 @@ class MineflayerBackend:
     def stop_follow(self) -> None:
         self._post("/follow/stop", {})
 
+    def keep_food(self, items: Sequence[str]) -> None:
+        self._post("/keep_food", {"items": list(items)})
+
     def probe(self, grid: list[list[str | None]]) -> dict[str, Any]:
         return self._post("/probe", {"grid": grid})
 

@@ -459,6 +459,9 @@ class NaturalWorld:
     def connected(self) -> bool:
         return True
 
+    def keep_food(self, items: Iterable[str]) -> None:
+        """v3.0i: the simulator's bot has no auto-eat."""
+
     def look(self, blocks: list[str], radius: int = 64, mobs: Iterable[str] = ()) -> LookResult:
         x, y, z = self._cell
         result: LookResult = {direction: {} for direction in DIRECTIONS}
