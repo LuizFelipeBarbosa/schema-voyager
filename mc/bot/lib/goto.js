@@ -51,4 +51,4 @@ async function goto (bot, { x, y, z, range = DEFAULT_RANGE }, { episode, signal 
   return { ok: arrived, error: arrived ? null : 'unreachable', arrived, travel: recording.finish() }
 }
 
-module.exports = { goto, validateGoto }
+module.exports = { goto, validateGoto, withWalkingMovements }

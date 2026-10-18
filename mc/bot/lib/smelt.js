@@ -2,10 +2,10 @@
 // if none is near, like the crafting table), wait for the output, take
 // everything back, and dig the furnace back up. See contracts/bot_api.md.
 
-const { forgetStanding, placeStation, reachStation, rememberStanding, retrieveStation } = require('./station')
+const { forgetStanding, placeHeldOrUseHome, reachStation, rememberStanding, retrieveStation } = require('./station')
 const { withTimeout } = require('./grid')
 const {
-  countDelta, findInventoryItem, inventoryCounts, resyncWindow, settleInventory, sleepTicks
+  countDelta, inventoryCounts, resyncWindow, settleInventory, sleepTicks
 } = require('./world')
 const { emptyTravel } = require('./travel')
 
@@ -53,19 +53,29 @@ function smeltShortfall (counts, { ingredient, fuel, times }) {
 // `session`: {tracker, episode, signal}. An abort throws `signal.reason`; a
 // furnace the bot placed (or must still dig up) is then remembered in the
 // episode instead of being dug up.
-async function smelt (bot, { ingredient, item, times = 1, fuel }, { tracker, episode = null, signal = null }) {
+async function smelt (bot, { ingredient, item, times = 1, fuel, station = null, protect = [] }, { tracker, episode = null, signal = null }) {
   tracker.log.setPhase('step')
   // Find the furnace first and empty it, so that an earlier aborted smelt's
   // leftovers count as held (and the step is quarantined), not as this step's gain.
   const reached = await reachStation(bot, 'furnace', { episode, signal })
-  if (reached && await drainFurnace(bot, reached.station, signal)) {
-    const { x, y, z } = reached.station.position
-    tracker.log.record('interference', { block: 'furnace', position: { x, y, z } })
-  }
+  if (reached) await drainAndRecord(bot, tracker, reached.station, signal)
   const furnaceWasRemembered = Boolean(reached?.remembered)
 
-  const before = inventoryCounts(bot)
-  const result = { ingredient, item, times, fuel, fuel_used: 0, smelted: 0, output_taken: 0, used_furnace: false, furnace_retrieved: null, tools_broken: [] }
+  let before = inventoryCounts(bot)
+  const result = {
+    ingredient,
+    item,
+    times,
+    fuel,
+    fuel_used: 0,
+    smelted: 0,
+    output_taken: 0,
+    used_furnace: false,
+    used_home_station: false,
+    furnace_retrieved: null,
+    tools_broken: [],
+    travel: emptyTravel()
+  }
   const finish = (error, extra = {}) => {
     const inventory = inventoryCounts(bot)
     const delta = countDelta(before, inventory)
@@ -77,7 +87,6 @@ async function smelt (bot, { ingredient, item, times = 1, fuel }, { tracker, epi
       ...extra,
       inventory_delta: delta,
       inventory,
-      travel: emptyTravel(),
       inventory_before_step: before
     }
   }
@@ -93,13 +102,18 @@ async function smelt (bot, { ingredient, item, times = 1, fuel }, { tracker, epi
   let furnace = reached?.station
   let placedPos = furnaceWasRemembered ? furnace.position : null // a furnace to dig up afterwards
   if (!furnace) {
-    if (!findInventoryItem(bot, 'furnace')) return finish('missing_furnace')
-    try {
-      furnace = await placeStation(bot, 'furnace', { signal })
-      placedPos = furnace.position
-    } catch (err) {
-      if (signal?.aborted) throw signal.reason
-      return finish('craft_failed', { detail: `could not place a furnace: ${err.message}` })
+    const acquired = await placeHeldOrUseHome(bot, 'furnace', { station, protect, episode, signal })
+    if (acquired.error) {
+      const { error, ...extra } = acquired
+      return finish(error, extra)
+    }
+    furnace = acquired.station
+    placedPos = acquired.placedPos
+    if (acquired.usedHome) {
+      result.used_home_station = true
+      result.travel = acquired.travel
+      await drainAndRecord(bot, tracker, furnace, signal)
+      before = inventoryCounts(bot) // what the home furnace held counts as held, as for a remembered one
     }
   }
   result.used_furnace = true
@@ -140,6 +154,13 @@ async function smelt (bot, { ingredient, item, times = 1, fuel }, { tracker, epi
   if (smeltError) return finish('craft_failed', { detail: smeltError })
   const verdict = smeltVerdict({ smelted: result.smelted, outputTaken: result.output_taken, times })
   return verdict.ok ? finish(null) : finish('craft_failed', { detail: verdict.detail })
+}
+
+// Drains the furnace; what it held is interference, not this step's gain.
+async function drainAndRecord (bot, tracker, furnaceBlock, signal) {
+  if (!await drainFurnace(bot, furnaceBlock, signal)) return
+  const { x, y, z } = furnaceBlock.position
+  tracker.log.record('interference', { block: 'furnace', position: { x, y, z } })
 }
 
 // Opens the furnace and takes everything in it back. True if there was anything.
