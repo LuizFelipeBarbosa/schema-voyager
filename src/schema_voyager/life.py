@@ -23,7 +23,7 @@ from .curriculum import Curriculum, Goal
 from .episode import EXPLORE_GOAL, Episode
 from .goals import GoalInterrupted, GoalQueue, goal_label
 from .inventory import junk_to_toss
-from .llm import LLM, LLMError, SpendCapReached, vanilla_items
+from .llm import LLM, LLMError, SpendCapReached, vanilla_foods, vanilla_items
 from .mineflayer_backend import BackendError
 from .models import Action, EpisodeResult, GoalSpec, Observation, Rule, Task, Unsupported
 from .planner import PlanningError, PlanStep, make_plan
@@ -44,6 +44,16 @@ AMBIENT_BLOCKS = frozenset({"air", "cave_air", "void_air", "water", "lava", "bed
 FINAL_GOAL_STATUSES = frozenset({"done", "failed", "cancelled", "unsupported"})
 GOAL_RANK = {"system": 0, "user": 1, "curriculum": 2}  # a queued goal of a lower rank preempts the running one
 CHAT_COMMANDS_HELP = "Commands: !goal <what>, !cancel [id], !stop, !status"
+DEATHS_TO_STOP = 3  # this many deaths within DEATH_WINDOW_S stop the life (v3.2d)
+DEATH_WINDOW_S = 600.0
+USER_DEATHS_TO_FAIL = 2
+HUNGER_BELOW = 8  # a food level under this, with nothing edible held, queues a hunger goal (v3.2e)
+HUNGER_FOOD_COUNT = 4
+HUNGRY_LOG_EVERY_S = 300.0
+# Foods the bot's auto-eat never eats (v3.2g), so they don't count as edible.
+AUTO_EAT_BANNED = frozenset(
+    {"pufferfish", "spider_eye", "poisonous_potato", "rotten_flesh", "chorus_fruit", "chicken", "suspicious_stew", "golden_apple"}
+)
 
 
 @dataclass
@@ -249,6 +259,7 @@ class _Life:
             self.repaired: set[str] = set(state.get("repaired", []))
             self.blocked: dict[str, int] = dict(state.get("blocked", {}))
             self.retests: dict[str, str] = dict(state.get("retests", {}))  # retest id -> "match" | "mismatch"
+            self.deaths: list[float] = list(state.get("deaths", []))  # time.time() of each death
             self.earlier_tokens: int = state["tokens"]
             llm.carried_usd = state["spend_usd"]
         else:
@@ -260,6 +271,7 @@ class _Life:
             self.repaired = set()
             self.blocked = {}
             self.retests = {}
+            self.deaths = []
             for path in (self.log_path, self.events_path, self.queue.path):
                 path.write_text("", encoding="utf-8")
         if resume:
@@ -273,6 +285,9 @@ class _Life:
         self.bot_seq: int = backend.status().last_seq if self._polls_bot else 0  # events from before the life are skipped
         self._running: GoalSpec | None = None  # only while _run_goal runs it
         self._inventory_seen: dict[str, int] = {}  # the last inventory the life observed, for parsing goals
+        self._food: int | None = None  # the food level of the latest poll
+        self._died_in_goal = False  # the bot died since the running goal started
+        self._last_hungry_log: float | None = None  # time.monotonic()
         self._cancelled_in_chat: set[str] = set()  # their ending doesn't say "Cancelled" a second time
         if hooks.bind_store is not None:
             hooks.bind_store(self.store)
@@ -287,7 +302,10 @@ class _Life:
                 return "spend_cap"
             if self._remaining_s() <= 0:
                 return "wall_clock"
+            if sum(time.time() - died <= DEATH_WINDOW_S for died in self.deaths) >= DEATHS_TO_STOP:
+                return "deaths"
             self._poll_bot()
+            self._queue_hunger_goal()
             self._parse_pending()
             spec = self.queue.next()
             if spec is None and self.config.mode == "play":
@@ -494,7 +512,7 @@ class _Life:
     # -- the bot's chat and the goal queue --------------------------------
 
     def _poll_bot(self) -> None:
-        """Handle the chat commands the bot recorded since the last poll (v3.1g)."""
+        """Handle the chat commands (v3.1g) and deaths (v3.2d) the bot recorded since the last poll."""
         if not self._polls_bot:
             return
         since = self.bot_seq
@@ -507,9 +525,63 @@ class _Life:
             print(f"[bot] could not poll events: {error}")
             return
         self.bot_seq = status.last_seq
+        self._food = status.food
         for event in sorted(status.events, key=lambda e: e["seq"]):
-            if event["seq"] > since and event["type"] == "chat_command":
+            if event["seq"] <= since:
+                continue
+            if event["type"] == "chat_command":
                 self._handle_chat_command(event)
+            elif event["type"] == "death":
+                self._handle_death(event)
+
+    def _handle_death(self, event: dict[str, Any]) -> None:
+        """Count the death, log what it cost, and remember that the running goal, if any, died (v3.2d)."""
+        self.deaths.append(time.time())
+        self._died_in_goal |= self._running is not None
+        before = self._inventory_seen
+        try:
+            after = self.backend.observe().inventory
+        except BackendError as error:
+            print(f"[bot] could not observe after a death: {error}")
+            after = before
+        self._inventory_seen = after
+        lost = {item: count - after.get(item, 0) for item, count in before.items() if count > after.get(item, 0)}
+        self._save_state()  # an idle death must survive a --resume
+        self._log_event(
+            "death", goal_id=self._running.id if self._running else None, position=event.get("position"), inventory_lost=lost
+        )
+
+    def _queue_hunger_goal(self) -> None:
+        """When food is low, nothing edible is held and no system goal is open, queue a goal for the best food
+        the usable rules can reach, or log that the bot is hungry (v3.2e)."""
+        if self._food is None or self._food >= HUNGER_BELOW:
+            return
+        if any(g.source == "system" and g.status in ("queued", "running") for g in self.queue.goals()):
+            return
+        foods = self._edible_foods()
+        inventory = self._inventory_seen  # an idle pass never observes: that takes the bot's lock
+        if any(inventory.get(food, 0) > 0 for food in foods):
+            return
+        excluded = self._excluded_rules()
+        rules = [rule for rule in self.store.usable_rules(self.world_id) if rule.id not in excluded]
+        held = normalize.counts(inventory)
+        for food in sorted(foods, key=lambda food: (-foods[food], food)):
+            try:
+                make_plan(food, held.get(food, 0) + HUNGER_FOOD_COUNT, held, rules, self.store.skill_for)
+            except PlanningError:
+                continue
+            text = f"hunger: {HUNGER_FOOD_COUNT} {food}"
+            goal_id = self.queue.submit(text, "system")
+            self.queue.accept(GoalSpec(id=goal_id, kind="obtain", source="system", text=text, item=food, count=HUNGER_FOOD_COUNT))
+            return
+        if self._last_hungry_log is None or time.monotonic() - self._last_hungry_log >= HUNGRY_LOG_EVERY_S:
+            self._last_hungry_log = time.monotonic()
+            self._log_event("hungry", food=self._food)
+
+    @staticmethod
+    def _edible_foods() -> dict[str, int]:
+        """Food item -> food points, without the foods auto-eat never eats."""
+        return {food: points for food, points in vanilla_foods().items() if food not in AUTO_EAT_BANNED}
 
     def _handle_chat_command(self, event: dict[str, Any]) -> None:
         command = str(event.get("command", "")).lstrip("!").lower()
@@ -590,6 +662,7 @@ class _Life:
         """Runs before each plan step: sees new chat commands and goals, ends the running goal if it was
         cancelled or outranked, then calls the caller's hook (which runs last, so a hidden change is never
         switched on for a step that doesn't run)."""
+        self._inventory_seen = dict(episode.inventory)  # what a death in this poll may have cost
         self._poll_bot()
         self._parse_pending()
         running = self._running
@@ -597,7 +670,8 @@ class _Life:
             entry = self.queue.get(running.id)  # curriculum goals are not in the queue
             if entry is not None and entry.status == "cancelled":
                 raise GoalInterrupted(running.id, "cancelled")
-            # S07 (death-handling): raise GoalInterrupted(running.id, "death") here if the bot died since the goal started.
+            if self._died_in_goal:
+                raise GoalInterrupted(running.id, "death")
             waiting = self.queue.next()
             if waiting is not None and GOAL_RANK[waiting.source] < GOAL_RANK[running.source]:
                 raise GoalInterrupted(running.id, "preempted")
@@ -653,6 +727,7 @@ class _Life:
 
         interrupt: str | None = None
         self._running = spec
+        self._died_in_goal = False
         try:
             # `goal` is left out for a curriculum goal (its default None): v2's tests stub run_schemavoyager without it.
             result = run_schemavoyager(
@@ -665,7 +740,11 @@ class _Life:
             log.event("certified", rules=self.store.certify())
             interrupt = stop.reason
         finally:
+            self._inventory_seen = dict(episode.inventory)
+            self._poll_bot()  # a death in the goal's last step has no later _before_step to see it
             self._running = None
+        if self._died_in_goal and interrupt != "cancelled":
+            interrupt = "death"
         # Cut short by the life's own clock (not the goal's deadline or budget): no attempt to count.
         if interrupt is None and not result.success and life_clock_limits_goal and episode.out_of_time and episode.budget_left > 0:
             interrupt = "wall_clock"
@@ -708,6 +787,8 @@ class _Life:
             elif interrupt == "preempted":
                 chat = self._pausing_line(label)
                 self.queue.mark(spec.id, "queued")
+            elif interrupt == "death":
+                chat = self._end_after_death(spec, label)
             elif interrupt is not None:  # wall_clock: --resume runs it again
                 self.queue.mark(spec.id, "queued")
             elif result.success:
@@ -717,7 +798,6 @@ class _Life:
                 reason = self._failure_reason(episode)
                 self.queue.mark(spec.id, "failed", reason=reason)
                 chat = f"Couldn't get {label}: {reason}"
-            # S07 (death-handling): a "death" interrupt goes back to queued with its deaths count (v3.2d).
         if interrupt is None:
             for rule, error in episode.blocked_rules.items():
                 if error == "missing_ingredients":
@@ -737,6 +817,19 @@ class _Life:
         self._save(record)
         if self.hooks.after_goal is not None:
             self.hooks.after_goal(record)
+
+    def _end_after_death(self, spec: GoalSpec, label: str) -> str:
+        """A user goal goes back to queued, or fails at its second death; a system goal is cancelled (v3.2d).
+        Returns the chat line."""
+        if spec.source == "system":
+            self.queue.mark(spec.id, "cancelled", reason="the bot died")
+            return ""
+        deaths = self.queue.get(spec.id).deaths + 1
+        if deaths >= USER_DEATHS_TO_FAIL:
+            self.queue.mark(spec.id, "failed", deaths=deaths, reason="died twice trying")
+            return f"Couldn't get {label}: died twice trying"
+        self.queue.mark(spec.id, "queued", deaths=deaths)
+        return ""
 
     def _log_unreported(self, log: EpisodeLog) -> None:
         for repair in self._repairs_unreported:
@@ -787,7 +880,7 @@ class _Life:
         (a new one after a toss) and what was tossed. The goal's item and what the user asked for are never junk."""
         if observation.free_slots is None or observation.free_slots >= MIN_FREE_SLOTS:
             return observation, {}
-        wanted = {goal_item} | self._obtain_items("queued") | self._obtain_items("done", source="user")
+        wanted = {goal_item} | self._obtain_items("queued") | self._obtain_items("done", source="user") | set(self._edible_foods())
         junk = junk_to_toss(
             observation.inventory, self.store.usable_rules(self.world_id), wanted, observation.free_slots,
             min_free=MIN_FREE_SLOTS,
@@ -846,7 +939,7 @@ class _Life:
         record = {
             "index": index, "goal": goal.item, "count": goal.count, "reason": goal.reason,
             "plan_length": goal.plan_length, "budget": budget,
-            "outcome": "success" if result.success else "interrupted" if interrupted else "failed", "actions": result.actions,
+            "outcome": "interrupted" if interrupted else "success" if result.success else "failed", "actions": result.actions,
             "certified_now": sorted(certified - self._certified_marked), "certified_total": len(certified),
             "llm_calls": len(calls), "tokens": sum(call.tokens for call in calls),
             "spend_usd": round(self.llm.spent_usd, 4), "started": started_at, "ended": time.time(),
@@ -860,9 +953,12 @@ class _Life:
         with self.log_path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(record) + "\n")
         self.store.save(self.store_path)
+        self._save_state()
+
+    def _save_state(self) -> None:
         state = {
             "world_id": self.world_id, "goal_index": self.goals_done, "explores_done": self.explores_done, "curriculum": self.curriculum.to_dict(),
-            "asked": sorted(self.asked), "repaired": sorted(self.repaired), "blocked": self.blocked, "retests": self.retests, "observed_blocks": sorted(self.observed_blocks),
+            "asked": sorted(self.asked), "repaired": sorted(self.repaired), "blocked": self.blocked, "retests": self.retests, "deaths": self.deaths, "observed_blocks": sorted(self.observed_blocks),
             "tokens": self.earlier_tokens + self.llm.total_tokens, "spend_usd": self.llm.spent_usd,
         }
         self.state_path.write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
