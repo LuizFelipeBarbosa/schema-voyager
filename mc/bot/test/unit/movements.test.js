@@ -43,16 +43,13 @@ test('DiggingMovements treats gravel, sand and powder as gravity blocks', () => 
   assert.ok(!movements.gravityBlocks.has(registry.blocksByName.stone.id))
 })
 
-test('no neighbour of a cell breaks the block straight below it', () => {
+test('a neighbour of a cell digs the block straight below it and lands in its place', () => {
   const movements = new DiggingMovements(stoneWorld(), { scaffoldNames: ['dirt'] })
   const node = { x: 0, y: 10, z: 0, remainingBlocks: 5 }
-  const neighbors = movements.getNeighbors(node)
-  assert.ok(neighbors.length > 0, 'digging sideways and up is possible')
   const below = new Vec3(0, 9, 0)
-  for (const move of neighbors) {
-    assert.ok(!move.toBreak.some((pos) => pos.equals(below)), `move to ${move.x},${move.y},${move.z} would break the floor`)
-  }
-  assert.ok(!neighbors.some((move) => move.x === 0 && move.y === 9 && move.z === 0), 'no move down through the floor')
+  const down = movements.getNeighbors(node).filter((move) => move.x === 0 && move.y === 9 && move.z === 0)
+  assert.equal(down.length, 1, 'one move down through the floor')
+  assert.ok(down[0].toBreak.some((pos) => pos.equals(below)))
 })
 
 test('a plain drop is still allowed', () => {

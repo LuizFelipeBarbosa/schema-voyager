@@ -68,7 +68,8 @@ function sprintAllowed (bot) {
 // safety rules (dontCreateFlow, dontMineUnderFallingBlock, lava in
 // blocksToAvoid) it:
 //  - never breaks a block with lava or water on any of its six sides;
-//  - never digs the block straight below the bot (no downward dig moves);
+//  - may dig straight down when the block below touches no liquid and the landing
+//    is at most MAX_DROP_DOWN below and safe (the stock downward move);
 //  - never breaks `protectedBlock` (the step's own target) on the way;
 //  - drops at most MAX_DROP_DOWN blocks;
 //  - never breaks, nor places scaffold in, a block inside a `protect` box;
@@ -108,14 +109,6 @@ class DiggingMovements extends Movements {
 
   safeToBreak (block) {
     return !this.touchesLiquid(block.position) && super.safeToBreak(block)
-  }
-
-  // The stock move breaks the block below the bot to step down into it;
-  // only the plain drop (nothing to break) is kept.
-  getMoveDown (node, neighbors) {
-    const before = neighbors.length
-    super.getMoveDown(node, neighbors)
-    if (neighbors.length > before && neighbors[before].toBreak.length > 0) neighbors.length = before
   }
 }
 
