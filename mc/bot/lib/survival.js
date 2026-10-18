@@ -7,6 +7,8 @@ const POLL_MS = 10
 const STARTS_AT_FULL_HEALTH = 14
 // Health only regenerates at food 18 or more, so while hurt the bot eats earlier.
 const STARTS_AT_HURT = 17
+// At food 0 and this health or less, the kept raw food is eaten after all.
+const STARVING_HEALTH = 8
 
 // Hungry with nothing to eat is the normal case until M3's hunting: not worth a log line every 2 s.
 const NO_FOOD_MESSAGE = 'No food found.'
@@ -23,6 +25,16 @@ function attachSurvival (bot, eventLog, {
   autoEat = require('mineflayer-auto-eat').plugin,
   now = () => Date.now()
 } = {}) {
+  let defaultBanned = []
+  let keptItems = []
+
+  // Auto-eat bans the kept items, unless the bot is starving: then it eats them too.
+  function applyBannedFood () {
+    if (!bot.autoEat) return
+    const starving = bot.food === 0 && bot.health <= STARVING_HEALTH
+    bot.autoEat.options.bannedFood = starving ? [...defaultBanned] : [...defaultBanned, ...keptItems]
+  }
+
   // loadPlugin may defer the call until mineflayer's inject_allowed, so each
   // wrapper adjusts its plugin right after the real one has run.
   bot.loadPlugin((b, options) => {
@@ -34,12 +46,15 @@ function attachSurvival (bot, eventLog, {
   })
   bot.loadPlugin((b, options) => {
     autoEat(b, options)
+    defaultBanned = [...b.autoEat.options.bannedFood] // the plugin's own array is never edited
     Object.assign(b.autoEat.options, { startAt: STARTS_AT_FULL_HEALTH, equipOldItem: false, offhand: false })
+    applyBannedFood()
   })
 
   bot.on('health', () => {
     if (!bot.autoEat) return
     bot.autoEat.options.startAt = bot.health < 20 ? STARTS_AT_HURT : STARTS_AT_FULL_HEALTH
+    applyBannedFood()
   })
   bot.on('autoeat_finished', (item) => {
     eventLog.record('ate', { item: item && item.name, food: bot.food })
@@ -66,6 +81,7 @@ function attachSurvival (bot, eventLog, {
 
   async function eat () {
     if (holds > 0) return // a hold opened after the equipAll that queued this eat
+    applyBannedFood()
     try {
       if (bot.autoEat) await bot.autoEat.eat()
     } catch (error) {
@@ -85,6 +101,13 @@ function attachSurvival (bot, eventLog, {
   }
 
   return {
+    // Auto-eat leaves these raw items alone (for a smelt); [] lets it eat anything again.
+    setKeptFood (items) {
+      keptItems = [...items]
+      applyBannedFood()
+      return [...keptItems]
+    },
+
     async hold () {
       if (++holds === 1) settled = settle()
       await settled
@@ -107,4 +130,14 @@ function attachSurvival (bot, eventLog, {
   }
 }
 
-module.exports = { attachSurvival }
+const MAX_KEPT_FOOD = 32
+
+// The problem with a /keep_food body's `items`, or null.
+function validateKeptFood (items) {
+  if (!Array.isArray(items) || items.length > MAX_KEPT_FOOD || !items.every((item) => typeof item === 'string' && item)) {
+    return `"items" must be an array of at most ${MAX_KEPT_FOOD} item names`
+  }
+  return null
+}
+
+module.exports = { attachSurvival, validateKeptFood }
