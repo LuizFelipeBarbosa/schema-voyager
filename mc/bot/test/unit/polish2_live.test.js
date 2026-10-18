@@ -1,6 +1,6 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
-const { enclosureBoxes, outsideRect, edibleHeld, pickHungerGoal, killBeforeSmelt, findFoodKillRule } = require('../v3_polish2_live')
+const { shaftCommands, nicheNextToBot, strayGains, enclosureBoxes, outsideRect, edibleHeld, pickHungerGoal, killBeforeSmelt, findFoodKillRule } = require('../v3_polish2_live')
 
 // Every cell a list of boxes covers, as "x,y,z" keys (duplicates kept).
 function cellsOf (boxes) {
@@ -82,4 +82,32 @@ test('findFoodKillRule: a kill rule for a food animal only', () => {
   assert.equal(findFoodKillRule({ rules: [rule('kill', 'zombie'), rule('mine', 'cow'), rule('kill', 'pig')] }).id, 'kill-pig')
   assert.equal(findFoodKillRule({ rules: [rule('kill', 'zombie')] }), undefined)
   assert.equal(findFoodKillRule(null), undefined)
+})
+
+test('shaftCommands: a 5x5x5 stone block around a 1x1 air column three high', () => {
+  const { build, seal } = shaftCommands([7, 40, -3])
+  assert.deepEqual(build, ['fill 5 39 -5 9 43 -1 minecraft:stone', 'fill 7 40 -3 7 42 -3 minecraft:air'])
+  assert.equal(seal, build[0])
+})
+
+test('nicheNextToBot: a whole cell one block from the feet or the head cell', () => {
+  const feet = [7, 40, -3]
+  assert.equal(nicheNextToBot([8, 40, -3], feet), true) // beside the feet
+  assert.equal(nicheNextToBot([7, 41, -4], feet), true) // beside the head
+  assert.equal(nicheNextToBot([7, 39, -3], feet), true) // under the feet
+  assert.equal(nicheNextToBot([7, 40, -3], feet), false) // the bot's own cell
+  assert.equal(nicheNextToBot([9, 40, -3], feet), false) // too far
+  assert.equal(nicheNextToBot([8, 41, -3], feet), true) // beside the head
+  assert.equal(nicheNextToBot([8, 42, -3], feet), false)
+  assert.equal(nicheNextToBot([8, 40.5, -3], feet), false)
+  assert.equal(nicheNextToBot([8, 40], feet), false)
+  assert.equal(nicheNextToBot(undefined, feet), false)
+})
+
+test('strayGains: only the output, the furnace and the dug blocks are explained', () => {
+  assert.deepEqual(strayGains({ raw_iron: -1, iron_ingot: 1, coal: -1 }, 'iron_ingot'), [])
+  assert.deepEqual(strayGains({ iron_ingot: 1, cobblestone: 1 }, 'iron_ingot'), ['cobblestone'])
+  assert.deepEqual(strayGains({ iron_ingot: 1, cobblestone: 1 }, 'iron_ingot', { stone: 1 }), [])
+  assert.deepEqual(strayGains({ iron_ingot: 1, diamond: 1, furnace: 1 }, 'iron_ingot'), ['diamond'])
+  assert.deepEqual(strayGains(undefined, 'iron_ingot'), [])
 })

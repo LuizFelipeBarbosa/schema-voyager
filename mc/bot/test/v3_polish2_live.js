@@ -1,10 +1,11 @@
 // Live v3 test of session S15's fixes: the hunger goal (a learned kill rule, then
-// a smelt) and an unreachable home chest (one stall, then never again). The
+// a smelt), an unreachable home chest (one stall, then never again), a held
+// furnace used underground (a niche) and a stuck bot (a life that stops). The
 // checks read the run's store.json, goals.jsonl, life_events.jsonl,
 // life_state.json and episode files, the bot's GET /status and POST /observe,
 // and the chest's real contents over RCON. Contracts: docs/v3-interfaces.md
 // v3.0i "Reaching home" and "Mobs seen", v3.2e (the hunger goal), v3.5c
-// (furnishing, storing).
+// (furnishing, storing), "A held station underground", "A stuck bot".
 //
 // Needs, already running (it starts nothing), for each check:
 //   hunger      the Minecraft server on easy, VoyagerBot, and a Python life in
@@ -14,6 +15,10 @@
 //               BOT_OWNERS=Otopo,Tester, and a Python life in play mode with a
 //               live LLM writing runs/<run> (--mode play), resumed from a run
 //               whose home is set (exactly v3_home_live.js's setup).
+//   niche       the Minecraft server and VoyagerBot, and NO Python life running (the
+//               check calls the bot's API itself; it fails if $SV2_HOME/run/lock-a exists).
+//   stuck       a Python life in learn mode with a live LLM writing runs/<run>
+//               (--mode learn). The check holds the bot's action lock itself, about 200 s.
 // Meant for instance a: SV2_MC_PORT 25566, SV2_RCON_PORT 25576, SV2_BOT_PORT 3200.
 // Refuses the live demo's ports (25565, 25575, 3000). Environment variables are
 // loaded from $SV2_HOME/.env without overriding the ones already set.
@@ -32,12 +37,23 @@
 // attempts no deposit (no `stored`, no `home_unreachable`, the chest unchanged)
 // and is faster to its first plan step than the second.
 //
-// At the end (always) it removes the glass enclosure, kills the cows it summoned,
-// clears the effects it gave, removes the forceload and disconnects Tester.
+// niche = at y 40 (stone on seed 2024) builds a solid 5x5x5 stone block with a 1x1 shaft
+// 3 high, puts the bot in it with exactly a furnace, 1 raw_iron and 1 coal, and POSTs
+// /smelt (no station, no protect): ok, used_furnace, a `niche` cell next to the bot's feet or
+// head, raw_iron -1 and iron_ingot +1 and no other gain (the travel's dug blocks excepted),
+// furnace_retrieved. Afterwards it seals the niche with stone and teleports the bot back.
+// stuck = gives the bot 20 raw_iron, 3 coal and a furnace and POSTs a 20-ingot /smelt
+// straight to the bot (it holds the action lock about 200 s, so the life's own actions get
+// 409 busy): exactly one `bot_stuck` event with losses 3 in life_events.jsonl within 330 s,
+// and the life process (live.json's pid) gone within 60 s after it. Nothing to restore.
 //
-// Usage: node mc/bot/test/v3_polish2_live.js [--checks hunger,unreachable] [--run v3-polish2-live]
+// At the end (always) it removes the glass enclosure, kills the cows it summoned,
+// clears the effects it gave, removes the forceload and disconnects Tester; seals the niche
+// stone block and returns the bot to where it was.
+//
+// Usage: node mc/bot/test/v3_polish2_live.js [--checks hunger,unreachable,niche,stuck] [--run v3-polish2-live]
 //          [--south 4] [--wait-kill-s 600] [--wait-goal-s 480] [--summon-now]
-//          (--summon-now: skip the wait for a naturally learned kill rule; exit 0 = every selected check passed; --south: blocks south of the home's door the bot stands;
+//          (the default checks are hunger,unreachable; niche and stuck need their own setup. --summon-now: skip the wait for a naturally learned kill rule; exit 0 = every selected check passed; --south: blocks south of the home's door the bot stands;
 //           --help prints this usage and exits without connecting)
 // Env: SV2_MC_PORT (25566), SV2_RCON_PORT, SV2_BOT_PORT, RCON_PASSWORD,
 //      SV2_HOME (repo root), BOT_USERNAME (VoyagerBot).
@@ -95,6 +111,15 @@ const JUNK = {
 }
 // Food stacks fill the rest of the inventory: the bot never stores or tosses food.
 const FILLER_FOOD = ['bread', 'cooked_beef', 'cooked_porkchop', 'cooked_mutton', 'cooked_chicken', 'baked_potato', 'apple', 'carrot', 'cooked_cod', 'cooked_salmon', 'pumpkin_pie', 'golden_carrot']
+
+const NICHE_Y = 40 // deep in stone on seed 2024
+const NICHE_RADIUS = 2 // the stone block is 5x5x5 around the shaft's foot
+const NICHE_BELOW = 1
+const NICHE_ABOVE = 3 // the block's top; the shaft is 3 high (feet, head, one above)
+const SMELT_HTTP_TIMEOUT_MS = 300 * 1000
+const STUCK_EVENT_TIMEOUT_MS = 330 * 1000
+const LIFE_STOP_TIMEOUT_MS = 60 * 1000
+const STUCK_EVENT_KINDS = ['bot_down', 'bot_back', 'bot_stuck']
 
 const short = (value) => JSON.stringify(value)
 
@@ -158,7 +183,31 @@ function findFoodKillRule (store) {
   return ((store && store.rules) || []).find((rule) => rule.action && rule.action.type === 'kill' && FOOD_ANIMALS.includes(rule.action.mob))
 }
 
-const USAGE = `Usage: node mc/bot/test/v3_polish2_live.js [--checks hunger,unreachable] [--run v3-polish2-live]
+// The RCON commands that build the niche check's shaft at the cell [x, y, z]: a solid stone block, then a 1x1 air column
+// from y to y + 2. `seal` refills the whole block with stone.
+function shaftCommands ([x, y, z]) {
+  const r = NICHE_RADIUS
+  const seal = `fill ${x - r} ${y - NICHE_BELOW} ${z - r} ${x + r} ${y + NICHE_ABOVE} ${z + r} minecraft:stone`
+  return { build: [seal, `fill ${x} ${y} ${z} ${x} ${y + 2} ${z} minecraft:air`], seal }
+}
+
+// Whether `niche` is a cell next to the bot's feet cell [x, y, z] or the one above it (its head): one block away on one axis.
+function nicheNextToBot (niche, feet) {
+  if (!Array.isArray(niche) || niche.length !== 3 || !niche.every(Number.isInteger)) return false
+  const [x, y, z] = feet
+  if (sameCell(niche, [x, y, z]) || sameCell(niche, [x, y + 1, z])) return false // the bot's own cells
+  return [[x, y, z], [x, y + 1, z]].some((cell) => cell.reduce((sum, n, i) => sum + Math.abs(n - niche[i]), 0) === 1)
+}
+
+// The items an answer's inventory change gained that the smelt does not explain: all but `output`, the fuel and the
+// furnace it took back, and the blocks the travel dug (`dug`: {block: count}) or what they drop (stone drops cobblestone).
+function strayGains (delta, output, dug = {}) {
+  const explained = new Set([output, 'furnace', ...Object.keys(dug)])
+  if (dug.stone) explained.add('cobblestone')
+  return Object.keys(delta || {}).filter((name) => delta[name] > 0 && !explained.has(name))
+}
+
+const USAGE = `Usage: node mc/bot/test/v3_polish2_live.js [--checks hunger,unreachable,niche,stuck] [--run v3-polish2-live]
          [--south 4] [--wait-kill-s 600] [--wait-goal-s 480] [--summon-now]
 Live check of S15's fixes (see the header of this file for what it needs). Exit 0 = every selected check passed.`
 
@@ -229,7 +278,7 @@ async function main () {
   const mcPort = Number(process.env.SV2_MC_PORT || 25566)
   const voyagerName = process.env.BOT_USERNAME || 'VoyagerBot'
   const { checks, run, south, waitKillS, waitGoalS, summonNow } = parseArgs(argv)
-  for (const name of checks) if (!['hunger', 'unreachable'].includes(name)) throw new Error(`unknown check ${name}`)
+  for (const name of checks) if (!['hunger', 'unreachable', 'niche', 'stuck'].includes(name)) throw new Error(`unknown check ${name}`)
   if (mcPort === DEMO_MC_PORT) throw new Error(`SV2_MC_PORT=${mcPort} is the live demo's port; refusing`)
   const runDir = path.join(sv2Home, 'runs', run)
   const rcon = new RconClient() // refuses the live demo's RCON port
@@ -552,12 +601,96 @@ async function main () {
     return `${second.goal.id} ended with one home_unreachable (moved) at ${short(chestCell)}; ${third.goal.id} tried no deposit; time to first plan step ${second.toFirstPlan} s (second) vs ${third.toFirstPlan} s (third)`
   }
 
+  // --- niche ---
+
+  let nicheSite = null // {cell, bot position to return to}, set once the shaft exists
+
+  async function nicheCheck () {
+    assert.ok(!fs.existsSync(path.join(sv2Home, 'run', 'lock-a')), `${path.join(sv2Home, 'run', 'lock-a')} exists: stop the life first`)
+    const back = (await botStatusNow()).position
+    const cell = [Math.floor(back.x), NICHE_Y, Math.floor(back.z)]
+    const shaft = shaftCommands(cell)
+    const [x, y, z] = cell
+    console.log(`  bot at ${short(back)}; shaft at ${short(cell)}`)
+
+    nicheSite = { shaft, back }
+    for (const command of shaft.build) console.log(`  ${command}: ${await rcon.exec(command)}`)
+    await rcon.exec(`clear ${voyagerName} minecraft:furnace`)
+    for (const stack of ['furnace 1', 'raw_iron 1', 'coal 1']) await rcon.exec(`give ${voyagerName} minecraft:${stack}`)
+    await rcon.exec(`tp ${voyagerName} ${x + 0.5} ${y} ${z + 0.5}`)
+    await sleep(2000)
+
+    const { status, body } = await post('/smelt', { ingredient: 'raw_iron', item: 'iron_ingot', times: 1, fuel: 'coal' })
+    const keys = ['ok', 'error', 'used_furnace', 'furnace_retrieved', 'niche', 'inventory_delta', 'inventory_before_step', 'inventory', 'travel', 'fuel_used', 'position']
+    console.log(`  /smelt ${status}: ${short(Object.fromEntries(keys.filter((key) => key in body).map((key) => [key, body[key]])))}`)
+    console.log(`  travel.dug ${short((body.travel || {}).dug)}`)
+    assert.equal(body.ok, true, `/smelt not ok: ${body.error}`)
+    assert.equal(body.used_furnace, true, 'used_furnace is not true')
+    const feet = [x, y, z] // the bot's cell: the shaft's foot
+    assert.ok(nicheNextToBot(body.niche, feet), `niche ${short(body.niche)} is not a 3-integer cell next to the feet ${short(feet)} or head`)
+    const delta = body.inventory_delta
+    assert.ok(delta, 'no inventory_delta in the answer')
+    assert.equal(delta.raw_iron, -1, `raw_iron change ${delta.raw_iron}`)
+    assert.equal(delta.iron_ingot, 1, `iron_ingot change ${delta.iron_ingot}`)
+    const stray = strayGains(delta, 'iron_ingot', (body.travel || {}).dug)
+    assert.deepEqual(stray, [], `unexplained gains ${short(stray)} in ${short(delta)}`)
+    assert.equal(body.furnace_retrieved, true, 'furnace_retrieved is not true')
+    return `smelted raw_iron to iron_ingot in a niche at ${short(body.niche)} beside ${short(feet)}; furnace back; delta ${short(delta)}`
+  }
+
+  // --- stuck ---
+
+  async function stuckCheck () {
+    const readLiveJson = () => readJson(path.join(runDir, 'live.json'))
+    const lifeAlive = () => {
+      const live = readLiveJson()
+      if (!live) return false
+      try { process.kill(live.pid, 0); return true } catch (err) { return err.code === 'EPERM' }
+    }
+    assert.ok(lifeAlive(), `no running life: ${path.join(runDir, 'live.json')} is missing or names a dead pid`)
+    const eventsFrom = readLifeEvents().length
+    const readEvents = () => readLifeEvents().slice(eventsFrom)
+
+    for (const stack of ['raw_iron 20', 'coal 3', 'furnace 1']) await rcon.exec(`give ${voyagerName} minecraft:${stack}`)
+    const startedAt = Date.now()
+    const smelting = fetch(botUrl('/smelt'), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ ingredient: 'raw_iron', item: 'iron_ingot', times: 20, fuel: 'coal' }),
+      signal: AbortSignal.timeout(SMELT_HTTP_TIMEOUT_MS)
+    }).then((res) => res.json()).catch((err) => ({ ok: false, error: err.message }))
+    console.log('  /smelt of 20 raw_iron started; the life\'s own actions get 409 busy meanwhile')
+
+    const seen = new Set()
+    const printNewEvents = () => readEvents().forEach((event) => {
+      if (!STUCK_EVENT_KINDS.includes(event.kind) || seen.has(event)) return
+      seen.add(event)
+      console.log(`  ${event.kind} goal ${event.goal_id} error "${String(event.error || '').slice(0, 80)}" t ${event.t} (+${Math.round((Date.now() - startedAt) / 1000)} s)`)
+    })
+    const stuckEvent = await waitFor(() => { printNewEvents(); return readEvents().find((event) => event.kind === 'bot_stuck') }, STUCK_EVENT_TIMEOUT_MS, 2000)
+    assert.ok(stuckEvent, `no bot_stuck event within ${STUCK_EVENT_TIMEOUT_MS / 1000} s`)
+    const stuckAt = Date.now()
+    const stuckEvents = readEvents().filter((event) => event.kind === 'bot_stuck')
+    assert.equal(stuckEvents.length, 1, `${stuckEvents.length} bot_stuck events`)
+    assert.equal(stuckEvent.losses, 3, `bot_stuck losses ${stuckEvent.losses}`)
+    const stopped = await waitFor(() => !lifeAlive(), LIFE_STOP_TIMEOUT_MS, 1000)
+    assert.ok(stopped, `the life (live.json ${short(readLiveJson())}) still runs ${LIFE_STOP_TIMEOUT_MS / 1000} s after bot_stuck`)
+    const stoppedAfter = Math.round((Date.now() - stuckAt) / 1000)
+    printNewEvents()
+
+    // The smelt keeps the action lock for about 200 s: its answer is informational.
+    const answer = await Promise.race([smelting, sleep(SMELT_HTTP_TIMEOUT_MS).then(() => null)])
+    console.log(`  /smelt answer: ${answer ? short({ ok: answer.ok, smelted: answer.smelted, error: answer.error }) : 'not yet'}`)
+    console.log('  nothing to restore: the life has stopped')
+    return `one bot_stuck (goal ${stuckEvent.goal_id}, losses 3), the life gone ${stoppedAfter} s later`
+  }
+
   // --- Run ---
 
   try {
     console.log(`run ${run}, port ${mcPort}, checks ${checks.join(',')}`)
-    const names = { hunger: 'hunger: a hungry bot kills for food, then smelts it', unreachable: 'unreachable: a walled-in chest costs one stall, then is left alone' }
-    const available = { hunger: hungerCheck, unreachable: unreachableCheck }
+    const names = { hunger: 'hunger: a hungry bot kills for food, then smelts it', unreachable: 'unreachable: a walled-in chest costs one stall, then is left alone', niche: 'niche: a held furnace is used underground in a dug niche', stuck: 'stuck: a bot busy for good stops the life with bot_stuck' }
+    const available = { hunger: hungerCheck, unreachable: unreachableCheck, niche: nicheCheck, stuck: stuckCheck }
     for (const name of checks) await check(names[name], available[name])
   } catch (err) {
     failures++
@@ -565,6 +698,11 @@ async function main () {
   } finally {
     if (tester) await say('!stop').catch(() => {}) // the goals left open
     for (const { min, max } of placedBoxes) console.log(`  clean up fill ${min.join(' ')} ${max.join(' ')}: ${await rcon.exec(`fill ${min.join(' ')} ${max.join(' ')} minecraft:air replace minecraft:glass`).catch((err) => err.message)}`)
+    if (nicheSite) { // seal the niche, then return the bot
+      console.log(`  clean up ${nicheSite.shaft.seal}: ${await rcon.exec(nicheSite.shaft.seal).catch((err) => err.message)}`)
+      const { x, y, z } = nicheSite.back
+      await rcon.exec(`tp ${voyagerName} ${x} ${y} ${z}`).catch(() => {})
+    }
     await rcon.exec(`kill @e[type=cow,tag=${COW_TAG}]`).catch(() => {})
     if (forceloaded) await rcon.exec(`forceload remove ${forceloaded[0]} ${forceloaded[1]}`).catch(() => {})
     await rcon.exec(`effect clear ${voyagerName} minecraft:hunger`).catch(() => {})
@@ -577,7 +715,7 @@ async function main () {
   process.exit(failures === 0 ? 0 : 1)
 }
 
-module.exports = { enclosureBoxes, outsideRect, edibleHeld, pickHungerGoal, killBeforeSmelt, findFoodKillRule, COOKED_MEATS }
+module.exports = { shaftCommands, nicheNextToBot, strayGains, enclosureBoxes, outsideRect, edibleHeld, pickHungerGoal, killBeforeSmelt, findFoodKillRule, COOKED_MEATS }
 
 if (require.main === module) {
   main().catch((err) => {
