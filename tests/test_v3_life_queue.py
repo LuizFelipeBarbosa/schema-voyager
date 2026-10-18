@@ -185,7 +185,7 @@ def test_torches_made_for_the_user_are_not_tossed_as_junk_later(tmp_path, monkey
 def test_chat_commands_and_their_replies(tmp_path):
     world = ChatWorld(
         {
-            2: chat("goal", "build a castle"),
+            2: chat("goal", "kill 3 zombies"),
             3: [  # one burst, while the first curriculum goal runs; u002 to u004 are cancelled before any parse
                 chat("status"),
                 chat("goal", "4 sticks"),
@@ -207,7 +207,7 @@ def test_chat_commands_and_their_replies(tmp_path):
     run(tmp_path, world, max_goals=1)
 
     said = world.said
-    assert next(s for s in said if "can't build" in s)
+    assert next(s for s in said if "can't hunt" in s)
     assert entry(tmp_path, "u001").status == "unsupported"
     assert "Learning: 1 plank." in said
     assert "No goal u009." in said
@@ -215,7 +215,7 @@ def test_chat_commands_and_their_replies(tmp_path):
     assert "Cancelled u002: 4 sticks" in said
     assert "Stopped: cancelled 2 goals." in said
     assert said.count("Nothing to cancel.") == 2  # the second !stop and the bare !cancel
-    assert "Commands: !goal <what>, !cancel [id], !stop, !status" in said
+    assert "Commands: !goal <what>, !yes [id], !no [id], !cancel [id], !stop, !status" in said
     assert "Usage: !goal <what>, like !goal 10 torches" in said
     assert not any(line.startswith("Queued") for line in said)
     assert [entry(tmp_path, g).status for g in ("u002", "u003", "u004")] == ["cancelled"] * 3

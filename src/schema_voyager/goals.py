@@ -19,7 +19,7 @@ from .models import GoalSource, GoalSpec, GoalStatus
 InterruptReason = Literal["cancelled", "preempted", "death"]
 
 _ALLOWED_TRANSITIONS: dict[str, set[str]] = {
-    "submitted": {"queued", "unsupported", "cancelled"},
+    "submitted": {"queued", "awaiting_approval", "unsupported", "cancelled"},
     "queued": {"running", "cancelled", "awaiting_approval"},
     "awaiting_approval": {"queued", "cancelled"},
     "running": {"done", "failed", "cancelled", "queued"},
@@ -136,14 +136,15 @@ class GoalQueue:
         return self._append(build).id
 
     def accept(self, spec: GoalSpec) -> bool:
-        """submitted -> queued, with the parsed fields; spec.id is the goal's id."""
+        """submitted -> queued (a build: awaiting_approval), with the parsed fields; spec.id is the goal's id."""
 
         def build(goals: dict[str, GoalEntry]) -> GoalEntry | None:
             entry = goals.get(spec.id)
             if entry is None or entry.status != "submitted":
                 return None
             parsed = replace(spec, source=entry.source, text=entry.text)
-            return replace(entry, status="queued", t=time.time(), spec=parsed)
+            status = "awaiting_approval" if spec.kind == "build" else "queued"
+            return replace(entry, status=status, t=time.time(), spec=parsed)
 
         return self._append(build) is not None
 
@@ -229,6 +230,8 @@ def _display_name(item: str, count: int) -> str:
 def goal_label(spec: GoalSpec | None, fallback: str = "") -> str:
     """What chat calls a goal: "10 torches", "1 plank", "3 coal" for an obtain goal; else `fallback` or the
     spec's text (v3.1c)."""
+    if spec is not None and spec.kind == "build" and spec.blueprint:
+        return spec.blueprint["name"]
     if spec is not None and spec.kind == "obtain" and spec.item:
         return f"{spec.count} {_display_name(spec.item, spec.count)}"
     return fallback or (spec.text if spec else "")

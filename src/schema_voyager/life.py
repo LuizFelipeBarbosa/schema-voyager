@@ -16,12 +16,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, ContextManager, Literal, Protocol
 
+from . import blueprint as blueprints
 from . import normalize
 from .adapter import DIRECTIONS, LifeBackend
 from .agent import run_schemavoyager
 from .curriculum import Curriculum, Goal
 from .episode import EXPLORE_GOAL, Episode
-from .goals import GoalInterrupted, GoalQueue, goal_label
+from .goals import GoalEntry, GoalInterrupted, GoalQueue, goal_label
 from .inventory import junk_to_toss
 from .llm import LLM, LLMError, SpendCapReached, vanilla_foods, vanilla_items
 from .mineflayer_backend import BackendError
@@ -43,7 +44,7 @@ MISSING_RESOURCE_ERRORS = frozenset({"not_found", "unreachable"})
 AMBIENT_BLOCKS = frozenset({"air", "cave_air", "void_air", "water", "lava", "bedrock"})
 FINAL_GOAL_STATUSES = frozenset({"done", "failed", "cancelled", "unsupported"})
 GOAL_RANK = {"system": 0, "user": 1, "curriculum": 2}  # a queued goal of a lower rank preempts the running one
-CHAT_COMMANDS_HELP = "Commands: !goal <what>, !cancel [id], !stop, !status"
+CHAT_COMMANDS_HELP = "Commands: !goal <what>, !yes [id], !no [id], !cancel [id], !stop, !status"
 DEATHS_TO_STOP = 3  # this many deaths within DEATH_WINDOW_S stop the life (v3.2d)
 DEATH_WINDOW_S = 600.0
 USER_DEATHS_TO_FAIL = 2
@@ -633,6 +634,8 @@ class _Life:
             cancelled = [goal_id for goal_id in open_goals if self.queue.cancel(goal_id)]
             self._cancelled_in_chat.update(cancelled)
             self._say(f"Stopped: cancelled {len(cancelled)} goal{'s' if len(cancelled) > 1 else ''}." if cancelled else "Nothing to cancel.")
+        elif command in ("yes", "no"):
+            self._say(self._answer_from_chat(command, args.split()[0].lower() if args else None))
         elif command == "status":
             self._say(self._status_line())
         else:
@@ -648,7 +651,48 @@ class _Life:
         self._cancelled_in_chat.add(goal_id)
         return f"Cancelled {goal_id}: {goal_label(entry.spec, entry.text)}"
 
+    def _answer_from_chat(self, command: str, goal_id: str | None) -> str:
+        """!yes approves and !no discards a build goal waiting for approval: the one named, else the oldest."""
+        if goal_id is None:
+            waiting = self._awaiting_approval()
+            if not waiting:
+                return f"Nothing to {'approve' if command == 'yes' else 'discard'}."
+            entry = waiting[0]
+        else:
+            entry = self.queue.get(goal_id)
+            if entry is None:
+                return f"No goal {goal_id}."
+            if entry.status != "awaiting_approval":
+                return f"{goal_id} isn't waiting for approval."
+        if command == "yes":
+            self.queue.mark(entry.id, "queued")
+            return f"Approved {entry.id}: {goal_label(entry.spec, entry.text)}."
+        self.queue.mark(entry.id, "cancelled", reason="discarded")
+        return f"Discarded {entry.id}: {goal_label(entry.spec, entry.text)}."
+
+    def _awaiting_approval(self) -> list[GoalEntry]:
+        return [g for g in self.queue.goals() if g.source == "user" and g.status == "awaiting_approval"]
+
+    def _plan_line(self, spec: GoalSpec) -> str:
+        """"Plan for u003: small hut, 5 x 4 x 5: 55 planks, 1 door. Approve it ..." for a parsed build."""
+        bp = spec.blueprint
+        needs: dict[str, int] = {}
+        for value, count in blueprints.materials(bp).items():
+            needs[normalize.family(value)] = needs.get(normalize.family(value), 0) + count
+        listed = ", ".join(
+            goal_label(GoalSpec(spec.id, "obtain", "user", item=item, count=count))
+            for item, count in sorted(needs.items(), key=lambda need: (-need[1], need[0]))
+        )
+        width, height, depth = bp["size"]
+        return (f"Plan for {spec.id}: {goal_label(spec)}, {width} x {height} x {depth}: {listed}. "
+                "Approve it in the panel, or say !yes or !no.")
+
     def _status_line(self) -> str:
+        waiting_approval = ", ".join(g.id for g in self._awaiting_approval())
+        approval = f" Waiting for approval: {waiting_approval}." if waiting_approval else ""
+        return self._doing_line() + approval
+
+    def _doing_line(self) -> str:
         running = self._running
         if running is None:
             return "Idle."
@@ -673,9 +717,10 @@ class _Life:
                     self._say(parsed.reply)
             elif self.queue.accept(parsed):
                 self._log_event(
-                    "goal_parsed", goal_id=entry.id, goal_kind=parsed.kind, item=parsed.item, count=parsed.count, target=parsed.target
+                    "goal_parsed", goal_id=entry.id, goal_kind=parsed.kind, item=parsed.item, count=parsed.count, target=parsed.target,
+                    **({"name": parsed.blueprint["name"]} if parsed.kind == "build" else {}),
                 )
-                self._say(f"Queued {entry.id}: {goal_label(parsed)}")
+                self._say(self._plan_line(parsed) if parsed.kind == "build" else f"Queued {entry.id}: {goal_label(parsed)}")
 
     def _log_event(self, kind: str, **fields: Any) -> None:
         """An event outside any episode, in EpisodeLog's line format."""
@@ -716,6 +761,11 @@ class _Life:
     def _run_goal(self, spec: GoalSpec, goal: Goal | None = None) -> bool:
         """Run one goal: `goal` is the curriculum's for a curriculum spec; a queued spec gets one built here.
         Returns whether it failed for want of a resource that was not found or reachable."""
+        if spec.kind == "build":  # temporary: the build runner replaces this branch
+            self.queue.mark(spec.id, "running")
+            self.queue.mark(spec.id, "failed", reason="building isn't wired yet")
+            self._say(f"Couldn't build {goal_label(spec)}: building isn't wired yet")
+            return False
         index = self.goals_done + 1
         started_at = time.time()
         name = f"g{index:03d}"
