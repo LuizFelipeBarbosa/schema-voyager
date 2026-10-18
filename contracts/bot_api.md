@@ -561,18 +561,24 @@ action. A walk that falls short is not an error: `ok: true`,
     never fights an owner (and M3's `guard me` never targets the guarded owner).
   - A mob that died (`entityDead`) is never a threat while its body is still in `bot.entities`.
   - Several at once: a creeper first (at any distance), then the most recent attacker, then the nearest.
-- **What the guard does** (`decide(mode, threat, health)` → `fight | flee | back_off | ignore`):
+- **What the guard does** (`decide(mode, threat, health, armed)` → `fight | flee | back_off | ignore`):
   - `off`: always `ignore`;
   - a creeper is never fought: any creeper threat is `back_off`, to 8 blocks or more, in `passive` and `defend`
     (an explosion at point blank can take about 20 health on easy);
   - health below 6: `flee`, and eat if it holds food and its food is below 20 (with `bot.consume()`: auto-eat's
     `eat()` does nothing while the guard holds the plugins), in `passive` and `defend`;
-  - otherwise `passive` flees and `defend` fights.
+  - otherwise `passive` flees and `defend` fights, unless the bot holds no sword and no axe (`armed` false:
+    `fled` with reason `unarmed`) or the target's id is remembered as a mob that beat the bot (`fled` with reason
+    `beaten`). Ids are remembered when a fight against them ended `timeout`, `fled` or out-of-reach `lost`, until
+    `entityGone` for that id.
 - **A fight**: equip the best sword (else axe) the bot holds and a shield in the off-hand if it has one, then
   `bot.pvp.attack(target)`. It ends in one of these outcomes:
   - `killed`: the target died;
-  - `lost`: the target is gone or more than 16 blocks away;
-  - `timeout`: 30 s passed;
+  - `lost`: the target is gone or more than 16 blocks away, or it stayed farther than 4.5 blocks (pvp's
+    `attackRange` is 3.5) for 5 s in a row (a skeleton keeping its range). The guard then flees from it to 16
+    blocks or more, within the deadline, and records `fled` with reason `out_of_reach`;
+  - `timeout`: 25 s passed (the 30 s cap minus 5 s, so the fight's cleanup, its `fight_end` and any flight end
+    before `respond()` answers; `respond()` always waits for them, with a backstop 10 s past the cap that logs);
   - `fled`: health fell below 6 and the guard switched to `flee`;
   - `died`: the bot died.
 - **Cutting into an action.** The guard cuts only into `/mine`, `/craft`, `/smelt` and `/explore` (later `/attack`,
@@ -648,7 +654,7 @@ action. A walk that falls short is not an error: `ok: true`,
 | `threat` | the guard decided to act on an entity | `mob`, `id`, `distance`, `reason` (`near` or `attacked`), `action` (the running path, or `null` when idle) |
 | `fight_start` | a fight began | `target`, `id`, `distance`, `weapon` (`null` for a bare hand) |
 | `fight_end` | a fight ended | `target`, `outcome` (`killed`, `lost`, `timeout`, `fled`, `died`), `damage_taken`, `duration_s` |
-| `fled` | the guard ran or backed off | `from`, `reason` (`creeper`, `low_health` or `passive`), `distance`, `health` |
+| `fled` | the guard ran or backed off | `from`, `reason` (`creeper`, `low_health`, `passive`, `unarmed`, `out_of_reach` or `beaten`), `distance`, `health` |
 | `ate` | the bot ate | `item`, `food` (the food level after) |
 | `orphaned_handler` | an aborted handler didn't settle within 10 s (the guard fights anyway; `busy` stays held until it settles), or within 45 s (the bot reconnects) | `path`, `reconnected` (`true` for the 45 s backstop) |
 
