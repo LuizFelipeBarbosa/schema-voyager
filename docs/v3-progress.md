@@ -41,7 +41,7 @@ pushed to `origin` until the user says so.
 | S04 full inventory | done | a | `/toss`, `free_slots`, `inventory.py`, 36-slot sim, junk tossed before a goal; live `runs/s04-junk`; pytest 445, bot 120; not pushed |
 | S05 contracts for M1 and M2 | done | none | Contracts v3.1/v3.2 and stubs merged 1b80640; plugin pins in v3.2g; prompt changes for S06/S07 in v3.2h |
 | S06 goals you give it | done | a | M1: 9 lanes merged (pytest 715, bot 212, panel and goals pass); live `runs/v3-m1-live` 4 of 4 checks plus the panel box; not pushed |
-| S07 survival | running | b | Lanes: entities-bot, guard-core, survival-plugins, handler-abort, then guard-wire, smelt-abort, python-survival, sim-threats, then difficulty-env, whitelist, death-handling (after S06 life-queue), live |
+| S07 survival | done | b | 24 lanes merged (pytest 840, bot 266); live guard test ALL PASS; soaks `runs/v3-soak-1..3` (soak 3 on the final code: 30/32 goals, 0 deaths, 0 false contradictions); not pushed |
 | S08 combat and hunting | not started | b | |
 | S09 building foundations | done | a | Contract v3.4a and bot API v3.4; 5 lanes merged (pytest 821, bot 258); `runs/s09-place-live` ALL PASS (16 checks) from `main`; not pushed |
 | S10 build goals | running | a | v3.4b contract (protected boxes, `/survey`, approval, build runner); lanes: build-order, survey-bot, blueprint-llm, panel-preview, then survey-backend, protect-bot, protect-backend, then build-run, build-life; live `runs/v3-build-live` |
@@ -327,3 +327,51 @@ pushed to `origin` until the user says so.
   - `/clear`'s `hazard` also fires next to flowing water (`hazardNear`). Planks dug by hand take ~3.6 s per cell.
   - The plan's space for "any" is kept: `design_blueprint`'s prompt should say `.` for interior air. Claude's palette
     goes over the wire as a list of `{key, block}` (v3.4a, "Claude's form").
+
+## S07 survival (done 2026-10-18)
+
+- Commits on `main`: 036a002 plugins (`mineflayer-pvp` 1.3.2, `mineflayer-armor-manager` 2.0.1, `mineflayer-auto-eat` 3.3.6);
+  contract 3ccd26a, 3fda6c0, ac07dd5, ddcab3a; merges f21cfbf `entities-bot`, 2f4d8fc `survival-plugins`, 00839d4 `guard-core`,
+  f35e754 `handler-abort`, 83e8045 `guard-fixes`, 2208b23 `python-survival`, 23c1d72 `sim-threats`, 2366eef `smelt-abort`,
+  28af805 `guard-wire`, 30c20c4 `difficulty-env`, eceb359 `whitelist`, 45b83ee `death-handling`, 0b290c8 `guard-live`,
+  fb068c2 `guard-dead`, 99a44ad `hunger-retry`, cd87652 `no-sprint`, 92c5331 `guard-armed`, daae52e `rest-retry`, 86ee140
+  `arm-goal`, c70712a `sprint-peaceful`. Suite on 492176a: pytest 840, bot unit 266, panel all passed.
+- Re-splits from the prompt: no handler stopped after `interruptBot()` (a cancelled walk looked `unreachable`, so `/mine`
+  walked to the next candidate and remembered a good block as unreachable), so `handler-abort` threads `session.signal` through
+  the walk, dig, pickup and station helpers, and `smelt-abort` took `lib/smelt.js` out of `guard-wire`.
+- Contract changes (S07's own sections), from the advisor's three reviews and the live runs: a guard abort leaves an open window
+  to its handler (mineflayer clicks a closed window's slot numbers in the player inventory); `attachSurvival(bot, eventLog)`
+  returns a counted `{hold, onIdleTick}`, auto-eat `offhand: false`, `startAt` 17 while hurt, `eat()` after a hold; a threat is
+  a hostile within 5 blocks, or 8 and closing; the guard never fights an owner (orchestrator review), never re-fights a dead
+  mob's body, never fights a creeper (any creeper threat backs off), flees when unarmed, ends a fight with a target out of
+  reach for 5 s, and only flees from a mob that beat it; `MAX_INTERRUPTS` 4 per step; Python rests after a low-health flight;
+  hunger and arming system goals skip a failed item for 900 s; pathing sprints only on peaceful (orchestrator review); stations
+  left standing by an abort are remembered and walked back to. Leather armor is a kept item but joins `WHITELIST` only in M3
+  (nothing makes leather yet, and its rules drew repair calls).
+- Orchestrator notes done: the simulator's `_candidates` KeyError (fixed in `sim-threats`, test first); `wanted` keeps S06's done
+  user goals and adds edible foods; owners' hits ignored; no eat during a hold; sprinting kept on peaceful.
+- Live, instance b, seed 2024 `fresh-2024`, easy (see Log): `node mc/bot/test/v3_guard_live.js` ALL PASS on fb068c2 (twice) and
+  on c70712a. Soaks with day/night on, 30 min, `--keep-going --change scramble --cap-usd 2`:
+
+  | run | code | goals ok (by goal id) | deaths | fights / interrupted steps | false contradictions | spend |
+  |---|---|---|---|---|---|---|
+  | `runs/v3-soak-1` | 2f1559f | 21/37 (curriculum 21/22; 15 hunger goals for apple, 14 failed) | 0 | 2 / 2 | 0 | $0.12 |
+  | `runs/v3-soak-2` | c1f2f37 (bot fb068c2) | 22/29 | 2 (bare-handed fights) | 3 / 4 | 0 | $0.15 |
+  | `runs/v3-soak-3` | c70712a | 30/32 | 0 | 2 / 3 | 0 | $0.25 |
+
+  The advisor reviewed the evidence: M2's done-when is met by soak 3.
+- Open, for S08 and later:
+  - Little combat live: 3 threats in soak 3, all in one goal. The rest, arming, out-of-reach and beaten-mob paths and the
+    "three deaths in 10 minutes" stop never ran live (unit-tested only). One seed; the plan's two lives on the final code are
+    soak 1 (before the hunger fix) plus soak 3.
+  - Hunger is held off, not solved: food stayed 14-20 without sprinting, but nothing edible is obtainable until M3, and a longer
+    life reaches the 10-health starvation floor on easy. M3's hunting should feed `vanilla_foods` into the hunger goal.
+  - No sprinting off peaceful: travel is about 25% slower and parkour gaps are 2 blocks, not 4, so travel times on easy aren't
+    comparable with peaceful runs. S09's `lib/place.js` builds its own `Movements`, which still sprints.
+  - The soak-3 fights used a `stone_axe` (an axe counts as armed, so no arming goal ran).
+  - `v3_guard_live.js` depends on where the previous life left the bot (one run started on a tree and failed `unreachable`); it
+    should teleport the bot to a known spot first.
+  - auto-eat's own `autoeat_error` event still logs "No food found." (30 lines in a session); only the `eat()` catch is quiet.
+  - In the simulator, a fight's `damage` events are phase `step`, so most interrupted steps are judged `quarantined`, the bot's
+    `failed`; neither records a transition.
+- Instance b is down, with no lock. No S07 worktrees or branches are left. Not pushed.
