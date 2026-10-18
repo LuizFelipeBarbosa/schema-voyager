@@ -270,3 +270,58 @@ for (const ending of ['killed', 'died', 'timeout', 'stopped', 'no_opponent']) {
     }
   })
 }
+
+test('validateDuel: start_at is a number at most 10 s ahead', () => {
+  const now = Date.now()
+  for (const startAt of ['x', NaN, now + 11000]) assert.match(validateDuel({ player: 'Rival', start_at: startAt }), /start_at/)
+  for (const startAt of [now + 5000, now - 5000, undefined]) assert.equal(validateDuel({ player: 'Rival', start_at: startAt }), null)
+})
+
+test('runDuel: start_at holds the first fight back, and the deadline counts from it', async () => {
+  const { bot } = fakeBot()
+  const requestedAt = Date.now()
+  const startAt = requestedAt + 300
+  const fightTimes = []
+  const fight = async () => { fightTimes.push(Date.now()); return { outcome: 'lost' } }
+  const { result } = await run(bot, { start_at: startAt, timeout_s: 5 }, { fight })
+  const endedAt = Date.now()
+  assert.ok(fightTimes[0] >= startAt)
+  assert.equal(result.reason, 'timeout')
+  assert.ok(endedAt - startAt >= 5000 && endedAt - startAt < 5300, `ended ${endedAt - startAt} ms after start_at`)
+  assert.ok(Math.abs(result.duration - 5) <= 0.2)
+})
+
+test('runDuel: a stop during the wait ends it stopped without a fight', async () => {
+  const { bot } = fakeBot()
+  const controller = new AbortController()
+  setTimeout(() => controller.abort(), 50)
+  const fight = waitingFight()
+  const begun = Date.now()
+  const { result, eventLog } = await run(bot, { start_at: begun + 2000 }, { fight, stopSignal: controller.signal })
+  assert.equal(result.reason, 'stopped')
+  assert.equal(fight.calls.length, 0)
+  assert.ok(Date.now() - begun < 1000)
+  assert.equal(eventLog.events.length, 1)
+})
+
+test('runDuel: a death during the wait is recorded at once as died', async () => {
+  const { bot } = fakeBot()
+  const eventLog = fakeEventLog()
+  const fight = waitingFight()
+  const promise = run(bot, { start_at: Date.now() + 2000 }, { fight, eventLog })
+  await new Promise((resolve) => setTimeout(resolve, 30))
+  bot.emit('death')
+  assert.equal(eventLog.events.length, 1)
+  assert.equal(eventLog.events[0].reason, 'died')
+  const { result } = await promise
+  assert.equal(result.reason, 'died')
+  assert.equal(fight.calls.length, 0)
+})
+
+test('runDuel: duration of a kill is measured to the opponent death, not to the end of the grace', async () => {
+  const { bot } = fakeBot()
+  const fight = waitingFight({ onStart: (b) => setTimeout(() => b.emit('entityDead', { id: OPPONENT_ID }), 200) })
+  const { result } = await run(bot, {}, { fight, killGraceMs: 300 })
+  assert.equal(result.reason, 'killed')
+  assert.ok(result.duration >= 0.2 && result.duration <= 0.3, `duration ${result.duration}`)
+})

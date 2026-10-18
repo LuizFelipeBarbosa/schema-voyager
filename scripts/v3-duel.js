@@ -46,6 +46,7 @@ const RESET_ATTEMPTS = 3
 const SPOT_TOLERANCE_BLOCKS = 1.5
 const MAX_INVALID_IN_A_ROW = 5
 const HTTP_MARGIN_MS = 30000
+const START_DELAY_MS = 1000 // both /duel requests carry the same start instant this far ahead
 const MAX_DUEL_ID_LENGTH = 64
 
 // --- Pure: planning, judging, statistics, the table ------------------------------------------
@@ -372,10 +373,11 @@ async function runSeries (options, ports, botNames, home) {
   async function fightDuel (plan, duelId) {
     const sets = [setA, setB]
     const botFor = [plan.aBot, 1 - plan.aBot]
+    const startAt = Date.now() + START_DELAY_MS // one start instant for both bots: a few ms of head start decide a mirror duel
     const fight = (set) => {
       const bot = bots[botFor[set]]
       const opponent = vs || botNames[1 - botFor[set]]
-      return postBot(bot.port, '/duel', { player: opponent, tactics: sets[set], timeout_s: options.timeout, duel_id: duelId }, options.timeout * 1000 + HTTP_MARGIN_MS)
+      return postBot(bot.port, '/duel', { player: opponent, tactics: sets[set], timeout_s: options.timeout, duel_id: duelId, start_at: startAt }, options.timeout * 1000 + HTTP_MARGIN_MS)
     }
     const lastSeqs = await Promise.all(bots.map(async (bot) => (await botStatus(bot))?.last_seq))
     const answers = await Promise.all(vs ? [fight(0)] : [fight(0), fight(1)])
@@ -388,7 +390,7 @@ async function runSeries (options, ports, botNames, home) {
       const events = (await postBot(bot.port, '/status', { since }, 10000)).body?.events ?? []
       return events.some((event) => event.type === 'death')
     }))
-    return { answers, died }
+    return { answers, died, startAt }
   }
 
   const records = []
@@ -425,9 +427,9 @@ async function runSeries (options, ports, botNames, home) {
       const plan = planDuel(i, Boolean(vs))
       const duelId = `${outName.slice(-40)}-${i}${retries ? `-r${retries}` : ''}`.slice(0, MAX_DUEL_ID_LENGTH)
       await resetDuel(plan)
-      const { answers: [answerA, answerB = null], died: [diedA, diedB = false] } = await fightDuel(plan, duelId)
+      const { answers: [answerA, answerB = null], died: [diedA, diedB = false], startAt } = await fightDuel(plan, duelId)
       const outcome = judge(answerA, answerB, duelId, { diedA, diedB })
-      const record = { i, duel_id: duelId, plan, diedA, diedB, ...outcome }
+      const record = { i, duel_id: duelId, start_at: startAt, plan, diedA, diedB, ...outcome }
       records.push(record)
       fs.appendFileSync(jsonl, `${JSON.stringify(record)}\n`)
       console.log(`${duelId}: ${outcome.valid ? `${outcome.result} (${outcome.reason})` : `INVALID, ${outcome.reason}`}`)
