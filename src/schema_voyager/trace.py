@@ -53,8 +53,13 @@ class EpisodeLog:
             progress = f"{d['confirmed']}/{d['needed']} confirmed"
             return f"{tag}  {self._c(_DIM, 'testing ' + d['predicts'] + ' (' + progress + ')')}"
         if kind == "goal":
-            return (f"\n{tag} {self._c(_BOLD, 'goal')} g{d['index']:03d}: {d['count']} {d['item']} "
+            line = (f"\n{tag} {self._c(_BOLD, 'goal')} g{d['index']:03d}: {d['count']} {d['item']} "
                     f"({d['reason']}) budget={d['budget']}")
+            if d.get("source") in ("user", "system"):
+                line += f" {d['goal_id']} {d['source']}: {d['text']!r}"
+            return line
+        if kind == "goal_interrupted":
+            return f"{tag} {self._c(_YELLOW, 'interrupted')} {d['goal_id']}: {d['reason']}"
         if kind == "travel":
             return f"{tag}  {self._c(_DIM, 'travel ' + self._travel_summary(d))}"
         if kind == "look":

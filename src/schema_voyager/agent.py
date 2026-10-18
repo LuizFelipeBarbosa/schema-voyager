@@ -12,6 +12,7 @@ from typing import Callable
 
 from . import normalize
 from .episode import Episode
+from .goals import goal_label
 from .llm import LLM, LLMError
 from .models import Action, EpisodeResult, GoalSpec, Outcome, Rule, Skill
 from .planner import PlanningError, PlanStep, make_plan
@@ -86,7 +87,7 @@ def run_schemavoyager(
         if not plan:
             episode.log.event("plan_failed", reason=f"empty plan, but {task.goal_item} is not held")
             break
-        _log_plan(episode, store, plan, narrate=first_plan or not episode.natural)
+        _log_plan(episode, store, plan, narrate=first_plan or not episode.natural, goal=goal)
         first_plan = False
 
         for position, step in enumerate(plan):
@@ -126,7 +127,7 @@ def run_schemavoyager(
             if _deviates(episode, outcome, step, plan[position + 1:]):
                 break  # a drop rolled out of reach; replan without revising anything
 
-    result = episode.finish()
+    result = episode.finish(announce=goal is None)  # a goal from the life is closed by the life's own "Done: ..."
     certified = store.certify()
     episode.log.event("certified", rules=certified)
     changed_skill: Skill | None = None
@@ -299,7 +300,8 @@ def _annotate(step: PlanStep, outcome: Outcome, verdict: dict[str, Check]) -> di
     }
 
 
-def _log_plan(episode: Episode, store: SchemaStore, plan: list[PlanStep], narrate: bool = True) -> None:
+def _log_plan(episode: Episode, store: SchemaStore, plan: list[PlanStep], narrate: bool = True,
+              goal: GoalSpec | None = None) -> None:
     plan_rules = {step.rule.id for step in plan}
     skills = [
         skill.id
@@ -318,7 +320,9 @@ def _log_plan(episode: Episode, store: SchemaStore, plan: list[PlanStep], narrat
     )
     if not narrate:
         return
-    if episode.natural:
+    if episode.natural and goal is not None and goal.source == "user":
+        _say(episode, [f"On it: {goal_label(goal)} ({len(plan)} steps)"])
+    elif episode.natural:
         _say(episode, [_goal_line(episode.task, plan)])
     else:
         _say(episode, [f"Plan: {len(plan)} steps, starting with {plan[0].action.describe()}."])

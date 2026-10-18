@@ -247,13 +247,17 @@ function goalCardHtml(story, outcome) {
     : (exploring && success ? ['neutral', 'EXPLORED'] : success ? ['success', 'SUCCESS'] : ['fail', outcome && outcome.outcome === 'interrupted' ? 'INTERRUPTED' : 'FAILED']);
   const endT = story.end ? story.end.t : null;
   const actions = story.end ? story.end.actions : (outcome ? outcome.actions : null);
+  const interrupt = outcome && outcome.outcome === 'interrupted' && outcome.interrupt ? ` · ${esc(outcome.interrupt)}` : '';
+  const title = goal.source === 'user' ? `Your goal: ${esc(goal.text)}`
+    : goal.source === 'system' ? esc(goal.text)
+    : exploring ? 'Explore' : `Get ${goal.count} ${say(goal.item)}`;
   return `
     <div class="goal-top">
       <span class="goal-no">GOAL ${goal.index}</span>
-      <span class="status ${status[0]}">${status[1]}${actions === null ? '' : ` · ${plural(actions, 'action')}`}</span>
+      <span class="status ${status[0]}">${status[1]}${interrupt}${actions === null ? '' : ` · ${plural(actions, 'action')}`}</span>
       <span class="elapsed" id="life-elapsed" data-start="${goal.t}" data-end="${endT ?? ''}">${formatElapsed((endT ?? story.lastT) - goal.t)}</span>
     </div>
-    <div class="goal-title">${exploring ? 'Explore' : `Get ${goal.count} ${say(goal.item)}`}</div>
+    <div class="goal-title">${title}</div>
     <div class="goal-why"><b>WHY</b>${say(goal.reason)}</div>`;
 }
 
