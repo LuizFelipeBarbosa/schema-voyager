@@ -136,3 +136,14 @@ Brief: `prompts/v2-demo-refine.md`. Orchestrator Opus 5.5.
   max same-goal failures in a row 1; $0.133, 35,402 tokens.
 - 19:40 lane `view` (user request): compact panel with the viewer at >=60% width, camera modes via POST /viewer, route
   minimap from `position` on action responses (contract v2.5). Merged stage polish (persistent change card etc.).
+- 20:02 incident: lane `coal` ran `pkill -f "node server.js"`, which also killed instance a's bot and the preview life
+  (and earlier, lane `view`'s cleanup killed coal's lock holder). Rule for every lane spec from now on: never kill by
+  name/pattern; only exact pids from run/*.pid. The lock held (a's life released it on SIGTERM).
+- 20:15-20:25 preview life `runs/preview-2005`: 3/3 changes by 3.7 min (planks2 0.6, r2 1.6, stick2 3.7); at ~13 min
+  the bot looped on `explore NW` (30 s each, distance 0). Lane `unstick` (dead directions per goal, fail fast when all
+  dead, exploration round after a resource failure) merged; resumed live, it moved on ("toward W (dead: NW)").
+  Merge fix: `--resume` skipped the pack check for already-fired changes (it refused before).
+- Lane `coal` stopped partial (its live commands were denied by the auto-mode permission check): merged 66ad0ad
+  (no planned drops into water; rank ore by reach cost, buried penalty 12). First coal seed 42: 261/110 s -> 12.8,
+  13.5, 12.9 s; seed 777 21.3 s; seed 7 still failing (unexplained). Not done: seeds 99/314, live craft/smelt rerun.
+  Lane `explorefast` (offline: /explore fail-fast and fallback directions) started.
