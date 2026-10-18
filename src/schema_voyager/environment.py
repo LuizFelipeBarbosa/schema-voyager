@@ -240,7 +240,13 @@ WHITELIST_RECIPES: dict[str, tuple[dict[str, int], int, bool]] = {
     "iron_boots": ({"iron_ingot": 4}, 1, True),
     "shield": ({"#planks": 6, "iron_ingot": 1}, 1, True),
 }
-SMELTS = {"raw_iron": "iron_ingot"}
+SMELTS = {
+    "raw_iron": "iron_ingot",
+    "beef": "cooked_beef",
+    "porkchop": "cooked_porkchop",
+    "chicken": "cooked_chicken",
+    "mutton": "cooked_mutton",
+}
 # Items smelted per fuel item (burn time / 200 ticks), by family; a nether `*_stem` burns like a log.
 FUEL_ITEMS_PER_FUEL = {"coal": 8, "charcoal": 8, "#planks": 1.5, "#log": 1.5, "stick": 0.5}
 
@@ -256,9 +262,21 @@ STEP_DAMAGE_CHANCE = 0.005
 # Threats, food and entities (off peaceful, except the animals).
 THREAT_CHANCE = {"peaceful": 0.0, "easy": 0.06, "normal": 0.10, "hard": 0.15}
 FIGHT_DAMAGE = {"easy": (1, 3), "normal": (2, 5), "hard": (3, 7)}  # total damage of a fight
-THREATENED_ACTIONS = ("mine", "craft", "smelt", "explore", "place", "clear", "goto")
+THREATENED_ACTIONS = ("mine", "craft", "smelt", "explore", "place", "clear", "goto", "kill")
 THREAT_MOBS = ("zombie", "skeleton", "spider", "creeper")
 ANIMALS = ("cow", "sheep", "pig", "chicken")
+ANIMAL_ESCAPE_CHANCE = 0.05
+# Vanilla drops per kill, no Looting: item -> (min, max).
+MOB_DROPS: dict[str, dict[str, tuple[int, int]]] = {
+    "cow": {"beef": (1, 3), "leather": (0, 2)},
+    "pig": {"porkchop": (1, 3)},
+    "chicken": {"chicken": (1, 1), "feather": (0, 2)},
+    "sheep": {"mutton": (1, 2), "white_wool": (1, 1)},
+    "zombie": {"rotten_flesh": (0, 2)},
+    "skeleton": {"bone": (0, 2), "arrow": (0, 2)},
+    "spider": {"string": (0, 2), "spider_eye": (0, 1)},
+}
+WEAPON_TIERS = ("netherite", "diamond", "iron", "stone", "golden", "wooden")
 ACTIONS_PER_FOOD = 10
 EAT_BELOW = 14  # the bot eats at this food level or lower
 FOOD_POINTS = {
@@ -336,6 +354,9 @@ class NaturalWorld:
         self._tree_species = random.Random(f"{seed}:species").sample(pool, k=min(len(pool), 1 + seed % 3))
         self._rng = random.Random(f"{seed}:rolls")  # random drops and damage
         self._threat_rng = random.Random(f"{seed}:threats")  # separate, so peaceful results never move
+        self._kill_rng = random.Random(f"{seed}:kills")  # separate, so kills never move other results
+        self._kills: Counter[tuple[tuple[int, int], str]] = Counter()  # (region, mob) -> killed
+        self._following: dict[str, Any] | None = None
         self._columns: dict[tuple[int, int], tuple[int, bool]] = {}
         self._chunks: dict[tuple[int, int], _Chunk] = {}
         self._changes: dict[Pos, str] = {}
@@ -395,7 +416,7 @@ class NaturalWorld:
             free_slots=_free_slots(self.inventory),
             nearby={block: count for block, count in sorted(nearby.items()) if count > 0},
             blocks_walked=round(self.blocks_walked, 1),
-            entities=self._entities(),
+            entities=self._mobs_left(),
         )
 
     def toss(self, items: dict[str, int]) -> dict[str, int]:
@@ -412,13 +433,22 @@ class NaturalWorld:
             position=self._position(),
             events=[event for event in self._events if event["seq"] > since],
             last_seq=self._seq,
+            follow=self._following,
         )
+
+    def follow(self, player: str | None, distance: float = 3.0) -> str | None:
+        name = player if player is not None else "Otopo"
+        self._following = {"player": name, "distance": float(distance)}
+        return name
+
+    def stop_follow(self) -> None:
+        self._following = None
 
     def connected(self) -> bool:
         return True
 
-    def look(self, blocks: list[str], radius: int = 64) -> LookResult:
-        x, _, z = self._cell
+    def look(self, blocks: list[str], radius: int = 64, mobs: Iterable[str] = ()) -> LookResult:
+        x, y, z = self._cell
         result: LookResult = {direction: {} for direction in DIRECTIONS}
         for _, pos, block in sorted(self._candidates(set(blocks), min(radius, 96))):
             if self._is_protected(pos):
@@ -431,6 +461,18 @@ class NaturalWorld:
                     "distance": round(self._distance_to(pos), 1),
                     "exposed": self._exposed(pos),
                 }
+        region = self._region()
+        reach = min(radius, MAX_DISTANCE)
+        for mob in mobs:
+            nearest = self._mobs_left().get(mob, {}).get("nearest")
+            if nearest is None or nearest > reach:
+                continue
+            for index, direction in enumerate(DIRECTIONS):
+                dx, dz = _DIRECTION_VECTORS[direction]
+                distance = nearest + _hash01(self.seed, 100 + index, *region) * (reach - nearest)
+                scale = distance / math.hypot(dx, dz)
+                pos_x, pos_z = x + round(dx * scale), z + round(dz * scale)
+                result[direction][mob] = {"x": pos_x, "y": y, "z": pos_z, "distance": round(math.hypot(pos_x - x, pos_z - z), 1)}
         return result
 
     def probe(self, grid: list[list[str | None]]) -> dict[str, Any]:
@@ -475,6 +517,8 @@ class NaturalWorld:
             return self._clear(action)
         if action.kind == "goto":
             return self._goto(action)
+        if action.kind == "kill":
+            return self._kill(action)
         return self._fail("unknown_action")
 
     def scan(self, origin: Pos, size: Pos) -> dict[Pos, str | None]:
@@ -583,6 +627,69 @@ class NaturalWorld:
             travel=travel,
             events=events,
         )
+
+    def _kill(self, action: Action) -> Outcome:
+        mob = action.target or ""
+        mob_state = self._mobs_left().get(mob)
+        if mob not in MOB_DROPS or mob_state is None:
+            return self._fail("not_found", mob=mob)
+        if action.tool is not None and self.inventory[action.tool] < 1:
+            return self._fail("missing_tool")
+
+        rng = self._kill_rng
+        distance = round(rng.uniform(mob_state["nearest"], MAX_DISTANCE), 1)
+        self.blocks_walked += distance
+        is_animal = mob_state["kind"] == "animal"
+        if is_animal and rng.random() < ANIMAL_ESCAPE_CHANCE:
+            return self._fail("escaped", mob=mob)
+
+        region = self._region()
+        mob_id = 2000 + sum(self._kills.values())
+        weapon = action.tool or self._best_weapon()
+        events = [self._emit({"type": "fight_start", "target": mob, "id": mob_id, "distance": distance, "weapon": weapon})]
+        damage_taken = 0.0
+        if not is_animal:
+            damage_taken = float(rng.randint(*FIGHT_DAMAGE[self.difficulty]))
+            self.health = max(0.0, self.health - damage_taken)
+            events.append(self._emit({"type": "damage", "amount": damage_taken, "health": self.health, "phase": "step"}))
+        outcome = "died" if self.health <= 0 else "killed"
+        events.append(self._emit({
+            "type": "fight_end", "target": mob, "id": mob_id, "outcome": outcome,
+            "damage_taken": damage_taken, "duration_s": round(rng.uniform(1, 4), 1),
+        }))
+        if outcome == "died":
+            return self._fail("quarantined", events=[*events, *self.die()])
+
+        self._kills[(region, mob)] += 1
+        before_step = self._inventory()
+        rolled = {item: rng.randint(low, high) for item, (low, high) in MOB_DROPS[mob].items()}
+        drops = {item: count for item, count in rolled.items() if count > 0}
+        kept = self._keep(drops)
+        return Outcome(
+            ok=True,
+            block_removed=False,
+            drops=drops,
+            picked_up=dict(kept),
+            inventory_delta=dict(kept),
+            inventory=self._inventory(),
+            blocks_walked=round(self.blocks_walked, 1),
+            detail={
+                "killed": True,
+                "mob": mob,
+                "weapon_used": weapon,
+                "inventory_before_step": before_step,
+                **({"inventory_full": True} if kept != drops else {}),
+            },
+            travel={**_empty_travel(), "distance": distance},
+            events=events,
+        )
+
+    def _best_weapon(self) -> str | None:
+        for kind in ("sword", "axe"):
+            for tier in WEAPON_TIERS:
+                if self.inventory[f"{tier}_{kind}"] > 0:
+                    return f"{tier}_{kind}"
+        return None
 
     def _place(self, action: Action) -> Outcome:
         pos = action.pos
@@ -903,9 +1010,17 @@ class NaturalWorld:
         self.food = min(20, self.food + FOOD_POINTS[item])
         self._emit({"type": "ate", "item": item, "food": self.food})
 
-    def _entities(self) -> dict[str, dict[str, Any]]:
-        """Mobs in view: a pure function of the seed, the difficulty and the region the bot stands in."""
-        region = (self._cell[0] >> 4, self._cell[2] >> 4)
+    def _region(self) -> tuple[int, int]:
+        return (self._cell[0] >> 4, self._cell[2] >> 4)
+
+    def _mobs_left(self) -> dict[str, dict[str, Any]]:
+        """The region's mobs that are still alive, with their counts."""
+        region = self._region()
+        left = {mob: {**state, "count": state["count"] - self._kills[(region, mob)]} for mob, state in self._placed_mobs(region).items()}
+        return {mob: state for mob, state in left.items() if state["count"] > 0}
+
+    def _placed_mobs(self, region: tuple[int, int]) -> dict[str, dict[str, Any]]:
+        """Mobs in a region: a pure function of the seed, the difficulty and the region."""
         entities: dict[str, dict[str, Any]] = {}
         for index, animal in enumerate(ANIMALS):
             roll = _hash01(self.seed, 10 + index, *region)
