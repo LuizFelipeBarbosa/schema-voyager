@@ -15,6 +15,7 @@ const { attachEventTracker, createEventLog } = require('./lib/events')
 const { attachChatCommands } = require('./lib/chat_commands')
 const { DIRECTIONS } = require('./lib/geometry')
 const { hasOpenSky } = require('./lib/sky')
+const { nearbyEntities } = require('./lib/entities')
 const { VIEWER_MODES, createViewerControl, localCors } = require('./lib/viewer')
 const {
   freeSlots, inventoryCounts, positionOf, round, scanNearbyBlocks, sleepTicks, stopMoving
@@ -150,6 +151,7 @@ function observe () {
     inventory: inventoryCounts(bot),
     free_slots: freeSlots(bot),
     nearby_blocks: scanNearbyBlocks(bot),
+    nearby_entities: nearbyEntities(bot),
     blocks_walked: walked(),
     sky: hasOpenSky(bot)
   }
@@ -332,6 +334,7 @@ function status (req, res) {
     health: ready ? bot.health : null,
     food: ready ? bot.food : null,
     position: ready ? positionOf(bot) : null,
+    nearby_entities: ready ? nearbyEntities(bot) : {},
     events: eventLog.since(body.since ?? 0),
     last_seq: eventLog.lastSeq()
   })
