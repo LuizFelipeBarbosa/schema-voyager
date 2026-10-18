@@ -2137,7 +2137,9 @@ its pid in `run/bot2-<inst>.pid`, logs to `logs/bot2-<inst>.log`, and stops it b
   guard `off` on both bots. All of these are put back afterwards.
 - **Each duel:** over RCON, heal both bots and give each the same kit: iron sword, shield in the off-hand, full iron
   armor, one golden apple. Teleport them 10 blocks apart on the floor, facing each other. The bots swap sides every
-  duel, and the two sets swap bots every 2 duels, so 4 duels cover every pairing.
+  duel, and the two sets swap bots every 2 duels, so 4 duels cover every pairing. Both `/duel` requests carry the
+  same `start_at`, 1 s ahead: with the requests merely sent together, set A (sent first) won 8 of the 9 decided
+  duels of the first A/A series.
 - **The result:** a death decides a duel; both dying (a double KO) or neither dying by `timeout_s` is a draw. A bot
   died when its `duel_end` says `died` or `both_died`, or when its event log shows a `death` during the duel (the
   runner reads it 1.5 s after both answers). A duel whose answers disagree, or with a bot that didn't answer, is

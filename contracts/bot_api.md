@@ -1104,6 +1104,9 @@ Fight one player until one of the two dies, the time is up or `/duel/stop`.
   `[]` is the baseline, which every set includes.
 - `timeout_s` (default 60): a number from 5 to 300. The action's own timeout is `timeout_s + 15` s.
 - `duel_id` (optional): a string of at most 64 characters, echoed in the answer and in `duel_end`.
+- `start_at` (optional): a time in ms since the epoch, at most 10 s ahead; the duel waits until then before its
+  first engagement, so two bots on one machine start at the same instant (a few ms of head start decide a mirror
+  duel: `runs/v3-duel-aa`). The timeout and `duration` count from the start.
 
 It takes the action lock (409 `busy` while another action runs) and the guard never cuts into it. It answers when
 the duel ends:
@@ -1121,7 +1124,7 @@ the duel ends:
   **Double KOs** are common between equal bots: the server takes a strike from a player who died the same tick.
   So `killed` is only recorded 0.5 s after the opponent's death; if the bot dies within that time, the duel ends
   `both_died`. A bot whose own death comes first records `died` at once, as below.
-- `duration`: seconds from the start, one decimal.
+- `duration`: seconds from the start to the deciding death (or to the end, without one), one decimal.
 - `swings`: strikes the bot made. `hits`: hurt events on the opponent during the duel. `crits`: critical-hit effects
   on the opponent.
 - `damage_dealt`: the opponent's health drops as its entity metadata shows them, `null` when its health isn't seen.
