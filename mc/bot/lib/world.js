@@ -208,33 +208,81 @@ function stopMoving (bot) {
   bot.clearControlStates()
 }
 
-// Paths to `goal`; true when the bot ends inside the goal. pathfinder.goto
-// can resolve without reaching the goal (empty path), so the end is checked
-// the same way the pathfinder does (feet block, or one above on slabs).
-// (The pathfinder already rejects on 'noPath'.) With `failFast`, the attempt
-// also ends when the bot has neither moved a block nor been digging for
-// `failFast.stallMs`. With `signal`, an abort stops the walk and throws
-// `signal.reason` (never a false return: a cancelled walk is not unreachable).
-async function gotoGoal (bot, goal, timeoutMs = PATH_TIMEOUT_MS, { failFast = null, signal = null } = {}) {
+// Paths to `goal` and says how the attempt ended (`end`), not only whether
+// the bot got there:
+//   reached      the bot is inside the goal (checked the way the pathfinder
+//                does: feet block, or one above on slabs);
+//   no_path      the last path_update status was noPath (pathfinder.goto
+//                resolves, without an error, on an empty path before it looks
+//                at the status, so it may resolve);
+//   path_timeout the last status was timeout (the A* search ran out of time);
+//   timeout      our own `timeoutMs` ran out;
+//   stalled      `failFast`: the bot neither moved a block nor dug for
+//                `failFast.stallMs`;
+//   no_approach  `approach` ({target, windowMs}): the bot's closest distance to
+//                the target block's centre did not improve by a block for
+//                `windowMs` (digging does not count as approaching);
+//   ended        goto resolved or was rejected (goal changed, path stopped)
+//                with the bot outside the goal and no failure status.
+// `start` and `closest` are those distances (null without `approach`),
+// `resets` counts path_reset events and `thinkMs` sums the path_update times.
+// With `signal`, an abort stops the walk and throws `signal.reason` (never a
+// false result: a cancelled walk is not unreachable).
+async function gotoGoalDetailed (bot, goal, timeoutMs = PATH_TIMEOUT_MS, { failFast = null, approach = null, signal = null } = {}) {
   signal?.throwIfAborted()
+  const startedAt = Date.now()
+  const targetCentre = approach?.target.offset(0.5, 0.5, 0.5)
+  const distanceToTarget = () => bot.entity.position.distanceTo(targetCentre)
+  const start = approach ? distanceToTarget() : null
+  let closest = start
+
+  let lastStatus = null
+  let resets = 0
+  let thinkMs = 0
+  const onPathUpdate = (results) => {
+    lastStatus = results.status
+    thinkMs += results.time ?? 0
+  }
+  const onPathReset = () => { resets++ }
+  bot.on?.('path_update', onPathUpdate)
+  bot.on?.('path_reset', onPathReset)
+
   let timer = null
   let stallCheck = null
   let onAbort = null
+  let ownEnd = null // why we ended the attempt ourselves
   const giveUp = new Promise((resolve, reject) => {
+    const stopWith = (end, message) => {
+      ownEnd ??= end
+      reject(new Error(message))
+    }
     if (signal) {
       onAbort = () => reject(signal.reason)
       signal.addEventListener('abort', onAbort, { once: true })
     }
-    timer = setTimeout(() => reject(new Error(`path timeout after ${timeoutMs} ms`)), timeoutMs)
-    if (!failFast) return
-    let markedAt = Date.now()
-    let marked = bot.entity.position.clone()
+    timer = setTimeout(() => stopWith('timeout', `path timeout after ${timeoutMs} ms`), timeoutMs)
+    if (!failFast && !approach) return
+    let stallMarkedAt = Date.now()
+    let stallMarked = bot.entity.position.clone()
+    let approachMarkedAt = Date.now()
+    let approachMarked = start
     stallCheck = setInterval(() => {
-      if (bot.targetDigBlock || bot.entity.position.distanceTo(marked) >= STALL_PROGRESS_BLOCKS) {
-        markedAt = Date.now()
-        marked = bot.entity.position.clone()
-      } else if (Date.now() - markedAt >= failFast.stallMs) {
-        reject(new Error(`no progress for ${failFast.stallMs} ms`))
+      if (failFast) {
+        if (bot.targetDigBlock || bot.entity.position.distanceTo(stallMarked) >= STALL_PROGRESS_BLOCKS) {
+          stallMarkedAt = Date.now()
+          stallMarked = bot.entity.position.clone()
+        } else if (Date.now() - stallMarkedAt >= failFast.stallMs) {
+          return stopWith('stalled', `no progress for ${failFast.stallMs} ms`)
+        }
+      }
+      if (approach) {
+        closest = Math.min(closest, distanceToTarget())
+        if (approachMarked - closest >= STALL_PROGRESS_BLOCKS) {
+          approachMarkedAt = Date.now()
+          approachMarked = closest
+        } else if (Date.now() - approachMarkedAt >= approach.windowMs) {
+          stopWith('no_approach', `no approach for ${approach.windowMs} ms`)
+        }
       }
     }, STALL_CHECK_MS)
   })
@@ -247,9 +295,23 @@ async function gotoGoal (bot, goal, timeoutMs = PATH_TIMEOUT_MS, { failFast = nu
     clearTimeout(timer)
     clearInterval(stallCheck)
     signal?.removeEventListener('abort', onAbort)
+    bot.removeListener?.('path_update', onPathUpdate)
+    bot.removeListener?.('path_reset', onPathReset)
   }
+  if (approach) closest = Math.min(closest, distanceToTarget())
+
   const feet = bot.entity.position.floored()
-  return goal.isEnd(feet) || goal.isEnd(feet.offset(0, 1, 0))
+  const reached = goal.isEnd(feet) || goal.isEnd(feet.offset(0, 1, 0))
+  let end = ownEnd ?? 'ended'
+  if (reached) end = 'reached'
+  else if (lastStatus === 'noPath') end = 'no_path'
+  else if (lastStatus === 'timeout') end = 'path_timeout'
+  return { reached, end, start, closest, resets, thinkMs: Math.round(thinkMs), ms: Date.now() - startedAt }
+}
+
+// gotoGoalDetailed, reduced to: true when the bot ends inside the goal.
+async function gotoGoal (bot, goal, timeoutMs = PATH_TIMEOUT_MS, opts = {}) {
+  return (await gotoGoalDetailed(bot, goal, timeoutMs, opts)).reached
 }
 
 // --- Drops and pickup ------------------------------------------------------
@@ -370,6 +432,7 @@ module.exports = {
   findNearestExposedBlock,
   freeSlots,
   gotoGoal,
+  gotoGoalDetailed,
   hasAirNeighbour,
   heldOutsideInventory,
   inventoryCounts,

@@ -6,16 +6,19 @@ const { createUnreachableMemory } = require('../../lib/targets')
 const { fakeWorldBot } = require('./world_fixture')
 
 // A bot over a flat floor with coal at the given y 10 positions, whose
-// pathfinder never arrives. With `drifts` it keeps moving, so only the
-// attempt timeout (not the stall check) can end an attempt.
-function stuckBot (coal, { drifts = false } = {}) {
+// pathfinder never arrives. With `drifts` it keeps moving sideways, so the
+// stall check cannot end an attempt, only the approach rule. With `noPath` the
+// search reports noPath on an empty path and goto resolves at once.
+function stuckBot (coal, { drifts = false, noPath = false } = {}) {
   const blocks = {}
   for (let x = -5; x <= 80; x++) for (let z = -30; z <= 30; z++) blocks[`${x},9,${z}`] = 'stone'
   for (const [x, z] of coal) blocks[`${x},10,${z}`] = 'coal_ore'
   const bot = fakeWorldBot(blocks)
   bot.listeners = new Set()
-  bot.on = (event, fn) => bot.listeners.add(fn)
-  bot.removeListener = (event, fn) => bot.listeners.delete(fn)
+  bot.on = (event, fn) => bot.listeners.add({ event, fn })
+  bot.removeListener = (event, fn) => {
+    for (const entry of bot.listeners) if (entry.event === event && entry.fn === fn) bot.listeners.delete(entry)
+  }
   bot.dig = async () => {}
   bot.inventory = { slots: [], items: () => [] }
   bot.heldItem = null
@@ -25,7 +28,11 @@ function stuckBot (coal, { drifts = false } = {}) {
     setGoal () {},
     goto: () => {
       bot.pathfinder.goals++
-      if (drifts) setInterval(() => { bot.entity.position = bot.entity.position.offset(2, 0, 0) }, 500)
+      if (drifts) setInterval(() => { bot.entity.position = bot.entity.position.offset(0, 0, 2) }, 500)
+      if (noPath) {
+        for (const { event, fn } of bot.listeners) if (event === 'path_update') fn({ status: 'noPath', path: [], time: 5 })
+        return Promise.resolve()
+      }
       return new Promise(() => {})
     }
   }
@@ -63,16 +70,17 @@ test('a stuck v2 mine tries four candidates, giving up on each after the stall t
   assert.deepEqual(reply.target, { x: 40, y: 10, z: 0 })
   assert.ok(elapsedMs >= 4 * 4000 && elapsedMs < 4 * 4000 + 1500, `took ${elapsedMs} ms`)
   assert.equal(sess.episode.skippedTargets.size, 4)
-  assert.equal(sess.unreachable.has(bot, new Vec3(10, 10, 0)), true)
-  assert.equal(sess.unreachable.has(bot, new Vec3(50, 10, 0)), false)
+  assert.equal(sess.unreachable.has(bot, new Vec3(10, 10, 0)), false) // stalled: this episode only
+  assert.deepEqual(reply.reach.attempts.map((a) => a.end), ['stalled', 'stalled', 'stalled', 'stalled'])
 })
 
-test('a v2 mine that keeps moving is cut off by the per-attempt and per-call time caps', async (t) => {
+test('a v2 mine that keeps moving without getting closer ends each attempt after the approach window', async (t) => {
   const bot = stuckBot([[10, 0], [20, 0], [30, 0], [40, 0], [50, 0]], { drifts: true })
   const { reply, elapsedMs } = await runMocked(t, bot, session())
   assert.equal(reply.error, 'unreachable')
   assert.ok(bot.pathfinder.goals <= 4)
-  assert.ok(elapsedMs >= 3 * 11000 && elapsedMs <= 36000 + 1000, `took ${elapsedMs} ms`)
+  assert.equal(reply.reach.reason, 'no_approach')
+  assert.ok(elapsedMs >= 4 * 10000 && elapsedMs <= 4 * 10000 + 2000, `took ${elapsedMs} ms`)
 })
 
 test('candidates in the same pocket as a failed one are not tried in the same call', async (t) => {
@@ -83,7 +91,7 @@ test('candidates in the same pocket as a failed one are not tried in the same ca
 })
 
 test('a later call skips the targets an earlier call found unreachable', async (t) => {
-  const bot = stuckBot([[10, 0], [20, 0]])
+  const bot = stuckBot([[10, 0], [20, 0]], { noPath: true })
   const sess = session()
   await runMocked(t, bot, sess)
   sess.episode.skippedTargets.clear() // a new episode
