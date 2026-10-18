@@ -189,7 +189,7 @@ class Episode:
         )
         self.log.event("episode_end", **result.to_dict())
         if result.success:
-            reached = "Exploration done." if self.task.goal_item == EXPLORE_GOAL else f"Goal reached: {self.task.goal_count} {self.task.goal_item}."
+            reached = "Exploration done." if self.task.goal_item == EXPLORE_GOAL else f"Goal reached: {self.task.goal_count} {self.task.goal_item.replace('#', '')}."
             self.backend.say(reached)
         return result
 

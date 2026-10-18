@@ -14,6 +14,7 @@ const VERDICT_TEXT = {
 };
 const CHANGE_NOTE = "the world's rules changed here (hidden from the agent)";
 const RECENT_CERTIFIED = 5;
+const RECENT_GOALS = 10; // the strip keeps this many goals (and the shown one) readable; older ones shrink to a dot
 
 // --- State of one goal ---------------------------------------------------------
 
@@ -75,7 +76,7 @@ function goalStory(events) {
   ];
 
   if (story.running) story.focus = { phase: 'testing', hypothesis: story.running, step: null };
-  else if (lastStep) story.focus = { phase: 'result', hypothesis: starts.get(lastStep.index) || { rule: lastStep.rule }, step: lastStep };
+  else if (lastStep) story.focus = { phase: 'result', hypothesis: { rule: lastStep.rule, action: lastStep.action, ...starts.get(lastStep.index) }, step: lastStep };
   else if (remaining.length) story.focus = { phase: 'next', hypothesis: remaining[0], step: null };
   return story;
 }
@@ -159,6 +160,69 @@ function lifeOverview(lifeRows, changes, story, episodes) {
   };
 }
 
+// --- The latest world change -----------------------------------------------------
+
+// How one entry of changes.jsonl played out, from the events of every goal since:
+// where the agent caught it, what Claude proposed and how many calls that took, the
+// first match of the revised rule and its certification (each possibly goals later).
+// `goals` is [{ index, events }]; events after `now` have not happened yet.
+function changeStory(change, goals, now) {
+  const family = `${change.action}_${change.subject}`;
+  const story = { change, caught: null, top: null, calls: 0, tokens: 0, recovered: null, certified: null };
+  const ordered = [...goals].sort((a, b) => a.index - b.index);
+  for (const goal of ordered) {
+    for (const event of goal.events) {
+      if (event.t < change.t || event.t > now) continue;
+      const inFamily = ruleFamily(event.rule) === family;
+      if (event.kind === 'contradiction' && !story.caught && inFamily) {
+        story.caught = {
+          goal: goal.index,
+          step: Number(String(event.transition).split('/').pop()),
+          expected: event.predicted ? effectsLine(decisiveEffect(event.predicted)) : event.detail,
+          got: event.observed ? effectsLine(decisiveEffect(event.observed)) : 'nothing'
+        };
+      } else if (event.kind === 'revision' && story.caught && inFamily) {
+        story.calls += 1;
+        story.tokens += event.tokens || 0;
+        story.top = story.top || event.hypotheses.find((hypothesis) => hypothesis.kept) || event.hypotheses[0] || null;
+      } else if (event.kind === 'step' && story.caught && !story.recovered && inFamily && isRevision(event.rule) && event.check === 'match') {
+        story.recovered = { goal: goal.index, action: event.action };
+      } else if (event.kind === 'certified' && story.recovered && !story.certified) {
+        const revised = event.rules.filter((rule) => isRevision(rule) && ruleFamily(rule) === family);
+        if (revised.length) story.certified = { goal: goal.index, rules: revised };
+      }
+    }
+  }
+  return story;
+}
+
+// The newest change in full, the earlier ones as one line each. Empty before the first change.
+function worldChangesHtml(stories) {
+  if (!stories.length) return '';
+  const latest = stories[stories.length - 1];
+  const caught = latest.caught;
+  const stages = [
+    ['CAUGHT', caught && `goal ${caught.goal} · step ${caught.step} · expected <span>${say(caught.expected)}</span>, got <span class="differs">${say(caught.got)}</span>`, 'the agent has not run into it yet'],
+    ['CLAUDE', latest.top && `${say(latest.top.summary || ruleLabel(latest.top.rule))} <small>${plural(latest.calls, 'call')} · ${formatNumber(latest.tokens)} tokens</small>`, 'no revision yet'],
+    ['RECOVERED', latest.recovered && `goal ${latest.recovered.goal} · ${say(latest.recovered.action)} matched the revised rule`, 'the revised rule has not matched yet'],
+    ['CERTIFIED', latest.certified && `goal ${latest.certified.goal} · ${say(latest.certified.rules.join(', '))}`, 'not certified yet']
+  ];
+  const rows = stages.map(([name, text, waiting]) => `
+    <li class="${text ? 'done' : 'todo'}"><b>${name}</b><span>${text || waiting}</span></li>`);
+  const earlier = stories.slice(0, -1).reverse().map((story) => `
+    <li title="${esc(describeWorldChange(story.change))}">
+      <span>⚡ ${esc(describeWorldChange(story.change))}</span>
+      <span class="stages">${['caught', 'recovered', 'certified'].map((name) => `<i class="${story[name] ? 'done' : ''}">${story[name] ? `✓ ${name} g${story[name].goal}` : `… ${name}`}</i>`).join('')}</span>
+    </li>`);
+  return `
+    <section class="change-card">
+      <div class="change-head"><b>⚡ LATEST WORLD CHANGE</b><span>hidden from the agent</span></div>
+      <div class="change-what">${esc(describeWorldChange(latest.change))}</div>
+      <ol class="change-stages">${rows.join('')}</ol>
+      ${earlier.length ? `<ul class="change-earlier">${earlier.join('')}</ul>` : ''}
+    </section>`;
+}
+
 // --- Rendering -----------------------------------------------------------------
 
 // `outcome` is the goal's row in life.jsonl once it has ended, else null.
@@ -201,16 +265,18 @@ function hypothesisHtml(story) {
   const focus = story.focus;
   if (!focus) return `${cardHead('HYPOTHESIS')}<p class="empty">Nothing under test yet.</p>`;
   const hypothesis = focus.hypothesis;
+  const step = focus.step;
   const label = { testing: 'TESTING NOW', result: 'LAST TEST', next: 'NEXT TO TEST' }[focus.phase];
-  const claim = hypothesis.predicts || (focus.step && focus.step.predicted ? effectsLine(focus.step.predicted) : null);
-  const counted = Number.isInteger(hypothesis.confirmed) && Number.isInteger(hypothesis.needed);
+  const prediction = hypothesis.predicts
+    ? hypothesis.predicts.split('->').pop().trim()
+    : (step && step.predicted ? effectsLine(decisiveEffect(step.predicted)) : '');
+  const confirmations = confirmationText(hypothesis);
   const meta = [
     hypothesis.status ? `<span class="pill ${esc(hypothesis.status)}">${esc(hypothesis.status)}</span>` : '',
-    counted ? `<span class="count">${hypothesis.confirmed}/${hypothesis.needed} confirmed</span>` : '',
+    confirmations ? `<span class="count">${esc(confirmations)}</span>` : '',
     hypothesis.experimental ? '<span class="pill experiment">experiment</span>' : '',
     hypothesis.rule ? `<code>${say(hypothesis.rule)}</code>` : ''
   ].join('');
-  const step = focus.step;
   const observed = step && step.ok ? (step.observed || (step.action_obj && observedEffects(step))) : null;
   const predicted = step && step.predicted && step.check ? step.predicted : null;
   const outcome = step ? `
@@ -223,10 +289,21 @@ function hypothesisHtml(story) {
   return `
     <div class="hyp ${focus.phase}">
       <div class="hyp-label">${label}</div>
-      <div class="hyp-claim">${say(claim || hypothesis.rule || 'no rule recorded')}</div>
+      <div class="hyp-claim">${say(hypothesis.action || hypothesis.rule || 'no rule recorded')}</div>
+      ${prediction ? `<div class="hyp-prediction">→ ${say(prediction)}</div>` : ''}
       <div class="hyp-meta">${meta}</div>
       ${outcome}
     </div>`;
+}
+
+// Certification needs `needed` confirmations in `goals_needed` distinct goals. A rule that
+// is certified says so (its pill); otherwise "1 of 2 confirmations · in 1 of 2 goals".
+// Counts past the need are capped, so a hypothesis never reads "6/2 confirmed".
+function confirmationText(hypothesis) {
+  if (hypothesis.status === 'certified' || !Number.isInteger(hypothesis.confirmed) || !Number.isInteger(hypothesis.needed)) return '';
+  const confirmations = `${Math.min(hypothesis.confirmed, hypothesis.needed)} of ${hypothesis.needed} confirmations`;
+  if (!Number.isInteger(hypothesis.goals) || !Number.isInteger(hypothesis.goals_needed)) return confirmations;
+  return `${confirmations} · in ${Math.min(hypothesis.goals, hypothesis.goals_needed)} of ${hypothesis.goals_needed} goals`;
 }
 
 // One line for an effects object: "drops coal ×1", "inventory +4 stick".
@@ -275,14 +352,19 @@ function revisionHtml(story) {
 }
 
 function overviewHtml(overview) {
+  const chips = overview.timeline.filter((item) => item.type === 'chip');
+  const readableFrom = chips.length - RECENT_GOALS;
   const items = overview.timeline.map((item) => {
     if (item.type === 'change') {
-      return `<li class="world-change" title="${esc(CHANGE_NOTE)}"><b>⚡ WORLD CHANGED</b><span>${esc(describeWorldChange(item.change))}</span></li>`;
+      return `<li class="world-change" title="${esc(describeWorldChange(item.change))}"><b>⚡</b><span>${say(item.change.subject)}</span></li>`;
     }
     const chip = item.chip;
-    const classes = ['chip', chip.outcome, chip.shown ? 'shown' : '', chip.later ? 'later' : '', chip.path ? 'link' : ''];
+    const compact = chips.indexOf(item) < readableFrom && !chip.shown;
+    const classes = ['chip', chip.outcome, compact ? 'compact' : '', chip.shown ? 'shown' : '', chip.later ? 'later' : '', chip.path ? 'link' : ''];
+    const attributes = `class="${classes.join(' ')}" ${chip.path ? `data-path="${esc(chip.path)}"` : ''} title="goal ${chip.index}: ${esc(readable(chip.label))} (${esc(chip.outcome)})"`;
+    if (compact) return `<li ${attributes}></li>`;
     const minute = item.minute === null ? '' : `<i>${item.minute}m</i>`;
-    return `<li class="${classes.join(' ')}" ${chip.path ? `data-path="${esc(chip.path)}"` : ''} title="goal ${chip.index}: ${esc(readable(chip.label))} (${esc(chip.outcome)})">${minute}<b>${chip.index}</b><span>${say(chip.label)}</span></li>`;
+    return `<li ${attributes}>${minute}<b>${chip.index}</b><span>${say(chip.label)}</span></li>`;
   });
   const recent = overview.certifiedNames.slice(-RECENT_CERTIFIED).reverse();
   return `

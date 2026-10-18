@@ -15,7 +15,7 @@ from .episode import Episode
 from .llm import LLM, LLMError
 from .models import Action, EpisodeResult, Outcome, Rule, Skill
 from .planner import PlanningError, PlanStep, make_plan
-from .schema_store import MIN_CONFIRMATIONS, SchemaStore, Transition, applies
+from .schema_store import MIN_CONFIRMATIONS, MIN_EPISODES, SchemaStore, Transition, applies
 from .tasks import CRAFTABLE_ITEMS, MINEABLE_BLOCKS
 from .verifier import Check, check, predict
 
@@ -227,7 +227,7 @@ def _learning_messages(lines: list[str], limit: int = 240) -> list[str]:
 def _say(episode: Episode, messages: list[str]) -> None:
     """One burst of chat: at most 3 messages of 240 characters."""
     for message in messages[:MAX_CHAT_MESSAGES]:
-        episode.backend.say(message[:MAX_CHAT_CHARS])
+        episode.backend.say(message.replace("#", "")[:MAX_CHAT_CHARS])  # `#planks` reads as "planks" in chat
 
 
 def _deviates(episode: Episode, outcome: Outcome, step: PlanStep, remaining: list[PlanStep]) -> bool:
@@ -298,14 +298,16 @@ def _goal_line(task: Task, plan: list[PlanStep]) -> str:
     if untested is None:
         return f"{goal} (all rules known)"
     action = untested.action
-    tested = f"{_plain(action.target or '')} with {action.tool}" if action.kind == "mine" and action.tool else action.describe()
+    tested = f"{_plain(action.target or '')} with {action.tool}" if action.kind == "mine" and action.tool else _plain(action.describe())
     return f"{goal}, to test {tested}"
 
 
 def _rule_story(store: SchemaStore, step: PlanStep) -> dict:
     """What the stage shows about the rule a step tests."""
+    confirmed = store.replay(step.rule)[0]
     return {
-        "status": step.rule.status, "confirmed": len(store.replay(step.rule)[0]), "needed": MIN_CONFIRMATIONS,
+        "status": step.rule.status, "confirmed": len(confirmed), "needed": MIN_CONFIRMATIONS,
+        "goals": len({t.episode_id for t in confirmed}), "goals_needed": MIN_EPISODES,
         "predicts": _predicts(step.rule, step.action)[:MAX_PREDICTS_CHARS],
     }
 
@@ -325,7 +327,7 @@ def _predicts(rule: Rule, action: Action | None = None) -> str:
 
 
 def _plain(item: str) -> str:
-    return item.lstrip("#")
+    return item.replace("#", "")
 
 
 def _counts_text(counts: dict[str, int]) -> str:

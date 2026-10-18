@@ -5,7 +5,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import vm from 'node:vm';
-import { changes, goalThreeEvents, lifeRows } from './life-fixture.mjs';
+import { changes, goalThreeEvents, laterGoalEvents, lifeRows, planksChange } from './life-fixture.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const V2_DIR = '/Users/luiz/Developer/crusoe-hackathon/sv2/runs/demo-v2-live/episodes';
@@ -24,7 +24,7 @@ function load(source) {
     URLSearchParams
   };
   vm.createContext(context);
-  vm.runInContext(`${source}\nthis.api = { logLine, readable: typeof readable === "function" ? readable : null, stepLogLine, stateAt, episodeHtml, stepHtml, goalStory: typeof goalStory === "function" ? goalStory : null, lifeOverview: typeof lifeOverview === "function" ? lifeOverview : null, goalCardHtml: typeof goalCardHtml === "function" ? goalCardHtml : null, hypothesisHtml: typeof hypothesisHtml === "function" ? hypothesisHtml : null, revisionHtml: typeof revisionHtml === "function" ? revisionHtml : null, lifePlanHtml: typeof lifePlanHtml === "function" ? lifePlanHtml : null, overviewHtml: typeof overviewHtml === "function" ? overviewHtml : null };`, context);
+  vm.runInContext(`${source}\nthis.api = { logLine, readable: typeof readable === "function" ? readable : null, stepLogLine, stateAt, episodeHtml, stepHtml, goalStory: typeof goalStory === "function" ? goalStory : null, lifeOverview: typeof lifeOverview === "function" ? lifeOverview : null, goalCardHtml: typeof goalCardHtml === "function" ? goalCardHtml : null, changeStory: typeof changeStory === "function" ? changeStory : null, worldChangesHtml: typeof worldChangesHtml === "function" ? worldChangesHtml : null, hypothesisHtml: typeof hypothesisHtml === "function" ? hypothesisHtml : null, revisionHtml: typeof revisionHtml === "function" ? revisionHtml : null, lifePlanHtml: typeof lifePlanHtml === "function" ? lifePlanHtml : null, overviewHtml: typeof overviewHtml === "function" ? overviewHtml : null };`, context);
   return context.api;
 }
 
@@ -101,8 +101,9 @@ const rowStates = (story) => plain(story.rows.map((row) => `${row.state}:${row.v
 let story = storyAt(upTo('step_start', 1));
 assert.deepEqual(rowStates(story), ['running:', 'todo:']);
 assert.equal(story.focus.phase, 'testing');
-assert.match(now.hypothesisHtml(story), /coal_ore with wooden_pickaxe -&gt; 1 coal/);
-assert.match(now.hypothesisHtml(story), /certified<\/span><span class="count">3\/2 confirmed.*experiment/);
+assert.match(now.hypothesisHtml(story), /hyp-claim">mine coal_ore with wooden_pickaxe<[\s\S]*hyp-prediction">→ 1 coal</);
+assert.match(now.hypothesisHtml(story), /pill certified">certified<\/span><span class="pill experiment">experiment/);
+assert.doesNotMatch(now.hypothesisHtml(story), /confirmations|confirmed/);
 assert.equal(now.revisionHtml(story), '');
 assert.match(now.goalCardHtml(story, null), /GOAL 3[\s\S]*Get 4 torch[\s\S]*2 steps, 2 rules still to test/);
 
@@ -161,6 +162,57 @@ assert.match(now.goalCardHtml(oldStory, null), /Get 5 torch/);
 assert.match(now.lifePlanHtml(now.goalStory(g009.slice(0, 3))), /craft torch/);
 const oldFull = now.goalStory(g009);
 assert.equal(oldFull.rows.filter((row) => row.state === 'todo').length, 0);
+
+// confirmation wording: certified rules say so, hypotheses count toward both needs
+const hyp = (fields) => now.hypothesisHtml({ focus: { phase: 'testing', hypothesis: { action: 'mine log with hand', rule: 'r', status: 'hypothesis', ...fields }, step: null } });
+assert.match(hyp({ confirmed: 1, needed: 2, goals: 1, goals_needed: 2 }), /1 of 2 confirmations · in 1 of 2 goals/);
+assert.match(hyp({ confirmed: 6, needed: 2, goals: 1, goals_needed: 2 }), /2 of 2 confirmations · in 1 of 2 goals/);
+assert.match(hyp({ confirmed: 1, needed: 2 }), /1 of 2 confirmations</);
+assert.doesNotMatch(hyp({ confirmed: 6, needed: 2, goals: 1, goals_needed: 2 }), /6\/2|confirmed/);
+assert.doesNotMatch(hyp({ status: 'certified', confirmed: 6, needed: 2, goals: 2, goals_needed: 2 }), /confirmations/);
+assert.doesNotMatch(hyp({}), /confirmations/);
+
+// the world-change card outlives the goal that hit the change
+const T_END = 1_800_000_000 + 1000;
+const goalThreeToRecovery = goalThreeEvents.slice(0, goalThreeEvents.findIndex((event) => event.kind === 'certified'));
+const r2 = changes[1];
+let card = now.changeStory(r2, [{ index: 3, events: goalThreeToRecovery }], T_END);
+assert.deepEqual(plain([card.caught.goal, card.caught.step, card.caught.expected, card.caught.got, card.calls, card.tokens]), [3, 1, 'drops coal ×1', 'drops nothing', 1, 2800]);
+assert.equal(card.top.summary, 'coal ore needs a stone pickaxe or better');
+assert.equal(card.recovered.goal, 3);
+assert.equal(card.certified, null);
+card = now.changeStory(r2, [{ index: 3, events: goalThreeToRecovery }, { index: 4, events: laterGoalEvents }], T_END);
+assert.deepEqual(plain(card.certified), { goal: 4, rules: ['mine_coal_ore.rev1@life-1-20261017-1800'] });
+assert.equal(now.changeStory(r2, [{ index: 3, events: goalThreeToRecovery }], r2.t + 5).caught, null, 'nothing is known before it happens');
+const cardHtml = now.worldChangesHtml([now.changeStory(r2, [{ index: 3, events: goalThreeToRecovery }, { index: 4, events: laterGoalEvents }], T_END)]);
+assert.match(cardHtml, /LATEST WORLD CHANGE[\s\S]*coal ore now drops coal only for a stone-tier pickaxe[\s\S]*CAUGHT[\s\S]*goal 3 · step 1[\s\S]*expected <span>drops coal ×1<\/span>, got <span class="differs">drops nothing[\s\S]*1 call · 2,800 tokens[\s\S]*RECOVERED[\s\S]*CERTIFIED[\s\S]*goal 4/);
+assert.doesNotMatch(cardHtml, /change-earlier/);
+// the next change fires: it takes the card, the finished one becomes a line
+const pending = now.worldChangesHtml([card, now.changeStory(planksChange, [], T_END)]);
+assert.equal((pending.match(/class="change-card"/g) || []).length, 1);
+assert.match(pending, /change-what">planks \(any wood\): a log now makes 2 planks instead of 4[\s\S]*the agent has not run into it yet/);
+assert.match(pending, /change-earlier[\s\S]*coal ore now drops coal only for a stone-tier pickaxe[\s\S]*✓ caught g3[\s\S]*✓ recovered g3[\s\S]*✓ certified g4/);
+
+// a 30-minute life: 60 goals in one row, the last ten and the running goal readable
+const longRows = Array.from({ length: 59 }, (_, i) => ({ ...lifeRows[0], index: i + 1, started: lifeRows[0].started + i * 30, ended: lifeRows[0].started + i * 30 + 29, outcome: i % 7 === 0 ? 'failed' : 'success', certified_now: [] }));
+const longStory = { ...story, goal: { ...story.goal, index: 60, t: longRows[58].ended + 1 }, end: null, lastT: longRows[58].ended + 30, certifiedRules: [] };
+const longStrip = now.overviewHtml(now.lifeOverview(longRows, changes, longStory, []));
+assert.equal((longStrip.match(/class="chip /g) || []).length, 60);
+assert.equal((longStrip.match(/class="chip [^"]*compact/g) || []).length, 50);
+assert.match(longStrip, /class="chip running[^"]*shown/);
+assert.equal((longStrip.match(/class="world-change"/g) || []).length, 2);
+assert.match(longStrip, /RULES CERTIFIED/);
+
+// no # on screen: every piece of rendered text, with the fixture's group names in it
+const everything = [
+  now.goalCardHtml(story, lifeRows[0]), now.hypothesisHtml(story), now.revisionHtml(story), now.lifePlanHtml(story),
+  now.overviewHtml(now.lifeOverview(lifeRows, [...changes, planksChange], story, episodes)), pending, longStrip,
+  now.hypothesisHtml(now.goalStory([{ t: 1, kind: 'goal', index: 1, item: '#planks', count: 1, reason: 'craft #planks' }, { t: 2, kind: 'step_start', index: 1, action: 'craft #planks', rule: 'craft_#planks', predicts: '1 #log -> 4 #planks' }])),
+  now.revisionHtml({ mismatch: { rule: 'craft_#planks', predicted: { inventory_delta: { '#planks': 4 } }, observed: { inventory_delta: { '#planks': 2 } } }, hypotheses: [{ kept: true, summary: 'craft #planks -> 2 #planks' }], recovered: null, certified: ['craft_#planks.rev1@life-1-x'] })
+];
+for (const html of everything) assert.doesNotMatch(html.replace(/&#39;/g, "'").replace(/<[^>]*>/g, ' '), /#/);
+assert.equal(now.readable('craft #planks changed (planks2)'), 'craft planks (any wood) changed (planks2)');
+assert.equal(now.readable('craft #stone_bricks'), 'craft stone_bricks');
 console.log('life view ok');
 console.log(`v1 ok: ${v1.length} events identical`);
 console.log('all panel tests passed');

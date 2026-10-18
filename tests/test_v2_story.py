@@ -12,9 +12,9 @@ from schema_voyager import agent, life
 from schema_voyager.agent import MAX_CHAT_CHARS, MAX_CHAT_MESSAGES, run_schemavoyager
 from schema_voyager.life import LifeHooks
 from schema_voyager.models import Action, Rule
-from schema_voyager.schema_store import MIN_CONFIRMATIONS
+from schema_voyager.schema_store import MIN_CONFIRMATIONS, MIN_EPISODES
 
-STORY_FIELDS = ("status", "confirmed", "needed", "predicts")
+STORY_FIELDS = ("status", "confirmed", "needed", "goals", "goals_needed", "predicts")
 
 
 def run_goal(tmp_path, goal, count=1, backend=None, families=None):
@@ -36,6 +36,7 @@ def test_step_start_comes_before_its_step_with_the_story_fields(tmp_path):
         assert start["action"] == step["action"] and start["rule"] == step["rule"]
         assert start["experimental"] is True and start["needed"] == MIN_CONFIRMATIONS
         assert start["status"] == "hypothesis" and start["confirmed"] == 0 and start["predicts"]
+        assert start["goals"] == 0 and start["goals_needed"] == MIN_EPISODES
 
 
 def test_plan_steps_carry_the_story_fields(tmp_path):
@@ -107,3 +108,8 @@ def test_chat_bursts_stay_within_the_limits(tmp_path):
     backend.said.clear()
     agent._say(episode, ["x" * 500] * 5)
     assert len(backend.said) == MAX_CHAT_MESSAGES
+
+
+def test_chat_has_no_hash_in_any_group_name(tmp_path):
+    _, backend = run_goal(tmp_path, "#planks", 1, families=("#planks", "#log"))
+    assert backend.said and not any("#" in m for m in backend.said)

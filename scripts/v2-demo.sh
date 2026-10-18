@@ -3,8 +3,11 @@
 # the trace panel. Works on one instance (SV2_INSTANCE, default a; for b set the four port
 # variables on the command line). It holds the instance lock (purpose demo) while it sets
 # up, then hands it to the life, which keeps it until it ends.
-#   v2-demo.sh [start] [--run <name>]   restore seed 1001 snapshot fresh, start the life + panel
-#   v2-demo.sh stop [--all] [--panel]   stop the life (SIGINT, so it saves); --all: v2-down.sh too
+#   v2-demo.sh [start] [--run <name>] [--fresh-panel]
+#                                       restore seed 1001 snapshot fresh, start the life + panel
+#                                       (--fresh-panel restarts the panel this script started)
+#   v2-demo.sh stop [--all] [--panel]   stop the life (SIGINT, so it saves); --all: v2-down.sh too;
+#                                       --panel: also stop the panel (by the pid in run/panel.pid)
 #   v2-demo.sh --rehearse N             N fresh lives back to back, in the foreground
 # Environment: SV2_DEMO_MINUTES (default 30), SV2_DEMO_CHANGE (default scramble: stick2,planks2,r2).
 set -euo pipefail
@@ -16,12 +19,13 @@ export SV2_SEED="${SV2_SEED:-1001}"
 LIFE_SCREEN="sv2-$SV2_INSTANCE-life"
 LIFE_PID_FILE="$RUN_DIR/life-$SV2_INSTANCE.pid"
 PANEL_SCREEN="sv2-panel"
-PANEL_PORT=8766
+PANEL_PID_FILE="$RUN_DIR/panel.pid"
+PANEL_PORT="${SV2_PANEL_PORT:-8766}"
 PANEL_PAGE="http://127.0.0.1:$PANEL_PORT/site/dist/trace.html"
 MINUTES="${SV2_DEMO_MINUTES:-30}"
 CHANGE="${SV2_DEMO_CHANGE:-scramble}"
 
-usage() { die "usage: v2-demo.sh [start] [--run <name>] | stop [--all] [--panel] | --rehearse N"; }
+usage() { die "usage: v2-demo.sh [start] [--run <name>] [--fresh-panel] | stop [--all] [--panel] | --rehearse N"; }
 
 # Stops this instance's life: SIGINT first so it saves its state, then SIGTERM, then kill.
 # Leaves no stale lock behind.
@@ -58,18 +62,43 @@ life_command() {
        "--minutes $MINUTES --seed $SV2_SEED --run-dir runs/$run --change '$CHANGE' --keep-going"
 }
 
-start_panel() {
-  if curl -fsS -m 2 -o /dev/null "$PANEL_PAGE" 2>/dev/null; then return 0; fi
+panel_answers() { curl -fsS -m 2 -o /dev/null "$PANEL_PAGE" 2>/dev/null; }
+
+# Stops the panel this script started. Quitting its screen alone leaves the Python
+# process listening, so the pid in run/panel.pid is what gets stopped.
+stop_panel() {
+  local pid; pid=$(pid_from_file "$PANEL_PID_FILE")
+  if pid_alive "$pid"; then
+    kill -TERM "$pid" 2>/dev/null || true
+    sv2_wait_until 5 bash -c "! kill -0 $pid" || kill -9 "$pid" 2>/dev/null || true
+  fi
   sv2_screen_exists "$PANEL_SCREEN" && screen -S "$PANEL_SCREEN" -X quit
-  screen -dmS "$PANEL_SCREEN" bash -c "cd '$SV2_HOME' && PYTHONPATH=src exec '$SV2_PYTHON' -m schema_voyager.demo panel --port $PANEL_PORT >> '$LOG_DIR/panel.log' 2>&1"
-  sv2_wait_until 15 curl -fsS -m 2 -o /dev/null "$PANEL_PAGE" || echo "warning: the panel did not answer in 15 s; see $LOG_DIR/panel.log" >&2
+  rm -f "$PANEL_PID_FILE"
+  return 0
+}
+
+# Reuses our panel when it is alive and answers; starts one when nothing answers; warns
+# (and leaves it alone) when a process that is not ours holds the port.
+start_panel() {
+  local fresh="$1" pid; pid=$(pid_from_file "$PANEL_PID_FILE")
+  if pid_alive "$pid" && panel_answers && [ "$fresh" = false ]; then return 0; fi
+  if pid_alive "$pid"; then stop_panel; else rm -f "$PANEL_PID_FILE"; fi
+
+  local holder; holder=$(listener_pids "$PANEL_PORT" | head -n 1)
+  if [ -n "$holder" ]; then
+    echo "warning: port $PANEL_PORT is held by pid $holder, which is not this script's panel; not starting another (stop pid $holder, or the page may be stale)" >&2
+    return 0
+  fi
+  screen -dmS "$PANEL_SCREEN" bash -c "echo \$\$ > '$PANEL_PID_FILE' && cd '$SV2_HOME' && PYTHONPATH=src exec '$SV2_PYTHON' -m schema_voyager.demo panel --port $PANEL_PORT >> '$LOG_DIR/panel.log' 2>&1"
+  sv2_wait_until 15 panel_answers || echo "warning: the panel did not answer in 15 s; see $LOG_DIR/panel.log" >&2
 }
 
 start() {
-  local run="demo-$(date +%Y%m%d-%H%M)" log_file
+  local run="demo-$(date +%Y%m%d-%H%M)" fresh_panel=false log_file
   while [ $# -gt 0 ]; do
     case "$1" in
       --run) run="${2:?--run needs a name}"; shift ;;
+      --fresh-panel) fresh_panel=true ;;
       *) usage ;;
     esac
     shift
@@ -95,7 +124,7 @@ start() {
   }
   sv2_wait_until 20 life_has_lock || { stop_life; die "the life did not take the lock in 20 s; see $log_file"; }
 
-  start_panel
+  start_panel "$fresh_panel"
   echo "panel:   http://localhost:$PANEL_PORT/site/dist/trace.html?run=$run&viewer=http://localhost:$SV2_VIEWER_PORT"
   echo "viewer:  http://localhost:$SV2_VIEWER_PORT"
   echo "log:     $log_file"
@@ -114,7 +143,7 @@ stop() {
     shift
   done
   stop_life
-  if $panel && sv2_screen_exists "$PANEL_SCREEN"; then screen -S "$PANEL_SCREEN" -X quit; fi
+  if $panel; then stop_panel; fi
   if $all; then "$SV2_HOME/scripts/v2-down.sh"; fi
   echo "life of instance $SV2_INSTANCE stopped"
 }
