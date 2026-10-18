@@ -9,6 +9,7 @@
 const { resyncWindow } = require('./world')
 
 const OPEN_WINDOW_TIMEOUT_MS = 5000
+const CLICK_TIMEOUT_MS = 3000
 
 // --- Pure helpers ------------------------------------------------------------
 
@@ -101,15 +102,19 @@ function withTimeout (promise, ms, message) {
 }
 
 // Runs fn(window, width) with the 2x2 player grid, or with `table` opened
-// as a 3x3 window; resyncs and closes the window afterwards.
+// as a 3x3 window. Afterwards the grid is emptied back into the inventory,
+// whether fn worked or not, and a table window is closed.
 async function withGridWindow (bot, table, fn) {
-  if (!table) return fn(bot.inventory, 2)
-  const window = await withTimeout(bot.openBlock(table), OPEN_WINDOW_TIMEOUT_MS, 'crafting table did not open')
+  const window = table
+    ? await withTimeout(bot.openBlock(table), OPEN_WINDOW_TIMEOUT_MS, 'crafting table did not open')
+    : bot.inventory
+  const width = table ? 3 : 2
   try {
-    return await fn(window, 3)
+    return await fn(window, width)
   } finally {
-    await resyncWindow(bot, window)
-    await bot.closeWindow(window)
+    await returnGridToInventory(bot, window, width * width).catch((err) =>
+      console.log(`warn: could not empty the crafting grid: ${err.message}`))
+    if (table) await bot.closeWindow(window)
   }
 }
 
@@ -131,11 +136,33 @@ async function fillGrid (bot, window, grid) {
   if (window.selectedItem) await bot.putSelectedItemRange(window.inventoryStart, window.inventoryEnd, window, null)
 }
 
-async function takeGridBack (bot, window, width) {
-  for (let slot = 1; slot <= width * width; slot++) {
-    if (window.slots[slot]) await bot.putAway(slot)
+// Resyncs `window` (so the stacks seen are the server's), then moves what is
+// in its first `cells` grid slots and on the cursor back into the inventory.
+// `window` must be the window the bot has open (bot.currentWindow or the
+// player window).
+async function returnGridToInventory (bot, window, cells) {
+  await resyncWindow(bot, window)
+  for (let slot = 1; slot <= cells; slot++) {
+    if (window.slots[slot]) await withTimeout(bot.putAway(slot), CLICK_TIMEOUT_MS, `slot ${slot} did not empty`)
   }
   if (window.selectedItem) await bot.putSelectedItemRange(window.inventoryStart, window.inventoryEnd, window, null)
+  await resyncWindow(bot, window)
+}
+
+// Empties every crafting grid the bot may have left items in: the table
+// window if one is open (then closed), and the 2x2 grid of the player window,
+// which is never closed and so keeps what Mineflayer's craft stranded there.
+async function clearCraftingGrids (bot) {
+  try {
+    const open = bot.currentWindow
+    if (open) {
+      if (open.type.startsWith('minecraft:crafting')) await returnGridToInventory(bot, open, 9)
+      await bot.closeWindow(open)
+    }
+    await returnGridToInventory(bot, bot.inventory, 4)
+  } catch (err) {
+    console.log(`warn: could not clear the crafting grid: ${err.message}`)
+  }
 }
 
 function outputOf (window) {
@@ -143,22 +170,18 @@ function outputOf (window) {
   return item ? { item: item.name, count: item.count } : null
 }
 
-// Fills the grid, reads the server's output slot after a resync, takes
-// everything back. Returns {output}.
+// Fills the grid and reads the server's output slot after a resync; the grid
+// is emptied again by withGridWindow. Returns {output}.
 async function probeGrid (bot, table, grid) {
   return withGridWindow(bot, table, async (window) => {
-    try {
-      await fillGrid(bot, window, grid)
-      await resyncWindow(bot, window)
-      return { output: outputOf(window) }
-    } finally {
-      await takeGridBack(bot, window, grid.length)
-    }
+    await fillGrid(bot, window, grid)
+    await resyncWindow(bot, window)
+    return { output: outputOf(window) }
   })
 }
 
-// One run of a mixed-variant recipe: fills the grid, takes the output and
-// whatever is left in the grid. Throws if the server does not make the item.
+// One run of a mixed-variant recipe: fills the grid and takes the output; what
+// is left in the grid goes back to the inventory. Throws if the server does not make the item.
 async function craftMixedOnce (bot, table, itemName) {
   return withGridWindow(bot, table, async (window, width) => {
     const plan = planMixedGrid(bot, bot.registry.itemsByName[itemName].id)
@@ -167,16 +190,12 @@ async function craftMixedOnce (bot, table, itemName) {
     await fillGrid(bot, window, plan.grid)
     await resyncWindow(bot, window)
     const output = outputOf(window)
-    if (output?.item !== itemName) {
-      await takeGridBack(bot, window, plan.grid.length)
-      throw new Error(`the server made ${output ? output.item : 'nothing'} from the mixed grid`)
-    }
+    if (output?.item !== itemName) throw new Error(`the server made ${output ? output.item : 'nothing'} from the mixed grid`)
     await bot.putAway(0)
-    await takeGridBack(bot, window, plan.grid.length)
   })
 }
 
 module.exports = {
-  assignGrid, craftMixedOnce, gridOf, gridSlotIndex, planMixedGrid, probeGrid,
+  assignGrid, clearCraftingGrids, craftMixedOnce, gridOf, gridSlotIndex, planMixedGrid, probeGrid,
   recipeSlots, slotAlternatives, withTimeout
 }
