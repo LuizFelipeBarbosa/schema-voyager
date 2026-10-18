@@ -13,6 +13,9 @@ const { toss, validateToss } = require('./lib/toss')
 const { createUnreachableMemory, look } = require('./lib/targets')
 const { attachEventTracker, createEventLog } = require('./lib/events')
 const { attachChatCommands } = require('./lib/chat_commands')
+const { attachSurvival } = require('./lib/survival')
+const { MODES, createGuard } = require('./lib/guard')
+const { createActionLock } = require('./lib/action_lock')
 const { DIRECTIONS } = require('./lib/geometry')
 const { hasOpenSky } = require('./lib/sky')
 const { nearbyEntities } = require('./lib/entities')
@@ -43,6 +46,12 @@ let connected = false
 // tracker and the border follow the current bot.
 const eventLog = createEventLog()
 let tracker = null
+let survival = null
+// The guard's mode outlives reconnects; the guard follows the current bot.
+let guardMode = process.env.BOT_GUARD || 'defend'
+let guard = null
+let pvpMovements = null
+const GUARD_TICK_EVERY = 4 // physics ticks
 let worldBorder = null
 // Mine targets that could not be reached; kept across episodes and reconnects.
 const unreachable = createUnreachableMemory()
@@ -70,12 +79,18 @@ function connect () {
   })
   bot = current
   current.loadPlugin(pathfinder)
+  current.loadPlugin(require('mineflayer-pvp').plugin)
+  survival = attachSurvival(current, eventLog)
+  const currentGuard = createGuard(current, { eventLog, mode: guardMode, movements: () => pvpMovements })
+  guard = currentGuard
   tracker = attachEventTracker(current, eventLog)
   worldBorder = trackWorldBorder(current._client)
 
   current.once('spawn', () => {
     connected = true
-    current.pathfinder.setMovements(worldPreservingMovements(current))
+    pvpMovements = worldPreservingMovements(current)
+    current.pathfinder.setMovements(pvpMovements)
+    current.pvp.movements = pvpMovements
     if (!episode.origin) episode.origin = current.entity.position.clone()
     startViewer(current)
     log(`spawned at ${JSON.stringify(positionOf(current))}`)
@@ -88,8 +103,18 @@ function connect () {
   current.on('kicked', (reason) => log(`kicked: ${JSON.stringify(reason)}`))
   current.on('error', (err) => log(`bot error: ${err.message}`))
   attachChatCommands(current, eventLog)
+  let physicsTicks = 0
+  current.on('physicsTick', () => {
+    if (!connected || ++physicsTicks % GUARD_TICK_EVERY !== 0) return
+    try {
+      actionLock.onTick(currentGuard.mode === 'off' ? null : currentGuard.check())
+    } catch (err) {
+      log(`guard tick failed: ${err.stack}`)
+    }
+  })
   current.once('end', (reason) => {
     connected = false
+    currentGuard.dispose()
     if (current.viewer) current.viewer.close()
     viewerControl.detach(current)
     log(`disconnected (${reason}); reconnecting in ${RECONNECT_DELAY_MS / 1000} s`)
@@ -126,7 +151,7 @@ function startViewer (current) {
     return
   }
   const heartbeat = setInterval(() => {
-    if (connected && !busy && current.entity) current.emit('move', current.entity.position.clone())
+    if (connected && actionLock.busyDetail() === null && current.entity) current.emit('move', current.entity.position.clone())
   }, VIEWER_HEARTBEAT_MS)
   current.once('end', () => clearInterval(heartbeat))
 }
@@ -245,15 +270,17 @@ const validators = {
   chat: (body) => (typeof body.message === 'string' ? null : '"message" must be a string')
 }
 
-let busy = false
-
-function withTimeout (promise, ms) {
-  let timer = null
-  const timeout = new Promise((resolve, reject) => {
-    timer = setTimeout(() => reject(Object.assign(new Error(`action timed out after ${ms} ms`), { code: 'timeout' })), ms)
-  })
-  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer))
-}
+const actionLock = createActionLock({
+  eventLog,
+  interruptBot: () => interruptBot(),
+  stopForGuard: () => {
+    stopMoving(bot)
+    if (bot.targetDigBlock) bot.stopDigging()
+  },
+  guard: { respond: (found, options) => guard.respond(found, options) },
+  survival: { hold: () => survival.hold(), onIdleTick: () => survival.onIdleTick() },
+  reconnect: () => bot.quit()
+})
 
 // Answers `res` and writes the request's one log line.
 function responder (path, body, res) {
@@ -267,19 +294,21 @@ function responder (path, body, res) {
 // Registers a POST action: validation, one-at-a-time lock, connection check,
 // timeout (`timeoutMs`: a number, or a function of the body), the events of
 // the call added to the response, and one log line per request. The handler
-// gets the body and the session {episode, tracker, border}. A death during
-// the action ends it with `quarantined`.
-function action (path, validate, handler, { timeoutMs = ACTION_TIMEOUT_MS } = {}) {
+// gets the body and the session {episode, tracker, border, unreachable,
+// signal}. A death during the action ends it with `quarantined`; the guard
+// cuts into the `cutIn` ones (see lib/action_lock.js) and the answer is
+// `interrupted`.
+function action (path, validate, handler, { timeoutMs = ACTION_TIMEOUT_MS, cutIn = false } = {}) {
   app.post(path, async (req, res) => {
     const body = req.body || {}
     const respond = responder(path, body, res)
 
     const problem = validate(body)
     if (problem) return respond(400, { ok: false, error: 'bad_request', detail: problem })
-    if (busy) return respond(409, { ok: false, error: 'busy' })
+    const busyDetail = actionLock.busyDetail()
+    if (busyDetail !== null) return respond(409, { ok: false, error: 'busy', detail: busyDetail })
     if (!connected) return respond(200, { ok: false, error: 'not_connected' })
 
-    busy = true
     const startSeq = eventLog.lastSeq()
     const respondWithEvents = (payload) => respond(200, {
       ...payload,
@@ -287,27 +316,26 @@ function action (path, validate, handler, { timeoutMs = ACTION_TIMEOUT_MS } = {}
       events: eventLog.since(startSeq)
     })
     tracker.beginAction()
-    const death = tracker.rejectOnDeath()
     try {
-      const session = { episode, tracker, border: worldBorder, unreachable }
       const limitMs = typeof timeoutMs === 'function' ? timeoutMs(body) : timeoutMs
-      const running = Promise.resolve().then(() => handler(body, session))
-      respondWithEvents(await withTimeout(Promise.race([running, death.promise]), limitMs))
-    } catch (err) {
+      const session = { episode, tracker, border: worldBorder, unreachable }
+      const result = await actionLock.run({
+        path, cutIn, timeoutMs: limitMs, tracker, session, handler: (withSignal) => handler(body, withSignal)
+      })
       if (!connected) {
         respond(200, { ok: false, error: 'not_connected' })
-      } else if (err.code === 'quarantined') {
-        interruptBot()
-        respondWithEvents({ ok: false, error: 'quarantined', blocks_walked: walked() })
-      } else if (err.code === 'timeout') {
-        interruptBot()
-        respondWithEvents({ ok: false, error: 'timeout', blocks_walked: walked() })
+      } else if (result.kind === 'ok') {
+        respondWithEvents(result.payload)
+      } else if (result.kind === 'interrupted') {
+        respondWithEvents({
+          ok: false, error: 'interrupted', detail: { threat: result.threat, outcome: result.outcome }, blocks_walked: walked()
+        })
       } else {
-        respond(500, { ok: false, error: 'internal', detail: err.stack })
+        respondWithEvents({ ok: false, error: result.kind, blocks_walked: walked() })
       }
-    } finally {
-      death.dispose()
-      busy = false
+    } catch (err) {
+      if (!connected) respond(200, { ok: false, error: 'not_connected' })
+      else respond(500, { ok: false, error: 'internal', detail: err.stack })
     }
   })
 }
@@ -336,11 +364,26 @@ function status (req, res) {
     position: ready ? positionOf(bot) : null,
     nearby_entities: ready ? nearbyEntities(bot) : {},
     events: eventLog.since(body.since ?? 0),
-    last_seq: eventLog.lastSeq()
+    last_seq: eventLog.lastSeq(),
+    guard: guard ? guard.status() : { mode: guardMode, fighting: null }
   })
 }
 app.post('/status', status)
 app.get('/status', status)
+
+// Sets the guard's mode; doesn't take the action lock, and works without a bot.
+app.post('/guard', (req, res) => {
+  const body = req.body || {}
+  const respond = responder('/guard', body, res)
+  try {
+    if (guard) guard.setMode(body.mode)
+    else if (!MODES.includes(body.mode)) throw new Error(`unknown guard mode: ${body.mode}`)
+  } catch (err) {
+    return respond(400, { ok: false, error: 'bad_request', detail: err.message })
+  }
+  guardMode = body.mode
+  respond(200, { ok: true, mode: guardMode })
+})
 
 // Restarts the viewer in another camera mode; doesn't take the action lock.
 app.post('/viewer', async (req, res) => {
@@ -359,12 +402,13 @@ app.post('/viewer', async (req, res) => {
 })
 
 action('/observe', validators.none, () => observe())
-action('/mine', validators.mine, async (body, session) => ({ ...await mine(bot, body, session), blocks_walked: walked() }))
-action('/craft', validators.craft, async (body, session) => ({ ...await craft(bot, body, session), blocks_walked: walked() }))
-action('/explore', validators.explore, async (body, session) => ({ ...await explore(bot, session, body), blocks_walked: walked() }))
+action('/mine', validators.mine, async (body, session) => ({ ...await mine(bot, body, session), blocks_walked: walked() }), { cutIn: true })
+action('/craft', validators.craft, async (body, session) => ({ ...await craft(bot, body, session), blocks_walked: walked() }), { cutIn: true })
+action('/explore', validators.explore, async (body, session) => ({ ...await explore(bot, session, body), blocks_walked: walked() }), { cutIn: true })
 action('/look', validators.look, (body) => look(bot, body))
 action('/smelt', validators.smelt, async (body, session) => ({ ...await smelt(bot, body, session), blocks_walked: walked() }), {
-  timeoutMs: (body) => SMELT_TIMEOUT_BASE_MS + SMELT_TIMEOUT_PER_ITEM_MS * (body.times ?? 1)
+  timeoutMs: (body) => SMELT_TIMEOUT_BASE_MS + SMELT_TIMEOUT_PER_ITEM_MS * (body.times ?? 1),
+  cutIn: true
 })
 action('/probe', validators.probe, (body, session) => probe(bot, body, session))
 action('/toss', validators.toss, (body, session) => toss(bot, body, session), { timeoutMs: TOSS_TIMEOUT_MS })
