@@ -188,5 +188,5 @@ async function retrieveStation (bot, pos, itemName, countBefore, { withBestTool 
 }
 
 module.exports = {
-  acquireTable, findPlacedStation, findSpots, forgetStanding, placeStation, reachStation, rememberStanding, retrieveStation
+  acquireTable, findPlacedStation, findSpots, forgetStanding, overlapsBot, placeStation, reachStation, rememberStanding, retrieveStation
 }

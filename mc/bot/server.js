@@ -9,6 +9,8 @@ const { craft } = require('./lib/craft')
 const { explore, newSpiral, trackWorldBorder } = require('./lib/explore')
 const { probe } = require('./lib/probe')
 const { smelt } = require('./lib/smelt')
+const { clear, place, validateClear, validatePlace } = require('./lib/place')
+const { scan, validateScan } = require('./lib/scan')
 const { toss, validateToss } = require('./lib/toss')
 const { createUnreachableMemory, look } = require('./lib/targets')
 const { attachEventTracker, createEventLog } = require('./lib/events')
@@ -36,6 +38,7 @@ const config = {
 const RECONNECT_DELAY_MS = 3000
 const ACTION_TIMEOUT_MS = 120000
 const MAX_WALK_STEP = 2 // larger per-tick jumps are teleports, not walking
+const BUILD_TIMEOUT_MS = 60000 // /place and /clear: the 20 s walk plus the placing or digging
 const TOSS_TIMEOUT_MS = 20000 // the 10 s walk plus the tosses and the settle
 const SMELT_TIMEOUT_BASE_MS = 30000
 const SMELT_TIMEOUT_PER_ITEM_MS = 12000
@@ -267,6 +270,9 @@ const validators = {
   },
   status: (body) => (body.since != null && !Number.isInteger(body.since) ? '"since" must be an integer' : null),
   toss: validateToss,
+  place: validatePlace,
+  clear: validateClear,
+  scan: validateScan,
   chat: (body) => (typeof body.message === 'string' ? null : '"message" must be a string')
 }
 
@@ -412,6 +418,9 @@ action('/smelt', validators.smelt, async (body, session) => ({ ...await smelt(bo
 })
 action('/probe', validators.probe, (body, session) => probe(bot, body, session))
 action('/toss', validators.toss, (body, session) => toss(bot, body, session), { timeoutMs: TOSS_TIMEOUT_MS })
+action('/place', validators.place, (body, session) => place(bot, body, session), { timeoutMs: BUILD_TIMEOUT_MS, cutIn: true })
+action('/clear', validators.clear, (body, session) => clear(bot, body, session), { timeoutMs: BUILD_TIMEOUT_MS, cutIn: true })
+action('/scan', validators.scan, (body) => scan(bot, body))
 action('/chat', validators.chat, (body) => chat(body))
 action('/reset_episode', validators.none, () => resetEpisode())
 
