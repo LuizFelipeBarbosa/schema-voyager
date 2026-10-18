@@ -174,6 +174,21 @@ def test_the_life_command_refuses_to_start_when_the_pack_is_not_ready(tmp_path, 
         demo.run_life_command(_life_args(tmp_path, change="nope"))
 
 
+def test_a_resumed_life_skips_the_pack_check_for_changes_it_already_fired(tmp_path, monkeypatch):
+    monkeypatch.setenv("SV2_HOME", str(tmp_path))
+    monkeypatch.setenv("SV2_BOT_PORT", "3200")
+    monkeypatch.setenv("SV2_RCON_PORT", "25576")
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    (run_dir / "changes.jsonl").write_text(json.dumps({"t": 1.0, "change": "stick2", "action": "craft",
+                                                       "subject": "stick", "goal": "g003"}) + "\n")
+    rcon = FakeRcon(enabled=["vanilla", PACKS["stick2"]], available=[])
+    monkeypatch.setattr(demo, "rcon_factory", lambda port: rcon.factory())
+    # stick2 fired before the pause, so its enabled pack is fine; r2 is still checked (and not installed here)
+    with pytest.raises(SystemExit, match="v2_coal_tool is not installed"):
+        demo.run_life_command(_life_args(tmp_path, change="stick2,r2", resume=True))
+
+
 def test_the_change_comes_from_the_environment_when_the_flag_is_absent(tmp_path, monkeypatch):
     monkeypatch.setenv("SV2_M3_CHANGE", "stick2")
     run_dir = tmp_path / "run"

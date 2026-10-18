@@ -255,6 +255,14 @@ def run_life_command(args: argparse.Namespace) -> None:
         sys.exit(str(error))
 
 
+def _fired_changes(run_dir: Path | None) -> set[str]:
+    """The changes a life already switched on, from its changes.jsonl."""
+    log = Path(run_dir or "") / "changes.jsonl"
+    if run_dir is None or not log.exists():
+        return set()
+    return {json.loads(line)["change"] for line in log.read_text(encoding="utf-8").splitlines() if line.strip()}
+
+
 def _run_life(args: argparse.Namespace) -> None:
     requested = args.change or os.environ.get("SV2_M3_CHANGE") or ""
     try:
@@ -267,9 +275,11 @@ def _run_life(args: argparse.Namespace) -> None:
 
         if changes:
             connect = rcon_factory(rcon_port)
+            fired = _fired_changes(args.run_dir) if args.resume else set()
             try:
                 for change in changes:
-                    check_pack_ready(change, connect)
+                    if change not in fired:  # a fired change's pack stays enabled across a resume
+                        check_pack_ready(change, connect)
             except ValueError as error:
                 sys.exit(str(error))
             switch_on = rcon_switch(connect)
