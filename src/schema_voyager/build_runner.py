@@ -28,6 +28,9 @@ from .schema_store import SchemaStore
 BUILD_GOAL = "build"  # a build goal's Task.goal_item (like EXPLORE_GOAL); goal_count is progress total
 BUILD_SECONDS_PER_STEP = 10  # a build goal's clock: per build step, plus 30 s per planned gathering step
 MAX_BUILD_PASSES = 3  # scan, build, final scan; again while cells don't match
+SCAFFOLD_RING = 5  # blocks around the site box in x and z that are scanned before and after the build (v3.0h)
+_MAX_SCAN_SIDE = 32  # the bot's /scan allows each side from 1 to 32 (and 8192 cells)
+_AIR_BLOCKS = ("air", "cave_air", "void_air", "water")
 SCAFFOLD_MIN = 16  # SCAFFOLD_BLOCKS to hold before building: the first cell of a layer is placed from a pillar
 NEAR_SITE = 12  # horizontal blocks from the footprint's centre; farther, the runner walks back
 
@@ -117,7 +120,7 @@ def run_build(
 
     episode.log.event(
         "build_done", matched=not reason, mismatched=[list(pos) for pos in run.mismatched[:10]],
-        scaffold_cleared=run.scaffold_cleared, scaffold_left=run.scaffold_left,
+        scaffold_cleared=run.scaffold_cleared, scaffold_left=run.scaffold_left, scaffold_from=run.scaffold_from,
     )
     result = episode.finish(success=not reason, announce=False)
     episode.log.event("certified", rules=store.certify())
@@ -183,6 +186,7 @@ class _BuildRun:
     failed_cells: dict[Pos, str] = field(default_factory=dict)  # cell -> the error it failed with, this goal
     scaffold_cleared: int = 0
     scaffold_left: int = 0
+    scaffold_from: dict[str, int] = field(default_factory=lambda: {"walks": 0, "ring": 0})  # distinct cells per source
 
     @property
     def bp(self) -> dict:
@@ -209,6 +213,7 @@ class _BuildRun:
         if reason:
             return reason
         placed_before_build = len(episode.placed_cells)
+        ring_before = self.scan_ring()
         for number in range(1, MAX_BUILD_PASSES + 1):
             reason = self.scan_on_site(number)
             if reason:
@@ -220,18 +225,45 @@ class _BuildRun:
                 return reason
             self.scan(number)  # the final scan
             if not self.mismatched:
-                self.clear_scaffold(episode.placed_cells[placed_before_build:])
+                self.clear_scaffold(episode.placed_cells[placed_before_build:], self.ring_candidates(ring_before))
                 return ""
         return f"{len(self.mismatched)} cells don't match"
 
-    def clear_scaffold(self, placed_cells: list[tuple[int, int, int, str]]) -> None:
-        """Clear the scaffold the build's walks placed outside the house box and every protected box, highest first,
-        where the cell still holds the recorded block. A failed scan or clear leaves the cell. Never evidence."""
+    def scan_ring(self) -> dict[Pos, str | None]:
+        """The blocks of the ring around the site box; empty if the scan fails."""
         from .mineflayer_backend import BackendError  # here, not at the top: it pulls in rcon (see Episode)
 
-        last_block = {(x, y, z): block for x, y, z, block in placed_cells}  # the last name recorded per cell
-        outside = [cell for cell in last_block if not any(_inside(cell, box) for box in [self.box, *self.plan.protected])]
-        for cell in sorted(outside, key=lambda pos: -pos[1]):
+        (ox, oy, oz), (sx, sy, sz) = self.box
+        origin = (ox - SCAFFOLD_RING, oy - 1, oz - SCAFFOLD_RING)
+        size = (min(sx + 2 * SCAFFOLD_RING, _MAX_SCAN_SIDE), min(sy + 2, _MAX_SCAN_SIDE), min(sz + 2 * SCAFFOLD_RING, _MAX_SCAN_SIDE))
+        try:
+            return self.episode.backend.scan(origin, size)
+        except BackendError:
+            return {}
+
+    def ring_candidates(self, ring_before: dict[Pos, str | None]) -> dict[Pos, str]:
+        """The ring cells that went from air (or water) to a scaffold block since `ring_before`, with the block."""
+        ring_after = self.scan_ring()
+        return {
+            cell: block for cell, block in ring_after.items()
+            if block in SCAFFOLD_BLOCKS and ring_before.get(cell) in _AIR_BLOCKS
+        }
+
+    def clear_scaffold(self, placed_cells: list[tuple[int, int, int, str]], ring_cells: dict[Pos, str]) -> None:
+        """Clear the scaffold the build's walks placed and the ring scans found outside the house box and every
+        protected box, highest first, where the cell still holds the recorded block. A failed scan or clear leaves
+        the cell. Never evidence."""
+        from .mineflayer_backend import BackendError  # here, not at the top: it pulls in rcon (see Episode)
+
+        def outside(cells):
+            return {cell: block for cell, block in cells.items()
+                    if not any(_inside(cell, box) for box in [self.box, *self.plan.protected])}
+
+        walk_cells = outside({(x, y, z): block for x, y, z, block in placed_cells})  # the last name recorded per cell
+        ring_cells = outside(ring_cells)
+        self.scaffold_from = {"walks": len(walk_cells), "ring": len(ring_cells)}
+        last_block = {**ring_cells, **walk_cells}  # a walk-recorded name wins
+        for cell in sorted(last_block, key=lambda pos: -pos[1]):
             try:
                 holds_scaffold = self.episode.backend.scan(cell, (1, 1, 1)).get(cell) == last_block[cell]
                 cleared = holds_scaffold and self.episode.act(Action("clear", pos=cell, scaffold=False)).ok
