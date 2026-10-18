@@ -12,6 +12,7 @@ const { smelt } = require('./lib/smelt')
 const { look } = require('./lib/targets')
 const { attachEventTracker, createEventLog } = require('./lib/events')
 const { DIRECTIONS } = require('./lib/geometry')
+const { hasOpenSky } = require('./lib/sky')
 const {
   inventoryCounts, positionOf, round, scanNearbyBlocks, sleepTicks, stopMoving
 } = require('./lib/world')
@@ -133,7 +134,8 @@ function observe () {
     position: positionOf(bot),
     inventory: inventoryCounts(bot),
     nearby_blocks: scanNearbyBlocks(bot),
-    blocks_walked: walked()
+    blocks_walked: walked(),
+    sky: hasOpenSky(bot)
   }
 }
 
@@ -201,7 +203,8 @@ const validators = {
     return null
   },
   explore: (body) => {
-    if (body.direction != null && !DIRECTIONS.includes(body.direction)) return `"direction" must be one of ${DIRECTIONS.join(', ')}`
+    const directions = [...DIRECTIONS, 'up']
+    if (body.direction != null && !directions.includes(body.direction)) return `"direction" must be one of ${directions.join(', ')}`
     if (body.distance != null && !isPositiveNumber(body.distance)) return '"distance" must be a positive number'
     return validateDigOptions(body)
   },

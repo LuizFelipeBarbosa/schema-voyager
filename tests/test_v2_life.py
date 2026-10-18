@@ -616,7 +616,7 @@ def test_a_hazard_is_searched_like_not_found_and_blind_search_walks_the_compass(
     episode = make_episode(backend, make_llm(tmp_path), "#log")
     assert not episode.act(Action("mine", "#log")).ok
     explores = [call.direction for call in backend.calls if call.kind == "explore"]
-    assert explores == list(DIRECTIONS[:4])
+    assert explores == ["up", *DIRECTIONS[:3]]  # v2.1: back to open sky first
     assert episode.log.events[-1]["kind"] == "step"
 
 

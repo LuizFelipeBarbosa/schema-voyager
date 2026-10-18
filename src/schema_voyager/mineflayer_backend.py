@@ -248,7 +248,9 @@ class MineflayerBackend:
 
     def _explore_natural(self, action: Action) -> Outcome:
         request = None
-        if action.direction:
+        if action.direction == "up":  # back to open sky: the bot decides how far
+            request = {"direction": "up", "dig_through": True, "scaffold": list(SCAFFOLD_BLOCKS)}
+        elif action.direction:
             request = {
                 "direction": action.direction,
                 "distance": EXPLORE_DISTANCE,
@@ -261,7 +263,7 @@ class MineflayerBackend:
             error=body.get("error"),
             inventory=self.observe().inventory,
             blocks_walked=body.get("blocks_walked", 0.0),
-            detail=_detail(body, "position"),
+            detail=_detail(body, "position", "sky"),
             travel=body.get("travel") or {},
             events=body.get("events") or [],
         )

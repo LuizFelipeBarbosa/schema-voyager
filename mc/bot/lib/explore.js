@@ -3,18 +3,20 @@
 // steps), stopping before barrier blocks or after 30 s. With a direction (v2),
 // walk up to `distance` blocks along it, in legs of 16 blocks, stopping at the
 // world border, at barriers, before lava, or after 30 s; with dig_through the
-// path may dig and pillar.
+// path may dig and pillar. Direction "up" (v2.1) climbs back to open sky.
 
 const { Vec3 } = require('vec3')
 const { goals } = require('mineflayer-pathfinder')
 const { directionVector, horizontalDistance } = require('./geometry')
 const { recordTravel, withDiggingMovements } = require('./travel')
+const { hasOpenSky, skyLevel } = require('./sky')
 const { gotoGoal, inventoryCounts, positionOf } = require('./world')
 
 const STEP_BLOCKS = 10
 const EXPLORE_TIMEOUT_MS = 30000
 const LEG_BLOCKS = 16
 const DEFAULT_DISTANCE = 32
+const CLIMB_TIMEOUT_MS = 60000
 const DIRECTIONS = [{ x: 1, z: 0 }, { x: 0, z: 1 }, { x: -1, z: 0 }, { x: 0, z: -1 }] // E, S, W, N
 
 function newSpiral () {
@@ -137,6 +139,27 @@ async function exploreDirection (bot, { border, tracker }, { direction, distance
   return { ok: !error, error, position: positionOf(bot) }
 }
 
+// Back to open sky: path straight up to the level above the highest overhead
+// block of the column, digging up and pillaring with `scaffold` blocks only (never down:
+// DiggingMovements). A leg that ends without gaining height ends the climb,
+// since the pathfinder found no way (or would have to break next to a liquid).
+async function exploreUp (bot, { scaffold }) {
+  const startY = bot.entity.position.y
+  const deadline = Date.now() + CLIMB_TIMEOUT_MS
+  const climb = async () => {
+    while (!hasOpenSky(bot) && Date.now() < deadline) {
+      const legStartY = bot.entity.position.y
+      const column = bot.entity.position.floored()
+      await gotoGoal(bot, new goals.GoalBlock(column.x, skyLevel(bot), column.z), deadline - Date.now())
+      if (bot.entity.position.y - legStartY < 1) return
+    }
+  }
+  await withDiggingMovements(bot, { scaffoldNames: scaffold }, climb)
+  const sky = hasOpenSky(bot)
+  const error = !sky && bot.entity.position.y - startY < 1 ? 'unreachable' : null
+  return { ok: !error, error, position: positionOf(bot), sky }
+}
+
 // `session`: {episode, tracker, border}. The v1 fields come first; `travel`
 // covers the whole walk, which is all travel (nothing follows it).
 async function explore (bot, session, body = {}) {
@@ -145,14 +168,19 @@ async function explore (bot, session, body = {}) {
   let outcome = null
   let travel = null
   try {
-    outcome = body.direction
-      ? await exploreDirection(bot, session, {
+    const scaffold = Array.isArray(body.scaffold) ? body.scaffold : []
+    if (body.direction === 'up') {
+      outcome = await exploreUp(bot, { scaffold })
+    } else if (body.direction) {
+      outcome = await exploreDirection(bot, session, {
         direction: body.direction,
         distance: body.distance ?? DEFAULT_DISTANCE,
         digThrough: body.dig_through === true,
-        scaffold: Array.isArray(body.scaffold) ? body.scaffold : []
+        scaffold
       })
-      : await exploreSpiral(bot, episode)
+    } else {
+      outcome = await exploreSpiral(bot, episode)
+    }
   } finally {
     travel = recording.finish()
   }

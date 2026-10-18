@@ -236,6 +236,7 @@ OTHER_FUELS = ("#planks", "#log", "stick")
 
 TERRAIN_BOTTOM = -40  # bedrock; deepslate is -39..-1, stone 0 and up
 MAX_DISTANCE = 32
+SKY_SCAN_HEIGHT = 24  # cells above the ground that can still hold a tree
 REACH = 4.5
 WORLD_BORDER = 512
 SPAWN_CLEAR = 8  # no pools this close to the spawn
@@ -495,6 +496,8 @@ class NaturalWorld:
         )
 
     def _explore(self, action: Action) -> Outcome:
+        if action.direction == "up":
+            return self._explore_up()
         if action.direction:
             ux, uz = _DIRECTION_VECTORS[action.direction]
             norm = math.hypot(ux, uz)
@@ -525,6 +528,46 @@ class NaturalWorld:
             blocks_walked=round(self.blocks_walked, 1),
             detail={"position": {"x": position[0], "y": position[1], "z": position[2]}},
             travel={"distance": float(walked), "dug": {}, "placed": {}, "picked_up": {}},
+            events=events,
+        )
+
+    def _explore_up(self) -> Outcome:
+        """Climb to open sky: dig up the bot's column (never down), then stand on the
+        highest block of it. Leaves don't close the sky; a liquid overhead stops the climb."""
+        x, y, z = self._cell
+        overhead = {
+            level: block
+            for level in range(y + 1, self._column(x, z)[0] + SKY_SCAN_HEIGHT)
+            if (block := self.block_at((x, level, z))) not in PASSABLE and not block.endswith("_leaves")
+        }
+        liquid_at = min((level for level, block in overhead.items() if block in LIQUIDS), default=None)
+        climb = [level for level in overhead if liquid_at is None or level < liquid_at]
+        sky = liquid_at is None
+        if not climb and not sky:
+            return self._fail("unreachable")
+
+        best_pickaxe = max((tool for tool in PICKAXE_TIER if self.inventory[tool] > 0), key=PICKAXE_TIER.get, default=None)
+        dug: Counter[str] = Counter()
+        picked_up: Counter[str] = Counter()
+        for level in climb:
+            block = overhead[level]
+            dug[block] += 1
+            picked_up.update(self._drops(block, best_pickaxe))
+            self._changes[(x, level, z)] = "air"
+        self.inventory.update(picked_up)
+        gained = (climb[-1] + 1 if sky else climb[-1]) - y if climb else 0  # stand on the top, or in the last cell dug
+        self._cell = (x, y + gained, z)
+        self.blocks_walked += gained
+
+        events: list[dict[str, Any]] = []
+        self._roll_damage("travel", TRAVEL_DAMAGE_CHANCE, events)
+        position = self._position()
+        return Outcome(
+            ok=True,
+            inventory=self._inventory(),
+            blocks_walked=round(self.blocks_walked, 1),
+            detail={"position": {"x": position[0], "y": position[1], "z": position[2]}, "sky": sky},
+            travel={"distance": float(gained), "dug": dict(dug), "placed": {}, "picked_up": dict(picked_up)},
             events=events,
         )
 
