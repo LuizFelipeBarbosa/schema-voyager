@@ -265,6 +265,15 @@ assert.ok(exploreRoute.hasData === (explore.some((event) => event.kind === 'step
 assert.equal(now.scaleLength(37), 20);
 assert.equal(now.scaleLength(0.4), 1);
 
+// Goals from the queue (v3.1h): the user's words on the card, the interrupt next to the outcome
+const userGoal = { t: 1, kind: 'goal', index: 7, item: 'torch', count: 10, reason: 'asked', budget: 30, goal_id: 'u001', source: 'user', text: 'get me 10 torches' };
+assert.match(now.goalCardHtml(now.goalStory([userGoal]), null), /Your goal: get me 10 torches/);
+assert.doesNotMatch(now.goalCardHtml(now.goalStory([userGoal]), null), /Get 10 torch/);
+const scriptGoal = now.goalCardHtml(now.goalStory([{ ...userGoal, text: '<script>alert(1)</script>' }]), null);
+assert.ok(scriptGoal.includes('&lt;script&gt;') && !scriptGoal.includes('<script>'), 'the goal text is escaped');
+assert.match(now.goalCardHtml(oldStory, null), /Get 5 torch/, 'an old goal card is unchanged');
+assert.match(now.goalCardHtml(now.goalStory([userGoal]), { ...lifeRows[2], outcome: 'interrupted', interrupt: 'cancelled' }), /INTERRUPTED · cancelled/);
+
 console.log('life view ok');
 console.log(`v1 ok: ${v1.length} events identical`);
 console.log('all panel tests passed');
