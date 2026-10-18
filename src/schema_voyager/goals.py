@@ -229,14 +229,16 @@ class GoalQueue:
 
     def mark(self, goal_id: str, status: GoalStatus, **fields: Any) -> bool:
         """Move a goal to `status`; False (and nothing written) for an unknown id or a refused transition.
-        A child going running also moves its queued parent to running, in the same write."""
+        The same status with fields only updates them (a running parent's `replanned`). A child going running
+        also moves its queued parent to running, in the same write."""
         unknown = fields.keys() - _MARK_FIELDS
         if unknown:
             raise ValueError(f"mark cannot set {sorted(unknown)}; only {sorted(_MARK_FIELDS)}")
 
         def build(goals: dict[str, GoalEntry]) -> list[GoalEntry]:
             entry = goals.get(goal_id)
-            if entry is None or status not in _ALLOWED_TRANSITIONS[entry.status]:
+            updates_fields = status == entry.status and bool(fields) if entry else False
+            if entry is None or (status not in _ALLOWED_TRANSITIONS[entry.status] and not updates_fields):
                 return []
             now = time.time()
             lines = [replace(entry, status=status, t=now, **fields)]

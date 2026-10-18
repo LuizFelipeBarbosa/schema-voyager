@@ -356,6 +356,7 @@ class _Life:
         self._poll_bot(raises=True)
         self._queue_hunger_goal()
         self._parse_pending()
+        self._settle_parents()
         spec = self.queue.next()
         if spec is None and self.config.mode == "play":
             time.sleep(self.config.idle_poll_s)
@@ -802,6 +803,9 @@ class _Life:
             except LLMError as error:
                 print(f"[goal] could not parse {entry.id}: {error}")
                 return  # it stays submitted; the next pass tries again
+            if isinstance(parsed, list):
+                self._accept_children(entry, parsed)
+                continue
             parsed = self._resolve_me(parsed)
             if isinstance(parsed, Unsupported):
                 if self.queue.mark(entry.id, "unsupported", reason=parsed.reply):
@@ -813,6 +817,84 @@ class _Life:
                     **({"name": parsed.blueprint["name"]} if parsed.kind == "build" else {}),
                 )
                 self._say(self._plan_line(parsed) if parsed.kind == "build" else f"Queued {entry.id}: {goal_label(parsed)}")
+
+    def _accept_children(self, parent: GoalEntry, specs: list[GoalSpec]) -> None:
+        """Queue the children of a composite goal, in order, and say what comes (v3.5f)."""
+        resolved = [self._resolve_me(replace(spec, id=parent.id)) for spec in specs]  # "me" is the parent's speaker
+        children = self.queue.accept_children(parent.id, resolved)
+        if not children:
+            return
+        labels = [goal_label(child) for child in children]
+        self._log_event("goal_children", goal_id=parent.id, children=[{"id": c.id, "label": label} for c, label in zip(children, labels)])
+        listed = ", then ".join(f"{child.id} {label}" for child, label in zip(children, labels))
+        self._say(f"Queued {parent.id}: {parent.text}: {listed}.")
+        for child in children:
+            if child.kind == "build":
+                self._say(self._plan_line(child))
+
+    def _advance_parent(self, child_id: str) -> None:
+        """After a child's own ending: a failed child gets one replan of its parent's remaining children, or ends the
+        parent; then the parent settles (v3.5f)."""
+        child = self.queue.get(child_id)
+        parent = self.queue.parent_of(child_id)
+        if parent is None or parent.status in FINAL_GOAL_STATUSES:
+            return
+        if child.status == "failed":
+            reason = f"{goal_label(child.spec, child.text)}: {child.reason}"
+            replanned = [] if parent.replanned else self._replan_children(parent, child)
+            if replanned:
+                self.queue.mark(parent.id, parent.status, replanned=True)
+                self._cancel_unstarted(parent.id, "replaced")
+                accepted = self.queue.accept_children(parent.id, replanned)
+                self._log_event(
+                    "goal_replanned", goal_id=parent.id, failed=child.id, reason=child.reason,
+                    children=[{"id": c.id, "label": goal_label(c)} for c in accepted],
+                )
+            else:
+                self.queue.mark(parent.id, "failed", reason=reason)
+                self._cancel_unstarted(parent.id, "parent failed")
+                self._end_parent(parent, "failed", reason)
+                return
+        self._settle_parent(parent)
+
+    def _replan_children(self, parent: GoalEntry, failed: GoalEntry) -> list[GoalSpec]:
+        """Claude's new children for the ones still waiting after `failed`; [] when it gives up or can't be asked."""
+        children = self.queue.children_of(parent.id)
+        done = [c.spec for c in children if c.status == "done" and c.spec is not None]
+        remaining = [c.spec for c in children if c.status in ("queued", "awaiting_approval") and c.spec is not None]
+        try:
+            replanned = self.llm.replan_children(
+                parent.text, done, failed.spec, failed.reason, remaining, self._inventory_seen, vanilla_items()
+            )
+        except LLMError as error:
+            print(f"[goal] could not replan {parent.id}: {error}")
+            return []
+        return [self._resolve_me(replace(spec, id=parent.id)) for spec in replanned] if isinstance(replanned, list) else []
+
+    def _cancel_unstarted(self, parent_id: str, reason: str) -> None:
+        for child in self.queue.children_of(parent_id):
+            if child.status in ("queued", "awaiting_approval"):
+                self.queue.mark(child.id, "cancelled", reason=reason)
+
+    def _settle_parents(self) -> None:
+        """Children cancelled while queued never reach `_end_goal`, so settle every open parent once per pass."""
+        for entry in self.queue.goals():
+            if entry.children and entry.status not in FINAL_GOAL_STATUSES:
+                self._settle_parent(entry)
+
+    def _settle_parent(self, parent: GoalEntry) -> None:
+        status = self.queue.settle(parent.id)
+        if status is not None:
+            self._end_parent(parent, status, "")
+
+    def _end_parent(self, parent: GoalEntry, status: str, reason: str) -> None:
+        self._log_event("goal_parent_end", goal_id=parent.id, status=status)
+        if status == "done":
+            self._say(f"Done {parent.id}: {parent.text}.")
+        elif status == "failed":
+            self._say(f"Couldn't finish {parent.id}: {reason}")
+        else:
+            self._say(f"Cancelled {parent.id}: {parent.text}.")
 
     def _resolve_me(self, parsed: GoalSpec | Unsupported) -> GoalSpec | Unsupported:
         """A guard goal for "me" is for the player who typed it, if known (else None: the bot follows the nearest owner)."""
@@ -1174,6 +1256,9 @@ class _Life:
         record |= {"goal_id": spec.id, "source": spec.source, "text": spec.text, "goal_kind": spec.kind, "tossed": tossed}
         if interrupt is not None:
             record["interrupt"] = interrupt
+        parent = self.queue.parent_of(spec.id) if queued_goal else None
+        if parent is not None:
+            record["parent"] = parent.id
         if runner is not None:
             record |= runner.record
         if build is not None:
@@ -1184,6 +1269,8 @@ class _Life:
         self._attach_unreported(record)
         if chat:
             self._say(chat)
+        if parent is not None:
+            self._advance_parent(spec.id)
         self._save(record)
         if self.hooks.after_goal is not None:
             self.hooks.after_goal(record)

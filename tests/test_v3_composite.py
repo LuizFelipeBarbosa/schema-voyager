@@ -177,6 +177,14 @@ def test_mark_replanned(queue):
         queue.mark(parent_id, "failed", children=())
 
 
+def test_mark_same_status_updates_fields_only(queue):
+    parent_id, (a, _) = parent_with(queue, obtain(), obtain("stick"))
+    queue.mark(a, "running")
+    assert queue.mark(parent_id, "running", replanned=True)
+    assert queue.get(parent_id).status == "running" and queue.get(parent_id).replanned
+    assert not queue.mark(parent_id, "running")  # no fields: still a refused transition
+
+
 # -- settle / cancel --------------------------------------------------------------
 
 
