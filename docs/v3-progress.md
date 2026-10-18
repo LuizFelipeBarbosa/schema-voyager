@@ -72,5 +72,11 @@ pushed to `origin` until the user says so.
   zero-move explore over 25 s; at least 20% of directional explores move 2 blocks or more; no goal asks for the same
   direction 4 or more times (`/tmp/sv2-s01-explore.py <run-dir>` measures these; it is not in the repo). Any explore
   over 35 s means the hole exit (`getOutOfEnclosure` calling `exploreUp`, up to 100 s) needs a look.
+  How to measure, from `<run-dir>/episodes/*.jsonl` in goal order:
+  - an explore is a `kind: "step"` record whose `action` starts with "explore" (directional ones read "explore NW");
+  - skip `explore up` steps with `detail.sky: true`;
+  - duration is the step's `t` minus the `t` of the previous record that isn't `travel`;
+  - moved is the step's `travel.distance` (else the change in `detail.position` from the previous step);
+  - the fair baseline is preview-2005 from g022 (after the unstick merge).
 - Open, separate from explore: in `runs/s01-explorefast` g025 (bucket), all 8 failures were `mine iron_ore`
   returning `unreachable` after walking 35 to 95 blocks, a `/mine` reach problem like preview-2005 g027.
