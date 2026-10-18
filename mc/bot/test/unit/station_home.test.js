@@ -130,7 +130,7 @@ test('a craft with no table near or held walks to the given station and uses it 
   assert.equal(log.placed, 0)
   assert.deepEqual(log.crafted, [new Vec3(...HOME)])
   const [goal] = log.goals
-  assert.deepEqual([goal.constructor.name, goal.x, goal.y, goal.z, goal.rangeSq], ['GoalNear', 10, 10, 0, 4])
+  assert.deepEqual([goal.constructor.name, goal.x, goal.y, goal.z, goal.rangeSq], ['GoalNear', 10, 10, 0, 9])
   const [movements] = log.movements
   assert.deepEqual([movements.canDig, movements.canOpenDoors, movements.scafoldingBlocks], [false, false, []])
   assert.equal(bot.pathfinder.movements, 'previous')
@@ -211,6 +211,30 @@ test('a walk that does not get there answers unreachable with station_unreachabl
   assert.equal(result.used_home_station, false)
   assert.ok(result.travel)
   assert.deepEqual(log.crafted, [])
+})
+
+test('a walk that makes no progress for 8 s answers unreachable long before the 45 s timeout', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'] })
+  const { bot } = homeBot({
+    blocks: { [HOME.join(',')]: 'crafting_table' },
+    inventory: pickaxeMaterials,
+    walk: () => new Promise(() => {}) // the bot stands still and the pathfinder never answers
+  })
+  const { session } = newSession()
+
+  let elapsed = 0
+  let finishedAt = null
+  const pending = craft(bot, { ...pickaxe, station: HOME }, session).finally(() => { finishedAt = elapsed })
+  while (finishedAt === null && elapsed < 45000) {
+    t.mock.timers.tick(500)
+    elapsed += 500
+    await new Promise((resolve) => setImmediate(resolve))
+  }
+  const result = await pending
+  assert.ok(finishedAt <= 9000, `answered after ${finishedAt} ms`)
+
+  assert.deepEqual([result.error, result.station_unreachable], ['unreachable', true])
+  assert.ok(result.travel)
 })
 
 test('digging up a remembered table is not reported as a gain of one table', async () => {
