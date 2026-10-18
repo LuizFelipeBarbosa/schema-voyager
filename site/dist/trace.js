@@ -8,7 +8,8 @@ const HIDDEN_RULES = { h3: 'coal ore drops coal only when mined with a stone-tie
 // What the v2 life world changed mid-run (`world_change.change`). The agent is never told.
 const WORLD_CHANGES = {
   r2: 'coal ore now drops coal only for a stone-tier pickaxe',
-  stick2: 'sticks now craft 2 instead of 4'
+  stick2: 'sticks now craft 2 instead of 4',
+  planks2: 'planks (any wood): a log now makes 2 planks instead of 4'
 };
 // Normalized item groups (`#log`) as the audience should read them.
 const GROUP_NAMES = { log: 'log (any wood)', planks: 'planks (any wood)', leaves: 'leaves (any)', sapling: 'sapling (any)', cobblestone: 'cobblestone (any)' };
@@ -36,7 +37,7 @@ const player = {
 };
 
 // What the life view reads besides the trace on screen: the run's goals and world changes.
-const lifeFeed = { rows: [], changes: [], episodes: [] };
+const lifeFeed = { rows: [], changes: [], episodes: [], goals: [] }; // goals: [{ index, path, ended, events }] from the first world change on
 
 // --- Loading and following traces --------------------------------------------
 
@@ -120,9 +121,33 @@ async function pollLife() {
       return [];
     }
   }));
-  if (rows.length === lifeFeed.rows.length && changes.length === lifeFeed.changes.length) return;
-  Object.assign(lifeFeed, { rows, changes });
+  const goals = await pollChangeGoals(changes);
+  const eventCount = (list) => list.reduce((sum, goal) => sum + goal.events.length, 0);
+  if (rows.length === lifeFeed.rows.length && changes.length === lifeFeed.changes.length && eventCount(goals) === eventCount(lifeFeed.goals)) return;
+  Object.assign(lifeFeed, { rows, changes, goals });
   render();
+}
+
+// The world-change card follows a change across goals, so it needs the events of every
+// goal since the first change. Finished goals never change and are fetched once.
+async function pollChangeGoals(changes) {
+  if (!changes.length) return [];
+  const firstGoal = Math.min(...changes.map((change) => Number(String(change.goal).slice(1))));
+  const known = new Map(lifeFeed.goals.map((goal) => [goal.path, goal]));
+  const wanted = lifeFeed.episodes
+    .map((episode) => ({ path: episode.path, index: Number((episode.name.match(/_g(\d+)_/) || [])[1]) }))
+    .filter((goal) => goal.index >= firstGoal);
+  return Promise.all(wanted.map(async (goal) => {
+    const cached = known.get(goal.path);
+    if (cached && cached.ended) return cached;
+    try {
+      const response = await fetch(`/${goal.path}`, { cache: 'no-store' });
+      const events = response.ok ? parseTrace(await response.text()) : [];
+      return { ...goal, events, ended: hasEnded(events) };
+    } catch {
+      return cached || { ...goal, events: [], ended: false };
+    }
+  }));
 }
 
 function updateUrl() {
@@ -374,10 +399,25 @@ function renderLife() {
   byId('life-goal').innerHTML = goalCardHtml(story, story.end ? row : null);
   byId('life-revision').innerHTML = revisionHtml(story);
   byId('life-hypothesis').innerHTML = hypothesisHtml(story);
+  byId('life-changes').innerHTML = worldChangesHtml(worldChangeStories(story));
   byId('life-plan').innerHTML = lifePlanHtml(story);
   byId('life-overview').innerHTML = overviewHtml(lifeOverview(lifeFeed.rows, lifeFeed.changes, story, lifeFeed.episodes));
   const running = document.querySelector('.plan-rows li.running');
   if (running) running.parentElement.scrollTop = running.offsetTop - running.parentElement.clientHeight / 2;
+}
+
+// What the world changes so far did, as of the moment on screen. The goal on screen
+// comes from the player, which is fresher than the polled copy.
+function worldChangeStories(story) {
+  const shownIndex = story.goal ? story.goal.index : null;
+  const goals = [
+    ...lifeFeed.goals.filter((goal) => goal.index !== shownIndex),
+    ...(story.goal ? [{ index: shownIndex, events: player.events.slice(0, player.index + 1) }] : [])
+  ];
+  return lifeFeed.changes
+    .filter((change) => change.t <= story.lastT)
+    .sort((a, b) => a.t - b.t)
+    .map((change) => changeStory(change, goals, story.lastT));
 }
 
 function tickElapsed() {
@@ -624,7 +664,7 @@ function rawLogLine(event) {
 }
 
 function describeWorldChange(event) {
-  return WORLD_CHANGES[event.change] || `${event.action} ${event.subject} changed (${event.change})`;
+  return WORLD_CHANGES[event.change] || readable(`${event.action} ${event.subject} changed (${event.change})`);
 }
 
 // "travel 45 blocks · dug stone 3 · picked up cobblestone 2", or '' when nothing happened.
@@ -730,12 +770,12 @@ function pad(value) {
   return String(value).padStart(2, '0');
 }
 
-// Normalized names for display: `#log` is any wood, and a rule id loses its world suffix.
+// Normalized names for display: `#log` is any wood and no `#` reaches the screen, and a rule id loses its world suffix.
 function readable(text) {
   return String(text ?? '')
     .replace(/\.(rev|fix)(\d+)@life-[\w-]+/g, ' $1$2')
     .replace(/@life-[\w-]+/g, '')
-    .replace(/#(log|planks|leaves|sapling|cobblestone)\b/g, (_, group) => GROUP_NAMES[group]);
+    .replace(/#([a-z_]+)/g, (_, group) => GROUP_NAMES[group] || group);
 }
 
 function say(value) {

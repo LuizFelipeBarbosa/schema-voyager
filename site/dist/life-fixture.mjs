@@ -6,10 +6,10 @@ import { join } from 'node:path';
 
 const T0 = 1_800_000_000;
 const REVISED = 'mine_coal_ore.rev1@life-1-20261017-1800';
-const wooden = { rule: 'mine_coal_ore', experimental: true, status: 'certified', confirmed: 3, needed: 2, predicts: 'coal_ore with wooden_pickaxe -> 1 coal' };
-const stone = { rule: REVISED, experimental: true, status: 'hypothesis', confirmed: 0, needed: 2, predicts: 'coal_ore with stone_pickaxe -> 1 coal' };
-const torch = { rule: 'craft_torch', experimental: false, status: 'prior', confirmed: 1, needed: 2, predicts: '1 coal + 1 stick -> 4 torch' };
-const stoneTool = { rule: 'craft_stone_pickaxe', experimental: true, status: 'prior', confirmed: 0, needed: 2, predicts: '3 cobblestone + 2 stick -> 1 stone_pickaxe' };
+const wooden = { rule: 'mine_coal_ore', experimental: true, status: 'certified', confirmed: 3, needed: 2, goals: 2, goals_needed: 2, predicts: 'coal_ore with wooden_pickaxe -> 1 coal' };
+const stone = { rule: REVISED, experimental: true, status: 'hypothesis', confirmed: 2, needed: 2, goals: 1, goals_needed: 2, predicts: 'coal_ore with stone_pickaxe -> 1 coal' };
+const torch = { rule: 'craft_torch', experimental: false, status: 'prior', confirmed: 1, needed: 2, goals: 1, goals_needed: 2, predicts: '1 coal + 1 stick -> 4 torch' };
+const stoneTool = { rule: 'craft_stone_pickaxe', experimental: true, status: 'prior', confirmed: 0, needed: 2, goals: 0, goals_needed: 2, predicts: '3 cobblestone + 2 stick -> 1 stone_pickaxe' };
 const planStep = (action, hypothesis) => ({ action, ...hypothesis });
 
 function step(t, index, action, rule, fields) {
@@ -28,7 +28,7 @@ export const goalThreeEvents = [
     block_removed: true, drops: {}, check: 'mismatch', check_detail: 'drops: expected {coal: 1}, saw nothing',
     predicted: { block_removed: true, drops: { coal: 1 } }, observed: { block_removed: true, drops: {} }
   }),
-  { t: T0 + 112, kind: 'contradiction', rule: 'mine_coal_ore', detail: 'drops: expected {coal: 1}, saw nothing', predicted: { block_removed: true, drops: { coal: 1 } }, observed: { block_removed: true, drops: {} }, flagged: ['skill_torch'] },
+  { t: T0 + 112, kind: 'contradiction', rule: 'mine_coal_ore', transition: 'D/life/g003-torch/1', detail: 'drops: expected {coal: 1}, saw nothing', predicted: { block_removed: true, drops: { coal: 1 } }, observed: { block_removed: true, drops: {} }, flagged: ['skill_torch'] },
   { t: T0 + 115, kind: 'revision', rule: 'mine_coal_ore', tokens: 2800, hypotheses: [
     { rank: 1, id: REVISED, kept: true, summary: 'coal ore needs a stone pickaxe or better', rule: {} },
     { rank: 2, id: 'mine_coal_ore.rev2', kept: false, summary: 'coal ore drops coal only at night', rule: {} }
@@ -46,7 +46,13 @@ export const goalThreeEvents = [
   { t: T0 + 132, kind: 'step_start', index: 4, action: 'craft torch', ...torch },
   step(T0 + 133, 4, 'craft torch', 'craft_torch', { inventory_delta: { torch: 4 }, check: 'match', predicted: { inventory_delta: { torch: 4 } } }),
   { t: T0 + 134, kind: 'episode_end', success: true, actions: 4, llm_tokens: 2800, llm_calls: 1, repeated_failures: 0 },
-  { t: T0 + 134, kind: 'certified', rules: ['mine_coal_ore.rev1@life-1-20261017-1800'] }
+  { t: T0 + 134, kind: 'certified', rules: [REVISED] }
+];
+
+// Goal 4 (a later goal) is where the revised rule's second goal certifies it.
+export const laterGoalEvents = [
+  { t: T0 + 140, kind: 'goal', index: 4, item: 'furnace', count: 1, reason: 'fixture', budget: 30 },
+  { t: T0 + 160, kind: 'certified', rules: [REVISED] }
 ];
 
 const lifeRow = (index, goal, count, started, ended, extra) => ({
@@ -63,6 +69,8 @@ export const changes = [
   { t: T0 + 60, change: 'stick2', action: 'craft', subject: 'stick', goal: 'g002' },
   { t: T0 + 101, change: 'r2', action: 'mine', subject: 'coal_ore', goal: 'g003' }
 ];
+// What the demo's scramble does to the group rule `craft #planks`.
+export const planksChange = { t: T0 + 170, change: 'planks2', action: 'craft', subject: '#planks', goal: 'g004' };
 
 if (process.argv[2]) {
   const run = process.argv[2];
