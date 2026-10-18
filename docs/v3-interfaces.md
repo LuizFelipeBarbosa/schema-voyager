@@ -1961,8 +1961,9 @@ def yard_slots(home: Home, scan: dict[Pos, str | None], taken: Iterable[Pos] = (
   a chest), save, `set_stations`, event `home_placed {station, pos}`, chat "I put a chest by my house at 5 76 36." On a
   failure: event `home_place_failed {station, pos, error}`, nothing more until the next goal. Then observe again, for
   the junk check.
-- **The chest goal**, decided at the same point: `home` is set, `stations` has no chest, the observed inventory holds
-  none, and `chest_goal` is `None`: the life accepts one system goal `GoalSpec(kind="obtain", source="system",
+- **The chest goal**, decided when a goal ends (nothing is running then, so the system goal preempts nothing; the
+  inventory is the goal's last observation): `home` is set, `stations` has no chest, the inventory holds none, and
+  `chest_goal` is `None`: the life accepts one system goal `GoalSpec(kind="obtain", source="system",
   item="chest", count=1, text="a chest for my home")` and saves its id in `chest_goal`, so it is asked once per
   home, whatever its outcome. Furnishing places the chest at a later goal's start.
 - **Storing instead of tossing.** `_make_room` keeps its trigger (`free_slots < MIN_FREE_SLOTS`). With a home chest
