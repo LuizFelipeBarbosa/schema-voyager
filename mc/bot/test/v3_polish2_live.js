@@ -77,7 +77,7 @@ const EDIBLE = [
   'pufferfish', 'rotten_flesh', 'spider_eye', 'suspicious_stew', 'sweet_berries', 'glow_berries', 'cake'
 ]
 
-// The ring of glass around the chest: Chebyshev distance 4, from one block below the chest's cell to two above it,
+// The ring of glass around the chest (every block in it replaced): Chebyshev distance 4, from one block below the chest's cell to two above it,
 // so the bot can neither step nor jump over it.
 const RING_RADIUS = 4
 const RING_BELOW = 1
@@ -489,7 +489,8 @@ async function main () {
     // 2. Further south, behind a glass ring around the chest.
     await standAt(yard[0], Math.max(yard[1], chestCell[2]) + BOT_SOUTH_OF_CHEST)
     placedRing = ringBoxes(chestCell, footprint)
-    for (const { min, max } of placedRing) await rcon.exec(`fill ${min.join(' ')} ${max.join(' ')} minecraft:glass replace minecraft:air`)
+    // every block, not only air: short grass and flowers in the yard are walkable and would leave gaps
+    for (const { min, max } of placedRing) console.log(`  fill ${min.join(' ')} ${max.join(' ')}: ${await rcon.exec(`fill ${min.join(' ')} ${max.join(' ')} minecraft:glass`)}`)
     console.log(`  glass ring around ${short(chestCell)}: ${placedRing.length} boxes, outside the footprint ${short(footprint)}`)
     const chestBefore = await readChest(chestCell)
 
