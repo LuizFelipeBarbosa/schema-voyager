@@ -197,6 +197,9 @@ class MineflayerBackend:
             values = [body[key] for body in bodies if body.get(key) is not None]
             if values:
                 detail[key] = values[-1] if key != "table_retrieved" else all(values)
+        tools_broken = [item for body in bodies for item in body.get("tools_broken") or []]
+        if tools_broken:
+            detail["tools_broken"] = tools_broken
         return Outcome(
             ok=failed is None,
             error=failed.get("error") if failed else None,
@@ -241,15 +244,18 @@ class MineflayerBackend:
         except ValueError:
             return Outcome(ok=False, error="missing_ingredients", inventory=inventory)
         body = self._post("/smelt", request, timeout=SMELT_TIMEOUT_S + SMELT_TIMEOUT_PER_ITEM_S * action.times)
+        detail = _detail(
+            body, "position", "missing", "used_furnace", "furnace_retrieved", "fuel", "fuel_used", "smelted", "item", "inventory_before_step", "detail"
+        )
+        if body.get("tools_broken"):
+            detail["tools_broken"] = body["tools_broken"]
         return Outcome(
             ok=body["ok"],
             error=body.get("error"),
             inventory_delta=body.get("inventory_delta") or {},
             inventory=self._inventory(body),
             blocks_walked=body.get("blocks_walked", 0.0),
-            detail=_detail(
-                body, "position", "missing", "used_furnace", "furnace_retrieved", "fuel", "fuel_used", "smelted", "item", "inventory_before_step", "detail"
-            ),
+            detail=detail,
             travel=body.get("travel") or {},
             events=body.get("events") or [],
         )

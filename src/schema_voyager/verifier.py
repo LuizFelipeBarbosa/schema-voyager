@@ -110,6 +110,10 @@ def check(rule: Rule, action: Action, outcome: Outcome) -> Check:
             # Picking the placed station back up is pickup, which is tolerant.
             raw[station] = raw.get(station, 0) + 1
             detail = f"{station} not picked back up (tolerant)"
+        for tool in outcome.detail.get("tools_broken", []):
+            # A tool that broke on the station dig is a loss, not an effect of the rule.
+            raw[tool] = raw.get(tool, 0) + 1
+            detail = "; ".join(filter(None, [detail, f"{tool} wore out (tolerant)"]))
         if rule.kind == "smelt" and outcome.detail.get("fuel") and outcome.detail.get("fuel_used"):
             raw[outcome.detail["fuel"]] = raw.get(outcome.detail["fuel"], 0) + outcome.detail["fuel_used"]
         observed = {"inventory_delta": counts(raw)}
