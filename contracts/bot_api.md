@@ -1134,7 +1134,8 @@ the duel ends:
   `damage_taken`: the bot's own health drops. Both one decimal.
 - `blocked`: the opponent's hits the bot's shield stopped (entity status 29 on the bot); `their_blocked`: the same on
   the opponent.
-- `health_end`: the bot's health at the end. `engagements`: how many `fight()` calls the duel made.
+- `health_end`: the bot's health at the end. `engagements`: how many `fight()` calls the duel made. `retreats`:
+  how many of them ended `fled` (only with `disengage`); each successful meal is a `duel_ate {item, health}` event.
 - A player who isn't online: `{"ok": false, "error": "not_found", "detail": "..."}`, and no duel starts.
 - **The bot's death** ends the duel as a loss. The answer is then `quarantined`, as for any action, but its `events`
   still hold the `duel_end` (`winner` the opponent, `reason: died`). A death ends the duel at once: a respawn reuses
@@ -1149,7 +1150,7 @@ running (it ends with `reason: stopped`), `"stopped": false` when none was.
 ### The `duel_end` event
 
 Recorded exactly once for every duel that started, the bot's death included, with the answer's fields from
-`duel_id` to `engagements`.
+`duel_id` to `retreats`.
 
 ### Tactics (`lib/tactics.js`)
 
@@ -1183,9 +1184,14 @@ tactic's measured result is logged in `docs/v3-progress.md`.
 
 ### `fight()` (`lib/guard.js`)
 
-Two new options. `tactics`: a controller from `createTactics`; `fight()` attaches it right after `pvp.attack` and
+New options. `tactics`: a controller from `createTactics`; `fight()` attaches it right after `pvp.attack` and
 detaches it first in its `finally`. `fleeBelow` (default 6): the health under which a fight ends `fled`. A duel
-passes 0 unless `disengage` is in its set.
+passes 0 unless `disengage` is in its set and a golden apple is held (then 6). `fleeMs` (default 10000) and
+`fleeDistance` (default 16): the flight after a `fled`; `disengage` uses 2000 and 6.
+
+The hooks a tactic may use are listed in the doc comment of `lib/tactics.js`: `canStrike`, `beforeStrike`,
+`afterStrike`, `steer`, `afterSafety`, `onTick`, `attach`/`detach`, `ownsShield`. They run in `REGISTRY` order
+(`wtap`, `strafe`, `shield`, `crit`, `disengage`), whatever the order of the names.
 
 ### Error codes (v3.6)
 
