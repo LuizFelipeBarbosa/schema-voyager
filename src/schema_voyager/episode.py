@@ -170,14 +170,18 @@ class Episode:
         return max(live, key=gap_to_dead)
 
     def _remember_explore(self, explore: Action, outcome: Outcome) -> None:
-        """An explore that got nowhere kills its direction; one that moved the bot far clears them all."""
+        """An explore that got nowhere kills its direction; one that moved the bot far clears them all first.
+        A neighbouring direction that did the moving also kills the requested one: it stalled."""
         if explore.direction not in DIRECTIONS:  # "up" is limited per target instead, and a blind explore has none
             return
         distance = outcome.travel.get("distance")
+        took = outcome.detail.get("took")
         if not outcome.ok or (distance is not None and distance < MIN_EXPLORE_BLOCKS):
             self._dead_directions.add(explore.direction)
         elif distance is not None and distance >= NEW_PLACE_BLOCKS:
             self._dead_directions.clear()
+        if took and took.get("direction") != explore.direction:
+            self._dead_directions.add(explore.direction)
 
     def _act_once(self, action: Action, annotate: Annotator | None) -> Outcome:
         outcome = self.backend.act(action)

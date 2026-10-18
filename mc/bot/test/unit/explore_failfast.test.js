@@ -2,7 +2,7 @@ const test = require('node:test')
 const assert = require('node:assert/strict')
 const { Vec3 } = require('vec3')
 const {
-  directionAttempts, explore, hasTimeForAttempt, neighbourDirections, standableNeighbours
+  directionAttempts, explore, firstAttemptThatMoved, hasTimeForAttempt, neighbourDirections, standableNeighbours
 } = require('../../lib/explore')
 const { fakeWorldBot } = require('./world_fixture')
 
@@ -78,6 +78,39 @@ test('a stalled explore gives up in about the stall time per attempt, not the fu
   assert.equal(reply.error, 'unreachable')
   assert.equal(reply.ok, false)
   assert.equal(reply.travel.distance, 0)
+  assert.equal(reply.took, null)
   assert.equal(bot.pathfinder.goals, 4) // request, short hop, W, N: one stalled goal each
   assert.ok(elapsedMs >= 4 * 4000 && elapsedMs <= 20000, `took ${elapsedMs} ms`)
+})
+
+test('firstAttemptThatMoved reports the first attempt that moved, with its distance', async () => {
+  const attempts = directionAttempts('NW', 32)
+  const triedWith = (movedBy) => {
+    const tried = []
+    const tryOne = async (attempt) => { tried.push(attempt); return movedBy(attempt) }
+    return { tried, took: firstAttemptThatMoved(attempts, tryOne) }
+  }
+
+  const requestMoves = triedWith(() => 12)
+  assert.deepEqual(await requestMoves.took, { direction: 'NW', distance: 32 })
+  assert.equal(requestMoves.tried.length, 1)
+
+  const hopMoves = triedWith((a) => (a.distance === 10 && a.direction === 'NW' ? 4 : 0))
+  assert.deepEqual(await hopMoves.took, { direction: 'NW', distance: 10 })
+
+  const neighbourMoves = triedWith((a) => (a.direction === 'N' ? 1 : 0))
+  assert.deepEqual(await neighbourMoves.took, { direction: 'N', distance: 10 })
+  assert.equal(neighbourMoves.tried.length, 4)
+
+  assert.equal(await triedWith(() => 0.5).took, null) // under a block is not moving
+})
+
+test('firstAttemptThatMoved stops when an attempt reports it is out of time', async () => {
+  const tried = []
+  const took = await firstAttemptThatMoved(directionAttempts('NW', 32), async (attempt, index) => {
+    tried.push(attempt)
+    return index === 1 ? null : 0
+  })
+  assert.equal(took, null)
+  assert.equal(tried.length, 2)
 })
