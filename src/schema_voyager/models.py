@@ -31,7 +31,10 @@ class Action:
 
     def __post_init__(self) -> None:
         if self.pos is not None:  # an action read back from JSON has a list, and Action must stay hashable
-            object.__setattr__(self, "pos", tuple(int(v) for v in self.pos))
+            pos = tuple(self.pos)
+            if len(pos) != 3 or not all(isinstance(v, int) and not isinstance(v, bool) for v in pos):
+                raise ValueError(f"pos must be three integers, got {self.pos!r}")
+            object.__setattr__(self, "pos", pos)
 
     def describe(self) -> str:
         if self.kind == "mine":
