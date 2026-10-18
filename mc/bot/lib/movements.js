@@ -4,6 +4,7 @@
 
 const { Movements, goals } = require('mineflayer-pathfinder')
 const { Vec3 } = require('vec3')
+const { breakExclusion, placeExclusion } = require('./protect')
 
 const MAX_DROP_DOWN = 3
 const LIQUID_COST = 5 // wading is allowed but unattractive
@@ -70,9 +71,10 @@ function sprintAllowed (bot) {
 //  - never digs the block straight below the bot (no downward dig moves);
 //  - never breaks `protectedBlock` (the step's own target) on the way;
 //  - drops at most MAX_DROP_DOWN blocks;
+//  - never breaks, nor places scaffold in, a block inside a `protect` box;
 //  - places only `scaffoldNames`: with none, it neither pillars nor bridges.
 class DiggingMovements extends Movements {
-  constructor (bot, { scaffoldNames = [], protectedBlock = null } = {}) {
+  constructor (bot, { scaffoldNames = [], protectedBlock = null, protect = [] } = {}) {
     super(bot)
     this.canDig = true
     this.allowSprinting = sprintAllowed(bot)
@@ -93,6 +95,10 @@ class DiggingMovements extends Movements {
     }
     if (protectedBlock) {
       this.exclusionAreasBreak.push((block) => (block.position.equals(protectedBlock) ? BLOCKED_COST : 0))
+    }
+    if (protect.length > 0) {
+      this.exclusionAreasBreak.push(breakExclusion(protect))
+      this.exclusionAreasPlace.push(placeExclusion(protect))
     }
   }
 
