@@ -272,6 +272,7 @@ class _Life:
         self.events_path = config.run_dir / "life_events.jsonl"
         config.run_dir.mkdir(parents=True, exist_ok=True)
         self.queue = GoalQueue(config.run_dir / "goals.jsonl")
+        self._ring_scans: dict[str, tuple[Any, dict]] = {}  # build goal id -> its first attempt's ring scan (v3.0i)
 
         if resume:
             state = json.loads(self.state_path.read_text(encoding="utf-8"))
@@ -1118,7 +1119,7 @@ class _Life:
                 nonlocal reason
                 done = run_build(
                     episode, self.store, plan, before_step=self._before_step, check_interrupts=check_interrupts,
-                    excluded=self._excluded_rules(),
+                    excluded=self._excluded_rules(), ring_scans=self._ring_scans,
                 )
                 reason = done.reason
                 return done.result
