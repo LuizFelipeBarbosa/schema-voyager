@@ -10,10 +10,13 @@
 //   afterStrike(ctx)           right after bot.attack, before the shield goes up again
 //   steer(ctx, controls)       every tick the mover is active; may change the planned controls
 //                              {forward, back, left, right, jump, sprint} before the safety check
+//   afterSafety(ctx, released) right after the safety check: the horizontal controls it released
+//                              (names, e.g. ['left']) because that step was blocked or unsafe
 //   attach(ctx) / detach(ctx)  with the controller
 //   ownsShield: true           pvp's shield routine is skipped; the tactic raises and lowers it itself
 // ctx: {bot, pvp, target, tick, ticksSinceStrike (Infinity before the first strike), cooldownTicks,
 //   distance (3D, as pvp measures it), horizontal, dy (target y - bot y), inReach (pvp.wasInRange)}.
+// Registry functions are called as (bot, {random}), random being Math.random unless createTactics is given one.
 // Hooks run in REGISTRY order, whatever the order of the names: movement shapers first, crit last so
 // its sprint and jump decisions win.
 
@@ -41,6 +44,9 @@ const CRIT_MARGIN_TICKS = 1 // aim the strike this many ticks after the first de
 const SHIELD_STRIKE_LEAD = 3 // gate open -> bot.attack: shield down (2 ticks) plus the lookAt
 const BARE_STRIKE_LEAD = 1 // the lookAt
 const WTAP_RELEASE_TICKS = 3 // ticks after a strike that forward and sprint stay released
+const STRAFE_RANGE = 4 // horizontal distance within which strafe circles
+const STRAFE_MIN_TICKS = 15 // a side is held for STRAFE_MIN_TICKS to STRAFE_MAX_TICKS steer ticks
+const STRAFE_MAX_TICKS = 35
 const HAZARDS = new Set(['lava', 'fire', 'soul_fire', 'magma_block', 'water', 'cactus', 'sweet_berry_bush', 'powder_snow'])
 
 // A flat-ground jump, in simulated ticks counted from the one that applies the jump (1): the first
@@ -74,6 +80,39 @@ const REGISTRY = {
           controls.forward = true
           controls.sprint = true
         }
+      }
+    }
+  },
+
+  // Circle the target: hold left or right and switch sides now and then (a random 15 to 35 ticks), or at
+  // once when the safety check released the side (blocked or unsafe: the bot wouldn't move).
+  strafe (bot, { random }) {
+    let side = null // 'left' or 'right', set on attach
+    let ticksHeld = 0
+    let holdTicks = 0
+
+    const drawHoldTicks = () => STRAFE_MIN_TICKS + Math.floor(random() * (STRAFE_MAX_TICKS - STRAFE_MIN_TICKS + 1))
+    const switchSide = () => {
+      side = side === 'left' ? 'right' : 'left'
+      ticksHeld = 0
+      holdTicks = drawHoldTicks()
+    }
+
+    return {
+      attach () {
+        side = random() < 0.5 ? 'left' : 'right'
+        ticksHeld = 0
+        holdTicks = drawHoldTicks()
+      },
+
+      steer (ctx, controls) {
+        if (ticksHeld >= holdTicks) switchSide()
+        ticksHeld++
+        if (ctx.horizontal <= STRAFE_RANGE) controls[side] = true
+      },
+
+      afterSafety (ctx, released) {
+        if (released.includes(side)) switchSide()
       }
     }
   },
@@ -185,13 +224,13 @@ function stepDirection (control, yaw) {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
-function createTactics (bot, names = [], { pvp = bot.pvp, registry = REGISTRY } = {}) {
+function createTactics (bot, names = [], { pvp = bot.pvp, registry = REGISTRY, random = Math.random } = {}) {
   const problem = validateTactics(names, registry)
   if (problem) throw new Error(problem)
   const registryOrder = Object.keys(registry)
   const hooks = [...names]
     .sort((a, b) => registryOrder.indexOf(a) - registryOrder.indexOf(b))
-    .map((name) => registry[name](bot))
+    .map((name) => registry[name](bot, { random }))
   const ownsShield = hooks.some((hook) => hook.ownsShield)
 
   let target = null // set while attached
@@ -273,8 +312,10 @@ function createTactics (bot, names = [], { pvp = bot.pvp, registry = REGISTRY } 
   }
 
   // Releases every pressed horizontal control that would step somewhere unsafe, and the jump with it.
+  // Returns the names of the released horizontal controls.
   function makeSafe (controls) {
     const { position, yaw } = bot.entity
+    const released = []
     for (const control of ['forward', 'back', 'left', 'right']) {
       if (!controls[control]) continue
       const direction = stepDirection(control, yaw)
@@ -283,7 +324,9 @@ function createTactics (bot, names = [], { pvp = bot.pvp, registry = REGISTRY } 
       controls[control] = false
       controls.jump = false
       if (control === 'forward') controls.sprint = false
+      released.push(control)
     }
+    return released
   }
 
   function onPhysicsTick () {
@@ -307,7 +350,7 @@ function createTactics (bot, names = [], { pvp = bot.pvp, registry = REGISTRY } 
     const walkIn = ctx.horizontal > STAND_DISTANCE
     const controls = { forward: walkIn, back: false, left: false, right: false, jump: false, sprint: walkIn }
     runHooks('steer', ctx, controls)
-    makeSafe(controls)
+    runHooks('afterSafety', ctx, makeSafe(controls))
     for (const control of CONTROLS) setControl(control, controls[control])
   }
 

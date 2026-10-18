@@ -67,7 +67,7 @@ test('validateTactics: [] is fine; a non-array, non-string, unknown or repeated 
   const registry = { a: () => ({}), b: () => ({}) }
   assert.equal(validateTactics(['b', 'a'], registry), null)
   assert.match(validateTactics(['a', 'b', 'a'], registry), /repeated/)
-  assert.deepEqual([...TACTICS], ['wtap', 'crit'])
+  assert.deepEqual([...TACTICS], ['wtap', 'strafe', 'crit'])
   assert.deepEqual([...DEFAULT_TACTICS], [])
 })
 
@@ -466,4 +466,82 @@ test('wtap + crit: the hooks run in REGISTRY order, so both name orders apply th
   assert.deepEqual(await run(['wtap', 'crit']), crit)
   assert.ok(crit.includes('control:jump:true'), 'crit still jumps')
   assert.ok(!crit.slice(0, crit.indexOf('control:jump:true')).includes('control:sprint:true'), 'crit keeps sprint off up to its jump')
+})
+
+// A random() that returns the given values in turn.
+const scripted = (...values) => () => values.shift()
+
+test('strafe: it is registered between wtap and crit, and valid with crit', () => {
+  assert.deepEqual([...TACTICS], ['wtap', 'strafe', 'crit'])
+  assert.equal(validateTactics(['crit', 'strafe']), null)
+})
+
+test('strafe: within 4 blocks exactly one side is held, switched after the drawn 15..35 ticks, then a new draw', async (t) => {
+  fakeTimers(t)
+  const { bot, pvp, target } = fightFixture({ distance: 3 })
+  // side: 0.1 -> left; first duration 0 -> 15 ticks; second 0.999 -> 35 ticks; third 0 -> 15
+  const tactics = createTactics(bot, ['strafe'], { pvp, random: scripted(0.1, 0, 0.999, 0) })
+  tactics.attach(target)
+  const sides = []
+  for (let i = 0; i < 15 + 35 + 1; i++) {
+    await tickBot(t, bot, 1)
+    assert.equal(Boolean(bot.controls.left) !== Boolean(bot.controls.right), true, `tick ${i + 1}: exactly one side`)
+    sides.push(bot.controls.left ? 'left' : 'right')
+  }
+  assert.deepEqual(sides.slice(0, 15), Array(15).fill('left'))
+  assert.deepEqual(sides.slice(15, 50), Array(35).fill('right'))
+  assert.equal(sides[50], 'left')
+  tactics.detach()
+})
+
+test('strafe: beyond 4 blocks (mover still active) neither side is pressed', async (t) => {
+  fakeTimers(t)
+  const { bot, pvp, target } = fightFixture({ distance: 3 })
+  const tactics = createTactics(bot, ['strafe'], { pvp, random: scripted(0.1, 0.5) })
+  tactics.attach(target)
+  await tickBot(t, bot, 1)
+  target.position = new Vec3(0.5, 10, -4.5) // 4..5 blocks: strafe's range is over, the mover's is not
+  await tickBot(t, bot, 1)
+  assert.equal(bot.goals.length, 1)
+  assert.ok(!bot.controls.left && !bot.controls.right)
+  assert.equal(bot.controls.forward, true)
+  target.position = new Vec3(0.5, 10, -3.5)
+  await tickBot(t, bot, 1)
+  assert.equal(bot.controls.left, true)
+  tactics.detach()
+})
+
+test('strafe: a side whose step is unsafe is released, and the next tick strafes the other way', async (t) => {
+  fakeTimers(t)
+  // facing -z (yaw 0), left is -x: 0.8 block to the left is x -1, lava on the floor there
+  const { bot, pvp, target } = fightFixture({ distance: 3, blocks: floorBlocks([], { '-1,9,0': 'lava' }) })
+  const tactics = createTactics(bot, ['strafe'], { pvp, random: scripted(0.1, 0.5, 0.5) })
+  tactics.attach(target)
+  await tickBot(t, bot, 1)
+  assert.ok(!bot.controls.left && !bot.controls.right)
+  await tickBot(t, bot, 1)
+  assert.equal(bot.controls.right, true)
+  assert.ok(!bot.controls.left)
+  tactics.detach()
+})
+
+test('strafe + crit: crit still jumps with sprint released, and the side is held through the jump', async (t) => {
+  fakeTimers(t)
+  const { bot, pvp, target } = fightFixture()
+  bot.controlState = bot.controls
+  const tactics = createTactics(bot, ['crit', 'strafe'], { pvp, random: scripted(0.9, 0.99) })
+  tactics.attach(target)
+  for (let i = 0; i < 4; i++) {
+    await tickBot(t, bot, 1)
+    if (bot.controls.jump) break
+  }
+  assert.equal(bot.controls.jump, true)
+  assert.equal(bot.controls.right, true)
+  assert.ok(!bot.controls.sprint)
+  bot.entity.onGround = false
+  bot.entity.velocity = new Vec3(0, 0.2, 0)
+  await tickBot(t, bot, 3)
+  assert.equal(bot.controls.right, true)
+  assert.ok(!bot.controls.sprint)
+  tactics.detach()
 })
