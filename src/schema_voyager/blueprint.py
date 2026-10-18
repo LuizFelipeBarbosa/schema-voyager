@@ -274,3 +274,29 @@ def site_box(bp: dict, origin: Pos) -> Box:
     """v3.4b: the blueprint's box plus the layer under it, which the builder fills: what a build scans and protects."""
     (ox, oy, oz), (width, height, depth) = origin, bp["size"]
     return (ox, oy - 1, oz), (width, height + 1, depth)
+
+
+def merge_boxes(boxes: list[Box], limit: int = 32) -> list[Box]:
+    """v3.5e: at most `limit` boxes covering all of them. While there are more, the pair whose bounding box adds the
+    least volume (ties: the lower index pair) is replaced by that bounding box, at the lower index."""
+    boxes = list(boxes)
+    while len(boxes) > limit:
+        added, first, second = min(
+            (_volume(_bounding_box(a, b)) - _volume(a) - _volume(b), i, j)
+            for i, a in enumerate(boxes)
+            for j, b in enumerate(boxes) if i < j
+        )
+        boxes[first] = _bounding_box(boxes[first], boxes[second])
+        del boxes[second]
+    return boxes
+
+
+def _volume(box: Box) -> int:
+    width, height, depth = box[1]
+    return width * height * depth
+
+
+def _bounding_box(a: Box, b: Box) -> Box:
+    low = tuple(min(a[0][axis], b[0][axis]) for axis in range(3))
+    high = tuple(max(a[0][axis] + a[1][axis], b[0][axis] + b[1][axis]) for axis in range(3))
+    return low, tuple(high[axis] - low[axis] for axis in range(3))
