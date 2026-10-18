@@ -335,6 +335,26 @@ test overrides revise to return `[]`.
 - These pass unchanged: `tests/test_v2_change.py`, `tests/test_v2_scramble.py`, `tests/test_v2_worlds.py`,
   `tests/test_v2_repair.py`, `tests/test_v3_repair_dedupe.py`.
 
+### v3.0g Reaching a `/mine` target (S13, lane `unreachable-retry`)
+
+- Bot side: `contracts/bot_api.md` v3.0g (progress-based candidate attempts, a 60 s call, `reach` with the reason,
+  digging down). `MineflayerBackend.mine` copies the answer's top-level `body["reach"]` into `outcome.detail["reach"]`
+  when present.
+  The simulator's `mine` never answers `unreachable` and is unchanged.
+- `Episode.act`, natural world, a `mine` step answering `unreachable`:
+  - `detail.reach.reason == "approaching"` (the call's time ran out while the bot was still getting closer): retry
+    at once, without an explore. At most once per `act` (`MAX_APPROACH_RETRIES = 1`), not counted in `retries`; a
+    second `approaching` in the same `act` is handled as below.
+  - Any other reason, or no `reach` (an older bot): counted in `retries` (`MAX_RETRIES` 2) as before, but the explore
+    before the retry is `_explore_toward(target, ...)` (shared `went_up` and `previous_direction`, so `up` at most once
+    per `act`), not a blind `Action("explore")`. Underground with the target above (a hit more than 4 blocks up, or
+    nothing seen) that asks for `explore up`; ore below gets a directional explore. When `_explore_toward` returns
+    `None` (every direction dead), `_search_exhausted` is set and the step fails, as for `not_found`.
+  - Other actions and non-natural worlds keep the blind explore. `not_found`, `hazard` and `interrupted` are unchanged.
+- The S13 live metric: per goal, the longest run of consecutive ore `mine` steps (target ending `_ore`) whose error
+  is `unreachable`, any reason; explores and other steps between them don't break the run, any other mine outcome
+  does. Reported with the reasons from `reach`.
+
 ## v3.1 Goals
 
 Written by S05 for S06 (M1: plan steps S1.2–S1.7 and play mode). The bot side is in `contracts/bot_api.md`, v3.1.

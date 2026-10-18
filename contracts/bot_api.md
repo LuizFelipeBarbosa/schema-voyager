@@ -245,7 +245,7 @@ the bot only reports.
   preferred when one is within `max_distance`; otherwise the nearest buried one.
 - Pathing with `dig_through`: may dig, and may pillar (1x1 towers) or bridge
   with blocks listed in `scaffold` that the bot holds (none when `scaffold` is
-  absent, so pathing never spends an item the plan needs). It never digs the block straight below the bot,
+  absent, so pathing never spends an item the plan needs). It never digs the block straight below the bot (v3.0g: it may),
   never breaks a block next to lava or water, never walks into lava, avoids
   drops of more than 3 blocks, and won't dig under a gravity block (gravel, sand). Without
   `dig_through`, pathing is world-preserving as in v1.
@@ -497,6 +497,47 @@ action. A walk that falls short is not an error: `ok: true`,
   best pickaxe is used anyway.
 - `tools_broken: [item, ...]`: tools whose count dropped across that dig, because they wore out. `[]` when none.
   Python adds them back to the step's delta (`docs/v3-interfaces.md` v3.0e).
+
+## v3.0g: reaching a `/mine` target (S13, lanes `mine-approach` and `dig-down`)
+
+Why: in eight lives about 75% of `unreachable` ore mines were walks cut off while still moving or digging (three
+11 s attempts toward candidates in different directions, 33-36 s per call), the cut-off blocks went into the
+10-minute memory, and deep ore (10-30 blocks down) needs a 3-5 dig staircase per level. v1 requests are unchanged.
+
+- Candidate loop (v2, moved to `lib/approach.js`): candidates in `reachCost` order, at most 4 per call, a **60 s**
+  call budget (was 36 s), no new candidate with under 3 s left, and candidates within 4 blocks of a failed one
+  skipped for the call, as before. The fixed 11 s per candidate is gone. An attempt walks until it ends one of these
+  ways (`end`):
+  - `reached`: the bot is inside the goal;
+  - `no_path` and `path_timeout`: taken from the attempt's last `path_update` status, `noPath` and `timeout` (the A*
+    search ran out of think time), whether `goto` rejected or resolved (`goto` resolves on an empty path before it
+    looks at the status, so a no-path search from the start node resolves);
+  - `ended`: the bot is outside the goal and the last status was `success` or `partial` (or the walk was stopped
+    or its goal changed);
+  - `stalled`: the 4 s rule, as before (moved less than 1 block and not digging);
+  - `no_approach`: the bot's closest distance to the target hasn't improved by 1 block or more in the last 10 s
+    (`APPROACH_WINDOW_MS`). Digging doesn't count as approaching (a dig loop never stalls);
+  - `approaching`: the call budget ran out before `no_approach` fired.
+  An abort still throws `signal.reason` (v3.2) and marks nothing.
+- What a failed attempt marks:
+  - `no_path`: the episode skip list and the 10-minute unreachable memory (as every failure did before);
+  - `path_timeout`, `ended`, `stalled`, `no_approach`: the episode skip list only (cleared by `/reset_episode`),
+    since these describe the bot's spot as much as the target;
+  - `approaching`: nothing. The bot is now nearer, so the next `/mine` ranks that block or its vein first.
+- Every v2 answer that walked (`ok` or not) adds a compact top-level `reach` field (not inside `detail`, which
+  stays a string):
+  `{"reason": "<end of the last attempt>", "attempts": [{"target": [x, y, z], "end": "...", "ms": 11000,
+  "start": 24.6, "closest": 5.1, "resets": 7, "think_ms": 1830}, ...]}`. `start` and `closest` are distances from
+  the bot's feet to the target's centre (1 decimal) at the attempt's start and its closest; `resets` counts the
+  pathfinder's `path_reset` events and `think_ms` sums its `path_update` times during the attempt. `reach` is absent
+  when nothing was walked (`not_found`, `missing_tool`, a bad request). The server's request log line carries it, so
+  each candidate can be read back from `logs/bot-<inst>.log`. Tolerant: never part of a check.
+- Digging down: `DiggingMovements` keeps the pathfinder's stock downward dig (break the block under the bot, drop
+  onto the next solid block), so a deep target costs about 1 dig per level instead of a staircase's 3-5. It is still
+  refused when that block has water or lava on any side (`safeToBreak`), when the landing is more than 3 blocks down
+  or the fall meets lava (`getLandingBlock`), and inside a `protect` box (v3.4b). This replaces "never digs the block
+  straight below the bot" in "POST /mine (v2 options)"; `GoalBesideBlock` still never ends on top of the target.
+  `/explore` with `dig_through` uses the same movements.
 
 ## v3.1: chat commands (S06, lane `chat-bot`)
 

@@ -155,6 +155,13 @@ A 30-minute life on instance b on the new `main`. Done when: no goal has more
 than 3 identical failed steps, there are 0 false contradictions, and at most
 one crafting table is crafted. Save it as `runs/v3-baseline`.
 
+### S0.8 Reaching ore (S, added by the orchestrator after S01/S02; session S13)
+
+`mine iron_ore` failed `unreachable` in every life: walks cut off while still moving (three 11 s candidates per
+call), cut-off blocks remembered as unreachable, deep ore reached only by staircase, and underground retries that
+explore blind and never go up. Contract v3.0g. Done when: in two lives no goal has more than 2 `unreachable` ore
+mines in a row, iron goals succeed in at least one, and `node mc/bot/test/v2_iron.js` passes.
+
 ---
 
 ## M1: goals you give it
