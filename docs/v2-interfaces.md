@@ -526,6 +526,10 @@ compatible (new keys and one new event kind; v1 traces are unchanged).
   `predicts` (one human line, at most 120 characters, for what the rule
   predicts, e.g. `"2 planks -> 4 stick"`, `"coal_ore with wooden_pickaxe -> 1 coal"`,
   `"raw_iron + 1 coal in a furnace -> 1 iron_ingot"`). Existing keys stay.
+  **v2.3.1:** also `goals` (distinct goals among those confirmations) and
+  `goals_needed` (`MIN_EPISODES`): certification needs both counts, so the
+  panel can say e.g. "2 confirmations in 1 goal, needs 2 goals". `step_start`
+  carries them too.
 - **`step_start` event (new)**, logged by the step loop right before each
   backend call: `{"kind": "step_start", "index": <the step event's index>,
   "action": "<describe()>", "rule": "<rule id>", "experimental": bool,
