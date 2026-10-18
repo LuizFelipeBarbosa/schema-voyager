@@ -36,8 +36,8 @@
 // clears the effects it gave, removes the forceload and disconnects Tester.
 //
 // Usage: node mc/bot/test/v3_polish2_live.js [--checks hunger,unreachable] [--run v3-polish2-live]
-//          [--south 4] [--wait-kill-s 600] [--wait-goal-s 480]
-//          (exit 0 = every selected check passed; --south: blocks south of the home's door the bot stands;
+//          [--south 4] [--wait-kill-s 600] [--wait-goal-s 480] [--summon-now]
+//          (--summon-now: skip the wait for a naturally learned kill rule; exit 0 = every selected check passed; --south: blocks south of the home's door the bot stands;
 //           --help prints this usage and exits without connecting)
 // Env: SV2_MC_PORT (25566), SV2_RCON_PORT, SV2_BOT_PORT, RCON_PASSWORD,
 //      SV2_HOME (repo root), BOT_USERNAME (VoyagerBot).
@@ -56,15 +56,15 @@ const TELEPORT_TIMEOUT_MS = 15 * 1000
 const FIND_GOAL_TIMEOUT_MS = 30 * 1000
 const RECORD_TIMEOUT_MS = 30 * 1000
 const GOAL_TIMEOUT_MS = 6 * 60 * 1000
-const SUMMONED_KILL_WAIT_S = 180
+const SUMMONED_KILL_WAIT_S = 300 // the life asks about new mobs only between goals
+const MOB_REPORT_EVERY_MS = 30 * 1000
 const FINISHED = ['done', 'failed', 'cancelled', 'unsupported']
 
 const HUNGER_BELOW = 8 // life.py: a food level under this, with nothing edible held, queues a hunger goal
-const MIN_SUMMON_Y = 60 // above this the bot is on the surface, where cows can be summoned
 const MAX_FREE_SLOTS = 2 // the bot stores when free_slots < 4; this leaves no doubt
 const COW_TAG = 'p2cow'
 const ADULT_COW = `{Age:0,PersistenceRequired:1b,Tags:["${COW_TAG}"]}`
-const COW_OFFSETS = [[3, 0], [-3, 0], [0, 3]] // summoned only into air cells
+const COW_OFFSETS = [[3, 0], [-4, 0], [0, 3]] // blocks from the bot; each cow lands on the surface there
 
 const FOOD_ANIMALS = ['cow', 'pig', 'sheep', 'chicken', 'rabbit']
 const COOKED_MEATS = ['cooked_beef', 'cooked_porkchop', 'cooked_mutton', 'cooked_chicken', 'cooked_rabbit']
@@ -154,12 +154,17 @@ function findFoodKillRule (store) {
 }
 
 const USAGE = `Usage: node mc/bot/test/v3_polish2_live.js [--checks hunger,unreachable] [--run v3-polish2-live]
-         [--south 4] [--wait-kill-s 600] [--wait-goal-s 480]
+         [--south 4] [--wait-kill-s 600] [--wait-goal-s 480] [--summon-now]
 Live check of S15's fixes (see the header of this file for what it needs). Exit 0 = every selected check passed.`
 
 function parseArgs (argv) {
-  const options = { checks: ['hunger', 'unreachable'], run: 'v3-polish2-live', south: 4, waitKillS: 600, waitGoalS: 480 }
+  const options = { checks: ['hunger', 'unreachable'], run: 'v3-polish2-live', south: 4, waitKillS: 600, waitGoalS: 480, summonNow: false }
   for (let i = 0; i < argv.length; i += 2) {
+    if (argv[i] === '--summon-now') {
+      options.summonNow = true
+      i--
+      continue
+    }
     const value = argv[i + 1]
     if (value === undefined) throw new Error(`${argv[i]} needs a value`)
     if (argv[i] === '--checks') options.checks = value.split(',')
@@ -218,7 +223,7 @@ async function main () {
   loadEnv(sv2Home)
   const mcPort = Number(process.env.SV2_MC_PORT || 25566)
   const voyagerName = process.env.BOT_USERNAME || 'VoyagerBot'
-  const { checks, run, south, waitKillS, waitGoalS } = parseArgs(argv)
+  const { checks, run, south, waitKillS, waitGoalS, summonNow } = parseArgs(argv)
   for (const name of checks) if (!['hunger', 'unreachable'].includes(name)) throw new Error(`unknown check ${name}`)
   if (mcPort === DEMO_MC_PORT) throw new Error(`SV2_MC_PORT=${mcPort} is the live demo's port; refusing`)
   const runDir = path.join(sv2Home, 'runs', run)
@@ -315,18 +320,35 @@ async function main () {
     const readRule = () => findFoodKillRule(readJson(path.join(runDir, 'store.json')))
 
     // 1. A kill rule for a food animal, learned or after cows are put next to the bot.
-    let rule = await waitFor(readRule, waitKillS * 1000, 5000)
+    // Prints which mobs the life has recorded, every 30 s while a wait goes on.
+    let lastReportAt = 0
+    const waitForRule = (seconds) => waitFor(() => {
+      if (Date.now() - lastReportAt >= MOB_REPORT_EVERY_MS) {
+        lastReportAt = Date.now()
+        const state = readJson(path.join(runDir, 'life_state.json')) || {}
+        console.log(`  observed_mobs ${short(Object.keys(state.observed_mobs || {}))}, asked_mobs ${short(state.asked_mobs || [])}`)
+      }
+      return readRule()
+    }, seconds * 1000, 5000)
+
+    let rule = summonNow ? null : await waitForRule(waitKillS)
     let how = 'learned naturally'
     if (!rule) {
-      const { position } = await botStatusNow()
-      assert.ok(position && position.y >= MIN_SUMMON_Y, `no kill rule for ${FOOD_ANIMALS.join('/')} within ${waitKillS} s, and the bot is not on the surface (position ${short(position)})`)
+      // The bot may be in a tunnel: bring it to the surface, then put cows on the surface around it.
+      console.log(`  bot at ${short((await botStatusNow()).position)}`)
+      await rcon.exec(`execute as ${voyagerName} at @s positioned over motion_blocking_no_leaves run tp @s ~ ~ ~`)
+      await sleep(2000)
+      console.log(`  bot on the surface at ${short((await botStatusNow()).position)}`)
       for (const [dx, dz] of COW_OFFSETS) {
-        await rcon.exec(`execute at ${voyagerName} if block ~${dx} ~ ~${dz} air run summon minecraft:cow ~${dx} ~ ~${dz} ${ADULT_COW}`)
+        const reply = await rcon.exec(`execute at ${voyagerName} positioned ~${dx} ~ ~${dz} positioned over motion_blocking_no_leaves run summon minecraft:cow ~ ~ ~ ${ADULT_COW}`)
+        console.log(`  summon cow at ~${dx} ~${dz}: ${reply}`)
       }
       summonedCows.push(COW_TAG)
-      rule = await waitFor(readRule, SUMMONED_KILL_WAIT_S * 1000, 5000)
+      const count = await rcon.exec(`execute if entity @e[type=cow,tag=${COW_TAG}]`)
+      console.log(`  cows tagged ${COW_TAG}: ${count}`)
+      rule = await waitForRule(SUMMONED_KILL_WAIT_S)
       how = 'after summoning 3 cows'
-      assert.ok(rule, `no kill rule for ${FOOD_ANIMALS.join('/')} within ${waitKillS} s, nor ${SUMMONED_KILL_WAIT_S} s after summoning cows`)
+      assert.ok(rule, `no kill rule for ${FOOD_ANIMALS.join('/')} ${summonNow ? '' : `within ${waitKillS} s, nor `}${SUMMONED_KILL_WAIT_S} s after summoning cows`)
     }
     console.log(`  kill rule ${rule.id} (${rule.action.mob}) ${how}, after ${Math.round((Date.now() - startedAt) / 1000)} s`)
 
