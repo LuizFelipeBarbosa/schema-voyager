@@ -244,6 +244,20 @@ WORLD_BORDER = 512
 SPAWN_CLEAR = 8  # no pools this close to the spawn
 TRAVEL_DAMAGE_CHANCE = 0.03
 STEP_DAMAGE_CHANCE = 0.005
+
+# Threats, food and entities (off peaceful, except the animals).
+THREAT_CHANCE = {"peaceful": 0.0, "easy": 0.06, "normal": 0.10, "hard": 0.15}
+FIGHT_DAMAGE = {"easy": (1, 3), "normal": (2, 5), "hard": (3, 7)}  # total damage of a fight
+THREATENED_ACTIONS = ("mine", "craft", "smelt", "explore")
+THREAT_MOBS = ("zombie", "skeleton", "spider", "creeper")
+ANIMALS = ("cow", "sheep", "pig", "chicken")
+ACTIONS_PER_FOOD = 10
+EAT_BELOW = 14  # the bot eats at this food level or lower
+FOOD_POINTS = {
+    "apple": 4, "bread": 5, "carrot": 3, "baked_potato": 5, "cooked_beef": 8, "cooked_porkchop": 8,
+    "cooked_mutton": 6, "cooked_chicken": 6, "cooked_cod": 5, "cooked_salmon": 6, "beef": 3,
+    "porkchop": 3, "mutton": 2, "potato": 1, "sweet_berries": 2, "melon_slice": 2, "cookie": 2,
+}
 PASSABLE = frozenset({"air", "short_grass", "poppy", "dandelion"})
 LIQUIDS = frozenset({"water", "lava"})
 TERRAIN_BLOCKS = frozenset({"grass_block", "dirt", "stone", "deepslate"})
@@ -293,11 +307,22 @@ class NaturalWorld:
 
     name = "natural"
 
-    def __init__(self, seed: int, *, world_rules: tuple[str, ...] = (), species: tuple[str, ...] | None = None):
+    def __init__(
+        self,
+        seed: int,
+        *,
+        world_rules: tuple[str, ...] = (),
+        species: tuple[str, ...] | None = None,
+        difficulty: str = "peaceful",
+    ):
+        if difficulty not in THREAT_CHANCE:
+            raise ValueError(f"unknown difficulty {difficulty!r}")
         self.seed = seed
+        self.difficulty = difficulty
         pool = list(species if species is not None else normalize.SPECIES)
         self._tree_species = random.Random(f"{seed}:species").sample(pool, k=min(len(pool), 1 + seed % 3))
         self._rng = random.Random(f"{seed}:rolls")  # random drops and damage
+        self._threat_rng = random.Random(f"{seed}:threats")  # separate, so peaceful results never move
         self._columns: dict[tuple[int, int], tuple[int, bool]] = {}
         self._chunks: dict[tuple[int, int], _Chunk] = {}
         self._changes: dict[Pos, str] = {}
@@ -308,8 +333,11 @@ class NaturalWorld:
         self.inventory: Counter[str] = Counter()
         self.blocks_walked = 0.0
         self.health = 20.0
+        self.food = 20
+        self._actions = 0
         self.set_world_rules(world_rules)
         self._cell: Pos = (0, self._column(0, 0)[0] + 1, 0)  # the bot's feet cell
+        self._spawn = self._cell
 
     # --- LifeBackend ---------------------------------------------------------
 
@@ -352,6 +380,7 @@ class NaturalWorld:
             free_slots=_free_slots(self.inventory),
             nearby={block: count for block, count in sorted(nearby.items()) if count > 0},
             blocks_walked=round(self.blocks_walked, 1),
+            entities=self._entities(),
         )
 
     def toss(self, items: dict[str, int]) -> dict[str, int]:
@@ -364,7 +393,7 @@ class NaturalWorld:
     def status(self, since: int = 0) -> Status:
         return Status(
             health=self.health,
-            food=20,
+            food=self.food,
             position=self._position(),
             events=[event for event in self._events if event["seq"] > since],
             last_seq=self._seq,
@@ -403,6 +432,13 @@ class NaturalWorld:
 
     def act(self, action: Action) -> Outcome:
         self.health = min(20.0, self.health + 1)
+        if self.difficulty != "peaceful":
+            self._actions += 1
+            if self._actions % ACTIONS_PER_FOOD == 0:
+                self.food = max(0, self.food - 1)
+            self._eat_if_hungry()
+            if action.kind in THREATENED_ACTIONS and self._threat_rng.random() < THREAT_CHANCE[self.difficulty]:
+                return self._threatened(action)
         if action.kind == "mine":
             return self._mine(action)
         if action.kind == "craft":
@@ -587,6 +623,71 @@ class NaturalWorld:
             travel={"distance": float(gained), "dug": dict(dug), "placed": {}, "picked_up": dict(kept)},
             events=events,
         )
+
+    # --- threats, food and death ---------------------------------------------
+
+    def die(self) -> list[dict[str, Any]]:
+        """The bot dies now: it respawns at the spawn with full health and food, keeping its inventory."""
+        death = self._emit({"type": "death", "phase": "step", "position": _xyz(self._position())})
+        self._cell = self._spawn
+        self.health, self.food = 20.0, 20
+        return [death, self._emit({"type": "respawn", "position": _xyz(self._position())})]
+
+    def _threatened(self, action: Action) -> Outcome:
+        """A mob cuts into the action: it does not run, and the answer is `interrupted`."""
+        rng = self._threat_rng
+        mob = rng.choice(THREAT_MOBS)
+        mob_id = 1000 + self._seq
+        distance = round(rng.uniform(3, 8), 1)
+        events = [self._emit({"type": "threat", "mob": mob, "id": mob_id, "distance": distance, "reason": "near", "action": f"/{action.kind}"})]
+
+        if mob == "creeper":
+            events.append(self._emit({"type": "fled", "from": mob, "reason": "creeper", "distance": distance, "health": self.health}))
+            outcome = "fled"
+        else:
+            events.append(self._emit({"type": "fight_start", "target": mob, "id": mob_id, "distance": distance, "weapon": None}))
+            low, high = FIGHT_DAMAGE[self.difficulty]
+            total = rng.randint(low, high)
+            damage_taken = 0.0
+            while total > 0 and self.health > 0:
+                amount = float(min(total, rng.randint(1, 3)))
+                total -= int(amount)
+                damage_taken += amount
+                self.health = max(0.0, self.health - amount)
+                events.append(self._emit({"type": "damage", "amount": amount, "health": self.health, "phase": "step"}))
+            outcome = "died" if self.health <= 0 else "fled" if self.health < 6 else "killed"
+            events.append(self._emit({
+                "type": "fight_end", "target": mob, "outcome": outcome,
+                "damage_taken": damage_taken, "duration_s": round(rng.uniform(1, 4), 1),
+            }))
+            if outcome == "died":
+                return self._fail("quarantined", events=[*events, *self.die()])
+        return self._fail("interrupted", events=events, threat=mob, outcome=outcome)
+
+    def _eat_if_hungry(self) -> None:
+        if self.food > EAT_BELOW:
+            return
+        held = [item for item in FOOD_POINTS if self.inventory[item] > 0]
+        if not held:
+            return
+        item = max(held, key=lambda item: (FOOD_POINTS[item], item))
+        self.inventory[item] -= 1
+        self.food = min(20, self.food + FOOD_POINTS[item])
+        self._emit({"type": "ate", "item": item, "food": self.food})
+
+    def _entities(self) -> dict[str, dict[str, Any]]:
+        """Mobs in view: a pure function of the seed, the difficulty and the region the bot stands in."""
+        region = (self._cell[0] >> 4, self._cell[2] >> 4)
+        entities: dict[str, dict[str, Any]] = {}
+        for index, animal in enumerate(ANIMALS):
+            roll = _hash01(self.seed, 10 + index, *region)
+            if roll < 0.4:
+                entities[animal] = {"count": 1 + int(roll * 10) % 3, "nearest": round(4 + roll * 40, 1), "kind": "animal"}
+        roll = _hash01(self.seed, 20, *region)
+        if self.difficulty != "peaceful" and roll < 0.3:
+            mob = THREAT_MOBS[int(roll * 100) % len(THREAT_MOBS)]
+            entities[mob] = {"count": 1, "nearest": round(10 + roll * 20, 1), "kind": "hostile"}
+        return entities
 
     # --- crafting helpers ----------------------------------------------------
 
@@ -831,7 +932,7 @@ class NaturalWorld:
             bot_y = self._cell[1]
             for x, z in self._disc(radius):
                 spans = self._spans(*self._column(x, z))
-                for block in terrain:
+                for block in terrain & spans.keys():
                     low, high = spans[block]
                     for y in {high, min(max(bot_y, low), high)}:
                         distance = self._distance_to((x, y, z))
@@ -974,6 +1075,10 @@ class NaturalWorld:
             travel=_empty_travel(),
             events=events or [],
         )
+
+
+def _xyz(position: tuple[float, float, float]) -> dict[str, float]:
+    return {"x": position[0], "y": position[1], "z": position[2]}
 
 
 def _free_slots(inventory: dict[str, int], *, clamp: bool = True) -> int:
