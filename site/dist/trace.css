@@ -414,3 +414,26 @@ select { background: var(--panel); border: 1px solid var(--line); border-radius:
 
 .layout.compact .controls { padding: 4px 10px; gap: 4px; }
 .layout.compact .controls button { min-width: 28px; height: 24px; }
+
+/* Goals box: send a goal to the bot, list the goals */
+.goals { padding: 10px 18px 12px; border-bottom: 1px solid var(--line); }
+.goals-form { display: flex; gap: 8px; }
+.goals-input { flex: 1; min-width: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 3px; padding: 6px 10px; font-size: 14px; }
+.goals-input:focus { outline: none; border-color: var(--amber); }
+.goals-send { padding: 4px 16px; background: var(--amber); color: var(--bg); border: 0; border-radius: 3px; font-weight: 700; cursor: pointer; }
+.goals-error { margin-top: 6px; color: var(--red); font-family: var(--mono); font-size: 12px; }
+.goals-list { list-style: none; margin: 8px 0 0; padding: 0; max-height: 180px; overflow-y: auto; }
+.goal-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; padding: 4px 0; border-top: 1px solid var(--line); font-size: 13px; }
+.goal-row:first-child { border-top: 0; }
+.goal-id { color: var(--dim); font-family: var(--mono); font-size: 11px; }
+.goal-text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.goal-reason { flex-basis: 100%; color: var(--muted); font-size: 12px; }
+.goal-empty { color: var(--dim); font-size: 13px; }
+.goal-chip { flex: none; font-family: var(--mono); font-size: 10px; letter-spacing: .08em; text-transform: uppercase; padding: 2px 8px; border-radius: 3px; border: 1px solid var(--line); color: var(--muted); }
+.goal-chip-running { color: var(--amber); border-color: rgba(233, 185, 73, .4); }
+.goal-chip-done { color: var(--bg); background: var(--mint); border-color: var(--mint); }
+.goal-chip-failed { color: var(--bg); background: var(--red); border-color: var(--red); }
+.goal-chip-unsupported { color: var(--red); border-color: rgba(240, 96, 77, .4); }
+.goal-chip-awaiting-approval { color: var(--violet); border-color: rgba(185, 167, 245, .4); }
+.goal-cancel { padding: 1px 9px; background: transparent; border: 1px solid var(--line); border-radius: 3px; font-family: var(--mono); font-size: 11px; cursor: pointer; }
+.goal-cancel:hover { border-color: var(--red); color: var(--red); }
