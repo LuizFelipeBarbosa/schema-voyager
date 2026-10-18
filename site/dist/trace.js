@@ -773,6 +773,10 @@ function rawLogLine(event) {
       return ['warn', `home ${homeStation(event)} not placed at ${event.pos.join(' ')} · ${event.error}`];
     case 'home_lost':
       return ['warn', `home ${homeStation(event)} lost at ${event.pos.join(' ')}`];
+    case 'home_unreachable':
+      return ['warn', `the ${homeStation(event)} at ${event.pos.join(' ')} can't be reached: ${event.action}`];
+    case 'home_slot_bad':
+      return ['warn', `home slot ${event.pos.join(' ')} can't be reached for the ${homeStation(event)}`];
     case 'bot_stuck':
       return ['warn', `life stopped: the bot was stuck (busy) after ${event.losses} losses in ${event.window_s} s`];
     case 'goal_children':

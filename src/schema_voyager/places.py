@@ -4,7 +4,7 @@ stand, and what the chest holds. Pure functions over blueprints and scans. Contr
 from __future__ import annotations
 
 import math
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 
 from . import blueprint
@@ -14,6 +14,7 @@ from .models import HomeStock
 
 YARD = 2  # blocks around the house's footprint where its stations stand
 HOME_STATION_KINDS = ("chest", "crafting_table", "furnace")  # HOME_RANGE = 48 is in models.py, for HomeStock
+SLOT_BLAME_BLOCKS = 6.0  # a walk that ended this close to a cell (centre) blames the cell, not where the bot is (v3.0i)
 
 
 @dataclass(frozen=True)
@@ -31,6 +32,9 @@ class Places:
     stations: dict[str, Pos] = field(default_factory=dict)
     stored: dict[str, int] = field(default_factory=dict)
     chest_goal: str | None = None  # the id of the one chest goal asked for this home (v3.5c)
+    bad_slots: list[Pos] = field(default_factory=list)  # yard cells the bot couldn't walk to (v3.0i)
+    moved: set[str] = field(default_factory=set)  # kinds already moved once from an unreachable slot
+    retired: set[str] = field(default_factory=set)  # kinds dropped for good: never furnished again
 
     def to_json(self) -> dict:
         home = self.home
@@ -42,6 +46,9 @@ class Places:
             "stations": {kind: list(pos) for kind, pos in self.stations.items()},
             "stored": dict(self.stored),
             "chest_goal": self.chest_goal,
+            "bad_slots": [list(cell) for cell in self.bad_slots],
+            "moved": sorted(self.moved),
+            "retired": sorted(self.retired),
         }
 
     @classmethod
@@ -56,6 +63,9 @@ class Places:
             stations={kind: tuple(pos) for kind, pos in (data.get("stations") or {}).items()},
             stored=dict(data.get("stored") or {}),
             chest_goal=data.get("chest_goal"),
+            bad_slots=[tuple(cell) for cell in data.get("bad_slots") or []],
+            moved=set(data.get("moved") or []),
+            retired=set(data.get("retired") or []),
         )
 
     def stock(self) -> HomeStock:
@@ -104,13 +114,30 @@ def yard_scan_box(home: Home) -> Box:
     return (ox - YARD, oy - 2, oz - YARD), (width + 2 * YARD, 5, depth + 2 * YARD)
 
 
-def yard_slots(home: Home, scan: dict[Pos, str | None], taken: Iterable[Pos] = ()) -> list[Pos]:
+def blames_slot(cell: Pos, position: dict | Sequence[float] | None) -> bool:
+    """Whether a walk that ended at position (an answer's {x, y, z}, or a 3-sequence) stopped within SLOT_BLAME_BLOCKS
+    of the cell's centre: the slot is to blame. Farther away, the bot's own spot is (a hole, a cave). None or
+    malformed is False."""
+    try:
+        if isinstance(position, dict):
+            position = (position["x"], position["y"], position["z"])
+        end = tuple(float(value) for value in position)
+        if len(end) != 3:
+            return False
+    except (KeyError, TypeError, ValueError):
+        return False
+    return math.dist(end, (cell[0] + 0.5, cell[1] + 0.5, cell[2] + 0.5)) <= SLOT_BLAME_BLOCKS
+
+
+def yard_slots(
+    home: Home, scan: dict[Pos, str | None], taken: Iterable[Pos] = (), bad_slots: Iterable[Pos] = ()
+) -> list[Pos]:
     """The free cells for a station, best first: in the one-block ring outside the footprint, standing on solid
     ground with air above, never the door's outside cell or a taken cell. Per column only the lowest such cell,
-    ordered by distance (x, z) to the door's outside cell, then y, z, x."""
+    ordered by distance (x, z) to the door's outside cell, then y, z, x. Bad slots (v3.0i) are skipped."""
     (ox, oy, oz), (width, _, depth) = home.origin, home.size
     door_outside = _door_outside(home)
-    taken = set(taken)
+    taken = set(taken) | set(bad_slots)
 
     def is_slot(cell: Pos) -> bool:
         x, y, z = cell
