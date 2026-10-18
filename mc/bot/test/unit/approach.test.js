@@ -157,7 +157,7 @@ test('reach.attempts carry the documented keys with rounded numbers, and count r
   assert.deepEqual(Object.keys(attempt), ['target', 'end', 'ms', 'start', 'closest', 'resets', 'think_ms'])
   assert.deepEqual(attempt.target, [10, 10, 0])
   assert.equal(attempt.resets, 2)
-  assert.equal(attempt.think_ms, 31)
+  assert.equal(attempt.think_ms, 20) // the partial update is superseded by the noPath one of the same search
   // the bot stands at (0.5, 10, 0.5); the target's centre is (10.5, 10.5, 0.5)
   assert.equal(attempt.start, 10)
   assert.equal(attempt.closest, 10)
@@ -245,4 +245,21 @@ test('a successful mine carries reach whose last attempt is reached', async (t) 
   assert.equal(reply.ok, true, JSON.stringify(reply))
   assert.equal(reply.reach.reason, 'reached')
   assert.equal(reply.reach.attempts.at(-1).end, 'reached')
+})
+
+test('think time counts each A* search once: partial times are cumulative within a search', async () => {
+  const thinkMsOf = async (updates) => {
+    const bot = walkerBot([], (b, emit) => {
+      for (const update of updates) emit('path_update', { path: [{}], ...update })
+      return Promise.resolve()
+    })
+    return (await gotoGoalDetailed(bot, { isEnd: () => false }, 5000)).thinkMs
+  }
+  assert.equal(await thinkMsOf([
+    { status: 'partial', time: 40 },
+    { status: 'partial', time: 80 },
+    { status: 'success', time: 120 },
+    { status: 'partial', time: 30 } // a search still running when the attempt ends
+  ]), 150)
+  assert.equal(await thinkMsOf([{ status: 'noPath', time: 12 }]), 12)
 })

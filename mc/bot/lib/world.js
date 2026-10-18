@@ -225,7 +225,8 @@ function stopMoving (bot) {
 //   ended        goto resolved or was rejected (goal changed, path stopped)
 //                with the bot outside the goal and no failure status.
 // `start` and `closest` are those distances (null without `approach`),
-// `resets` counts path_reset events and `thinkMs` sums the path_update times.
+// `resets` counts path_reset events and `thinkMs` sums the A* search times
+// (path_update times are cumulative within a search, so each counts once).
 // With `signal`, an abort stops the walk and throws `signal.reason` (never a
 // false result: a cancelled walk is not unreachable).
 async function gotoGoalDetailed (bot, goal, timeoutMs = PATH_TIMEOUT_MS, { failFast = null, approach = null, signal = null } = {}) {
@@ -239,9 +240,15 @@ async function gotoGoalDetailed (bot, goal, timeoutMs = PATH_TIMEOUT_MS, { failF
   let lastStatus = null
   let resets = 0
   let thinkMs = 0
+  let runningSearchMs = 0 // latest time of the search still sending partial updates
   const onPathUpdate = (results) => {
     lastStatus = results.status
-    thinkMs += results.time ?? 0
+    if (results.status === 'partial') {
+      runningSearchMs = results.time ?? 0
+    } else {
+      thinkMs += results.time ?? 0
+      runningSearchMs = 0
+    }
   }
   const onPathReset = () => { resets++ }
   bot.on?.('path_update', onPathUpdate)
@@ -306,7 +313,7 @@ async function gotoGoalDetailed (bot, goal, timeoutMs = PATH_TIMEOUT_MS, { failF
   if (reached) end = 'reached'
   else if (lastStatus === 'noPath') end = 'no_path'
   else if (lastStatus === 'timeout') end = 'path_timeout'
-  return { reached, end, start, closest, resets, thinkMs: Math.round(thinkMs), ms: Date.now() - startedAt }
+  return { reached, end, start, closest, resets, thinkMs: Math.round(thinkMs + runningSearchMs), ms: Date.now() - startedAt }
 }
 
 // gotoGoalDetailed, reduced to: true when the bot ends inside the goal.
