@@ -21,6 +21,10 @@ const OFF_HAND_SLOT = 45
 const POLL_MS = 50
 const WINDOW_WAIT_MS = 10000
 const RESPOND_CAP_MS = 30000
+const FIGHT_CLEANUP_MARGIN_MS = 5000 // the fight's own timeout ends this long before the cap
+const RESPOND_BACKSTOP_MS = 10000 // past the cap: only if run() hangs
+const REACH_BLOCKS = 4.5 // pvp's attackRange is 3.5
+const OUT_OF_REACH_MS = 5000
 
 const EXTRA_HOSTILE = new Set(['slime', 'magma_cube', 'phantom'])
 const NEUTRAL = new Set(['enderman', 'zombified_piglin', 'piglin'])
@@ -57,12 +61,12 @@ function pickThreat (entities, botPos, recentAttackers, now, canSee = () => true
   return { entity, mob, id, distance, reason }
 }
 
-// -> 'fight' | 'flee' | 'back_off' | 'ignore'
-function decide (mode, threat, health) {
+// `armed`: the bot holds a sword or an axe. -> 'fight' | 'flee' | 'back_off' | 'ignore'
+function decide (mode, threat, health, armed = true) {
   if (mode === 'off' || !threat) return 'ignore'
   if (threat.mob === 'creeper') return 'back_off' // never fought: an explosion at point blank can take about 20 health
   if (health < LOW_HEALTH) return 'flee'
-  return mode === 'passive' ? 'flee' : 'fight'
+  return mode === 'passive' || !armed ? 'flee' : 'fight'
 }
 
 function sleep (ms) {
@@ -93,9 +97,12 @@ async function equipForFight (bot) {
 }
 
 // Listens for whatever ends a fight. `outcome` resolves once with the first one; `stop()` removes
-// every listener and timer; `damageTaken()` sums the health drops so far.
-function watchFight (bot, target, { timeoutMs, shouldStop }) {
+// every listener and timer; `damageTaken()` sums the health drops so far. A target farther than
+// REACH_BLOCKS for outOfReachMs in a row ends it `lost`, and `wasOutOfReach()` is then true.
+function watchFight (bot, target, { timeoutMs, shouldStop, outOfReachMs }) {
   let damage = 0
+  let outOfReach = false
+  let farSince = null
   let lastHealth = bot.health
   let finish
   const outcome = new Promise((resolve) => { finish = resolve })
@@ -109,7 +116,17 @@ function watchFight (bot, target, { timeoutMs, shouldStop }) {
   const onDeath = () => finish('died')
   const poll = setInterval(() => {
     const live = bot.entities[target.id]
-    if (!live || bot.entity.position.distanceTo(live.position) > SCAN_BLOCKS || shouldStop()) finish('lost')
+    const distance = live ? bot.entity.position.distanceTo(live.position) : Infinity
+    if (distance > SCAN_BLOCKS || shouldStop()) finish('lost')
+    if (distance <= REACH_BLOCKS) {
+      farSince = null
+    } else {
+      farSince ??= Date.now()
+      if (Date.now() - farSince >= outOfReachMs) {
+        outOfReach = true
+        finish('lost')
+      }
+    }
   }, POLL_MS)
   const timer = setTimeout(() => finish('timeout'), timeoutMs)
   bot.on('health', onHealth)
@@ -119,6 +136,7 @@ function watchFight (bot, target, { timeoutMs, shouldStop }) {
   return {
     outcome,
     damageTaken: () => damage,
+    wasOutOfReach: () => outOfReach,
     stop () {
       clearInterval(poll)
       clearTimeout(timer)
@@ -129,8 +147,9 @@ function watchFight (bot, target, { timeoutMs, shouldStop }) {
   }
 }
 
-// Fights `target` until an outcome. Resolves {outcome, damage_taken, duration_s}; never rejects.
-async function fight (bot, target, { pvp = bot.pvp, timeoutMs = 30000, movements = null, eventLog = null, shouldStop = () => false, deadline = Infinity } = {}) {
+// Fights `target` until an outcome. Resolves {outcome, damage_taken, duration_s, out_of_reach}; never rejects.
+// After a `fled`, or a `lost` because the target stayed out of reach, it flees from the target.
+async function fight (bot, target, { pvp = bot.pvp, timeoutMs = 30000, movements = null, eventLog = null, shouldStop = () => false, deadline = Infinity, outOfReachMs = OUT_OF_REACH_MS } = {}) {
   // `deadline` (ms since the epoch) bounds the whole call: the window wait, the fight and the flight after a `fled`.
   const startedAt = Date.now()
   const windowDeadline = Math.min(startedAt + WINDOW_WAIT_MS, deadline)
@@ -141,7 +160,7 @@ async function fight (bot, target, { pvp = bot.pvp, timeoutMs = 30000, movements
     target: target.name, id: target.id, distance: round(bot.entity.position.distanceTo(target.position), 1), weapon
   })
 
-  const watch = watchFight(bot, target, { timeoutMs: Math.max(0, Math.min(timeoutMs, deadline - Date.now())), shouldStop })
+  const watch = watchFight(bot, target, { timeoutMs: Math.max(0, Math.min(timeoutMs, deadline - Date.now())), shouldStop, outOfReachMs })
   let outcome
   try {
     if (movements) pvp.movements = movements
@@ -161,9 +180,10 @@ async function fight (bot, target, { pvp = bot.pvp, timeoutMs = 30000, movements
     damage_taken: round(watch.damageTaken(), 1),
     duration_s: round((Date.now() - startedAt) / 1000, 1)
   }
+  const outOfReach = outcome === 'lost' && watch.wasOutOfReach()
   eventLog?.record('fight_end', { target: target.name, ...result })
-  if (outcome === 'fled') await flee(bot, target, { minDistance: SCAN_BLOCKS, timeoutMs: Math.max(0, Math.min(10000, deadline - Date.now())), movements })
-  return result
+  if (outcome === 'fled' || outOfReach) await flee(bot, target, { minDistance: SCAN_BLOCKS, timeoutMs: Math.max(0, Math.min(10000, deadline - Date.now())), movements })
+  return { ...result, out_of_reach: outOfReach }
 }
 
 // Moves away from `from` until it is minDistance away, the time is up or the bot dies.
@@ -197,12 +217,13 @@ function canSee (bot, entity) {
   return !block || eyes.distanceTo(block.intersect ?? block.position) >= distance
 }
 
-function createGuard (bot, { eventLog, mode = process.env.BOT_GUARD || 'defend', movements = () => null, now = () => Date.now() / 1000 } = {}) {
+function createGuard (bot, { eventLog, mode = process.env.BOT_GUARD || 'defend', movements = () => null, now = () => Date.now() / 1000, respondCapMs = RESPOND_CAP_MS, outOfReachMs = OUT_OF_REACH_MS } = {}) {
   assertMode(mode)
   const owners = parseOwners(process.env.BOT_OWNERS)
   const recentAttackers = new Map() // entity id -> seconds of its last hit on the bot
   const distanceSamples = new Map() // entity id -> [{t, distance}], oldest first
   const deadIds = new Set() // entities that died but are still in bot.entities until entityGone
+  const beatenIds = new Set() // targets whose fight ended timeout, fled or out of reach, until entityGone
   let responding = false
   let fighting = null
 
@@ -212,7 +233,10 @@ function createGuard (bot, { eventLog, mode = process.env.BOT_GUARD || 'defend',
     recentAttackers.set(source.id, now())
   }
   const onEntityDead = (entity) => deadIds.add(entity.id)
-  const onEntityGone = (entity) => deadIds.delete(entity.id)
+  const onEntityGone = (entity) => {
+    deadIds.delete(entity.id)
+    beatenIds.delete(entity.id)
+  }
   bot.on('entityHurt', onEntityHurt)
   bot.on('entityDead', onEntityDead)
   bot.on('entityGone', onEntityGone)
@@ -230,7 +254,7 @@ function createGuard (bot, { eventLog, mode = process.env.BOT_GUARD || 'defend',
     const t = now()
     const botPos = bot.entity.position
     const list = []
-    for (const id of deadIds) if (!bot.entities[id]) deadIds.delete(id)
+    for (const ids of [deadIds, beatenIds]) for (const id of ids) if (!bot.entities[id]) ids.delete(id)
     for (const entity of Object.values(bot.entities)) {
       if (entity === bot.entity || !entity.position || deadIds.has(entity.id)) continue
       const distance = botPos.distanceTo(entity.position)
@@ -253,6 +277,10 @@ function createGuard (bot, { eventLog, mode = process.env.BOT_GUARD || 'defend',
     } catch {}
   }
 
+  function isArmed () {
+    return bestWeapon(bot.inventory.items()) !== null
+  }
+
   function recordFled (threat, reason) {
     eventLog?.record('fled', { from: threat.mob, reason, distance: round(threat.distance, 1), health: round(bot.health, 1) })
   }
@@ -263,13 +291,20 @@ function createGuard (bot, { eventLog, mode = process.env.BOT_GUARD || 'defend',
     if (!target) return { decision, outcome: 'lost' }
     if (decision === 'fight') {
       const result = await fight(bot, target, {
-        timeoutMs: remainingMs(30000), movements: movements(), eventLog, shouldStop: () => mode === 'off', deadline
+        timeoutMs: remainingMs(respondCapMs - FIGHT_CLEANUP_MARGIN_MS), movements: movements(), eventLog,
+        shouldStop: () => mode === 'off', deadline, outOfReachMs
       })
-      if (result.outcome === 'fled') recordFled(threat, 'low_health') // fight() has already run
+      // fight() has already run the flight
+      if (result.outcome === 'fled') recordFled(threat, 'low_health')
+      if (result.out_of_reach) recordFled(threat, 'out_of_reach')
+      if (['timeout', 'fled'].includes(result.outcome) || result.out_of_reach) beatenIds.add(threat.id)
       return { decision, outcome: result.outcome }
     }
     const backOff = decision === 'back_off'
-    const reason = backOff ? 'creeper' : bot.health < LOW_HEALTH ? 'low_health' : 'passive'
+    const reason = backOff ? 'creeper'
+      : bot.health < LOW_HEALTH ? 'low_health'
+        : mode === 'passive' ? 'passive'
+          : beatenIds.has(threat.id) ? 'beaten' : 'unarmed'
     recordFled(threat, reason)
     const { died } = await flee(bot, target, backOff
       ? { minDistance: 8, timeoutMs: remainingMs(8000), movements: movements() }
@@ -292,19 +327,24 @@ function createGuard (bot, { eventLog, mode = process.env.BOT_GUARD || 'defend',
       const t = now()
       for (const [id, hitAt] of recentAttackers) if (t - hitAt > ATTACKER_WINDOW_S) recentAttackers.delete(id)
       const threat = pickThreat(nearbyEntities(), bot.entity.position, recentAttackers, t, (entity) => canSee(bot, bot.entities[entity.id]))
-      const decision = decide(mode, threat, bot.health)
+      const decision = decide(mode, threat, bot.health, isArmed() && !beatenIds.has(threat?.id))
       return decision === 'ignore' ? null : { threat, decision }
     },
 
-    // Never rejects; takes at most RESPOND_CAP_MS.
+    // Never rejects; run() finishes its cleanup within respondCapMs, and a backstop past that only fires if it hangs.
     async respond ({ threat, decision }, { action = null } = {}) {
       responding = true
-      const deadline = Date.now() + RESPOND_CAP_MS
+      const deadline = Date.now() + respondCapMs
       fighting = threat.mob
       eventLog?.record('threat', { mob: threat.mob, id: threat.id, distance: round(threat.distance, 1), reason: threat.reason, action })
       let cap
       try {
-        const capped = new Promise((resolve) => { cap = setTimeout(() => resolve({ decision, outcome: 'timeout' }), RESPOND_CAP_MS) })
+        const capped = new Promise((resolve) => {
+          cap = setTimeout(() => {
+            console.error(`guard: run() still going ${RESPOND_BACKSTOP_MS} ms past the deadline; answering timeout`)
+            resolve({ decision, outcome: 'timeout' })
+          }, respondCapMs + RESPOND_BACKSTOP_MS)
+        })
         return await Promise.race([run({ threat, decision }, deadline), capped])
       } catch {
         return { decision, outcome: 'lost' }

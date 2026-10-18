@@ -75,6 +75,8 @@ test('decide: every mode against no threat, a creeper, low health and an ordinar
     assert.equal(decide(mode, creeper, 20), creeperNear, `${mode} creeper`)
     assert.equal(decide(mode, zombie, 5.5), lowHealth, `${mode} low health`)
     assert.equal(decide(mode, zombie, 20), ordinary, `${mode} ordinary`)
+    assert.equal(decide(mode, zombie, 20, false), mode === 'defend' ? 'flee' : ordinary, `${mode} unarmed`)
+    assert.equal(decide(mode, creeper, 20, false), creeperNear, `${mode} unarmed creeper`)
   }
   for (const mode of ['passive', 'defend']) {
     assert.equal(decide(mode, { mob: 'creeper', distance: 7 }, 20), 'back_off', `${mode} creeper at 7`)
@@ -216,8 +218,10 @@ test('fight: waits for an open window to close first', async () => {
 
 // ---- createGuard ----
 
-function guardFixture (options = {}) {
-  const fixture = fakeFightBot()
+const sword = { name: 'iron_sword', slot: 36 }
+
+function guardFixture ({ items = [sword], ...options } = {}) {
+  const fixture = fakeFightBot({ items })
   fixture.bot.entity = { id: 1, position: origin.clone() }
   let clock = 1000
   const log = createEventLog()
@@ -390,4 +394,85 @@ test('guard: check is null before the bot has spawned', () => {
   const { bot, guard } = guardFixture({ mode: 'defend' })
   bot.entity = undefined
   assert.equal(guard.check(), null)
+})
+
+test('guard: an unarmed bot flees in defend and records fled unarmed; an armed one fights', async () => {
+  const unarmed = guardFixture({ mode: 'defend', items: [{ name: 'iron_pickaxe', slot: 36 }] })
+  const picked = unarmed.guard.check()
+  assert.equal(picked.decision, 'flee')
+  setTimeout(() => { unarmed.target.position = new Vec3(17, 64, 0) }, 30)
+  assert.deepEqual(await unarmed.guard.respond(picked), { decision: 'flee', outcome: 'fled' })
+  const fled = unarmed.log.since(0).find((event) => event.type === 'fled')
+  assert.deepEqual([fled.from, fled.reason], ['zombie', 'unarmed'])
+  assert.equal(unarmed.pvp.attacked.length, 0)
+
+  assert.equal(guardFixture({ mode: 'defend', items: [{ name: 'stone_axe', slot: 36 }] }).guard.check().decision, 'fight')
+  assert.equal(guardFixture({ mode: 'defend' }).guard.check().decision, 'fight')
+})
+
+test('guard: a target that stays out of reach ends the fight lost and the guard flees from it', async () => {
+  const { target, guard, log, bot } = guardFixture({ mode: 'defend', outOfReachMs: 100 })
+  const picked = guard.check()
+  target.position = new Vec3(6, 64, 0)
+  setTimeout(() => { target.position = new Vec3(17, 64, 0) }, 400)
+  assert.deepEqual(await guard.respond(picked), { decision: 'fight', outcome: 'lost' })
+  const events = log.since(0)
+  assert.equal(events.find((event) => event.type === 'fight_end').outcome, 'lost')
+  assert.equal(events.find((event) => event.type === 'fled').reason, 'out_of_reach')
+  assert.equal(bot.setGoals.at(-1), null)
+})
+
+test('fight: a target that comes back within reach resets the out-of-reach time', async () => {
+  const { bot, target } = fakeFightBot()
+  target.position = new Vec3(6, 64, 0)
+  later(70, () => { target.position = new Vec3(3, 64, 0) })
+  later(120, () => { target.position = new Vec3(6, 64, 0) })
+  const result = await fight(bot, target, { timeoutMs: 260, outOfReachMs: 150 })
+  assert.equal(result.outcome, 'timeout')
+})
+
+test('guard: a target whose fight ended timeout or fled is only fled from until entityGone', async () => {
+  const timedOut = guardFixture({ mode: 'defend', respondCapMs: 5100 }) // the fight times out after 100 ms
+  assert.equal((await timedOut.guard.respond(timedOut.guard.check())).outcome, 'timeout')
+  assert.equal(timedOut.guard.check().decision, 'flee')
+  timedOut.bot.emit('entityGone', timedOut.target)
+  assert.equal(timedOut.guard.check().decision, 'fight')
+
+  const fled = guardFixture({ mode: 'defend' })
+  const picked = fled.guard.check()
+  setTimeout(() => { fled.bot.health = 5; fled.bot.emit('health') }, 20)
+  setTimeout(() => { fled.target.position = new Vec3(17, 64, 0) }, 60)
+  await fled.guard.respond(picked)
+  fled.bot.health = 20
+  fled.target.position = new Vec3(3, 64, 0)
+  const again = fled.guard.check()
+  assert.equal(again.decision, 'flee')
+  setTimeout(() => { fled.target.position = new Vec3(17, 64, 0) }, 30)
+  await fled.guard.respond(again)
+  assert.equal(fled.log.since(0).filter((event) => event.type === 'fled').at(-1).reason, 'beaten')
+  assert.equal(fled.pvp.attacked.length, 1)
+
+  fled.target.position = new Vec3(3, 64, 0)
+  delete fled.bot.entities[7]
+  fled.guard.check() // prunes the id without entityGone
+  fled.bot.entities[7] = fled.target
+  assert.equal(fled.guard.check().decision, 'fight')
+})
+
+test('guard: a killed target is not remembered as beaten', async () => {
+  const { bot, target, guard } = guardFixture({ mode: 'defend' })
+  const responding = guard.respond(guard.check())
+  setTimeout(() => bot.emit('entityDead', target), 30)
+  assert.equal((await responding).outcome, 'killed')
+  bot.emit('entityGone', target)
+  assert.equal(guard.check().decision, 'fight')
+})
+
+test('guard: respond resolves only after the fight cleanup, with fight_end already recorded', async () => {
+  const { bot, pvp, guard, log } = guardFixture({ mode: 'defend', respondCapMs: 5100 })
+  const result = await guard.respond(guard.check())
+  assert.equal(result.outcome, 'timeout')
+  assert.equal(pvp.stops, 1)
+  assert.equal(bot.setGoals.at(-1), null)
+  assert.equal(log.since(0).at(-1).type, 'fight_end')
 })
