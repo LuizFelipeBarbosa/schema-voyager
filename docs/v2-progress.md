@@ -119,3 +119,15 @@ Brief: `prompts/v2-demo-refine.md`. Orchestrator Opus 5.5.
   routes; instance lock with hand-over), v2.4 (change schedule).
 - Wave A lanes (19:30): fuel (P0-1), grid (P0-2, P0-3), launch (P3-1 lock, P3-2 v2-demo.sh), story (trace
   events, chat narration, exploration episode_end), lifeview (panel life view). Next: scramble (v2.4), targets (P1-5).
+- 19:05-19:20 merged: launch (lock, v2-demo.sh), story (stage events, chat), fuel (P0-1), grid (P0-2, P0-3: root causes
+  = planks stranded in the 2x2 grid that inventoryCounts doesn't count, then Mineflayer's model drifts and later crafts time
+  out on updateSlot:0; ladder = no table spot on a dirt pillar), lifeview (panel life view), scramble (v2.4), targets.
+  Merge fixes: recovery line only on a match; deterministic SIGTERM lock test (bash `wait` race, 2/25 flake).
+- **P0 live evidence (instance b, 19:15):** `v2_smelt_live.js` 5/5 PASS (1 stick refused, 2 sticks -> 1 ingot, planks,
+  coal x3); `v2_craft_live.js` ALL PASS (2 runs of sticks exact, mixed species, ladder, unpaid craft, probe; grid empty).
+- Coal live test (a, fresh 1001, after targets): first coal 108.8 s (before ~117 s) -> live lane `coal` on instance b,
+  tuning on non-M4 seeds only.
+- First stage run `runs/demo-20261017-1921` (v2-demo.sh start: ready in 17 s from a running instance; scramble):
+  planks2 fired g005 at 0.4 min, MISMATCH caught at the exact craft, revision certified g006 (0.8 min); r2 fired g010 at
+  1.3 min, caught, `Hypothesis: coal_ore needs stone_pickaxe`, `Recovered: got 1 coal with stone_pickaxe`.
+  Gap found: `screen -X quit` leaves the panel's python listening (stale code reused) -> lane `stage`.
