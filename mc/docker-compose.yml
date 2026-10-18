@@ -1,0 +1,33 @@
+# Pinned vanilla 1.21.1 server for SchemaVoyager. Superflat, peaceful, no
+# structures, RCON on. Gamerules are applied by the arena reset over RCON.
+services:
+  mc:
+    image: itzg/minecraft-server:java21
+    container_name: schema-voyager-mc
+    ports:
+      - "25565:25565"
+      - "25575:25575"
+    environment:
+      EULA: "TRUE"
+      TYPE: VANILLA
+      VERSION: "1.21.1"
+      MEMORY: 2G
+      LEVEL: world
+      LEVEL_TYPE: minecraft:flat
+      GENERATE_STRUCTURES: "false"
+      DIFFICULTY: peaceful
+      MODE: survival
+      ONLINE_MODE: "FALSE"
+      SPAWN_PROTECTION: "0"
+      SPAWN_ANIMALS: "false"
+      SPAWN_MONSTERS: "false"
+      SPAWN_NPCS: "false"
+      VIEW_DISTANCE: "6"
+      SIMULATION_DISTANCE: "6"
+      ENABLE_RCON: "true"
+      RCON_PASSWORD: schemavoyager
+      RCON_PORT: "25575"
+      MOTD: SchemaVoyager arena
+    volumes:
+      - ./server-data:/data
+      - ./datapacks:/data/world/datapacks:ro

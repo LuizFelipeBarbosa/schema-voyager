@@ -1,0 +1,6 @@
+{
+  "pack": {
+    "pack_format": 48,
+    "description": "R2: coal ore drops coal only when mined with a stone-tier or better pickaxe"
+  }
+}

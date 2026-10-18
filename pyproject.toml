@@ -4,16 +4,29 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "schema-voyager"
-version = "0.1.0"
-description = "A deterministic Minecraft-like scaffold for verified skill learning."
+version = "0.2.0"
+description = "A Minecraft agent that discovers rules, stores them as verified schemas, and reuses skills safely in changed worlds."
 requires-python = ">=3.11"
-dependencies = []
+dependencies = [
+    "anthropic>=1.15",
+    "python-dotenv>=1.0",
+    "rcon>=2.4",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
 
 [project.scripts]
+schema-voyager = "schema_voyager.demo:main"
 schema-voyager-demo = "schema_voyager.demo:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+schema_voyager = ["data/*.json"]
+
 [tool.pytest.ini_options]
 pythonpath = ["src"]
+markers = ["mc: needs the live Minecraft server and bot (deselected by default)"]
+addopts = "-m 'not mc'"

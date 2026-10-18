@@ -1,0 +1,3193 @@
+{
+  "demoted_in": {
+    "w3919c": {
+      "mine_coal_ore": "D/h3/L8/24"
+    },
+    "wda661": {
+      "mine_coal_ore": "D/h3/L7/10"
+    },
+    "we77d2": {
+      "mine_coal_ore": "D/h3/L6/10"
+    }
+  },
+  "rules": [
+    {
+      "action": {
+        "block": "oak_log",
+        "type": "mine"
+      },
+      "effects": {
+        "block_removed": true,
+        "drops": {
+          "oak_log": 1
+        }
+      },
+      "evidence": {
+        "confirmed": [
+          "D/t1/L1/1",
+          "D/t1/L1/4",
+          "D/t1/L1/7",
+          "D/t1/L2/1",
+          "D/t1/L2/4",
+          "D/t1/L2/7",
+          "D/t2/L1/1",
+          "D/t2/L1/4",
+          "D/t2/L1/7",
+          "D/t2/L1/10",
+          "D/t2/L2/1",
+          "D/t2/L2/2",
+          "D/t2/L2/5",
+          "D/t2/L2/8",
+          "D/t3/L1/1",
+          "D/t3/L1/4",
+          "D/t3/L1/7",
+          "D/t3/L2/1",
+          "D/t3/L2/4",
+          "D/t3/L2/7"
+        ],
+        "contradicted": [],
+        "counterexamples": []
+      },
+      "id": "mine_oak_log",
+      "preconditions": {
+        "tool_any": []
+      },
+      "rank": 0,
+      "rationale": "Logs drop themselves when broken by hand or any tool.",
+      "revision_of": null,
+      "scope": "train",
+      "source": "prior",
+      "status": "certified"
+    },
+    {
+      "action": {
+        "block": "stone",
+        "type": "mine"
+      },
+      "effects": {
+        "block_removed": true,
+        "drops": {
+          "cobblestone": 1
+        }
+      },
+      "evidence": {
+        "confirmed": [
+          "D/t2/L1/13",
+          "D/t2/L1/14",
+          "D/t2/L1/15",
+          "D/t2/L1/16",
+          "D/t2/L2/11",
+          "D/t2/L2/12",
+          "D/t2/L2/13"
+        ],
+        "contradicted": [],
+        "counterexamples": []
+      },
+      "id": "mine_stone",
+      "preconditions": {
+        "tool_any": [
+          "wooden_pickaxe",
+          "stone_pickaxe"
+        ]
+      },
+      "rank": 0,
+      "rationale": "Stone needs at least a wooden pickaxe and drops cobblestone.",
+      "revision_of": null,
+      "scope": "train",
+      "source": "prior",
+      "status": "certified"
+    },
+    {
+      "action": {
+        "block": "coal_ore",
+        "type": "mine"
+      },
+      "effects": {
+        "block_removed": true,
+        "drops": {
+          "coal": 1
+        }
+      },
+      "evidence": {
+        "confirmed": [
+          "D/t3/L1/10",
+          "D/t3/L2/10"
+        ],
+        "contradicted": [],
+        "counterexamples": [
+          "D/h3/L6/10",
+          "D/h3/L7/10",
+          "D/h3/L8/24"
+        ]
+      },
+      "id": "mine_coal_ore",
+      "preconditions": {
+        "tool_any": [
+          "wooden_pickaxe",
+          "stone_pickaxe"
+        ]
+      },
+      "rank": 0,
+      "rationale": "Coal ore needs at least a wooden pickaxe and drops coal.",
+      "revision_of": null,
+      "scope": "train",
+      "source": "prior",
+      "status": "certified"
+    },
+    {
+      "action": {
+        "item": "oak_planks",
+        "type": "craft"
+      },
+      "effects": {
+        "gains": {
+          "oak_planks": 4
+        }
+      },
+      "evidence": {
+        "confirmed": [
+          "D/t1/L1/2",
+          "D/t1/L1/5",
+          "D/t1/L1/8",
+          "D/t1/L2/2",
+          "D/t1/L2/5",
+          "D/t1/L2/8",
+          "D/t2/L1/2",
+          "D/t2/L1/5",
+          "D/t2/L1/8",
+          "D/t2/L1/11",
+          "D/t2/L2/3",
+          "D/t2/L2/6",
+          "D/t2/L2/9",
+          "D/t3/L1/2",
+          "D/t3/L1/5",
+          "D/t3/L1/8",
+          "D/t3/L2/2",
+          "D/t3/L2/5",
+          "D/t3/L2/8"
+        ],
+        "contradicted": [],
+        "counterexamples": []
+      },
+      "id": "craft_oak_planks",
+      "preconditions": {
+        "consumes": {
+          "oak_log": 1
+        },
+        "station": null
+      },
+      "rank": 0,
+      "rationale": "One log makes four planks in the inventory grid.",
+      "revision_of": null,
+      "scope": "train",
+      "source": "prior",
+      "status": "certified"
+    },
+    {
+      "action": {
+        "item": "stick",
+        "type": "craft"
+      },
+      "effects": {
+        "gains": {
+          "stick": 4
+        }
+      },
+      "evidence": {
+        "confirmed": [
+          "D/t1/L1/6",
+          "D/t1/L2/6",
+          "D/t2/L1/6",
+          "D/t2/L2/7",
+          "D/t3/L1/3",
+          "D/t3/L2/3"
+        ],
+        "contradicted": [],
+        "counterexamples": []
+      },
+      "id": "craft_stick",
+      "preconditions": {
+        "consumes": {
+          "oak_planks": 2
+        },
+        "station": null
+      },
+      "rank": 0,
+      "rationale": "Two stacked planks make four sticks.",
+      "revision_of": null,
+      "scope": "train",
+      "source": "prior",
+      "status": "certified"
+    },
+    {
+      "action": {
+        "item": "crafting_table",
+        "type": "craft"
+      },
+      "effects": {
+        "gains": {
+          "crafting_table": 1
+        }
+      },
+      "evidence": {
+        "confirmed": [
+          "D/t1/L1/3",
+          "D/t1/L2/3",
+          "D/t2/L1/3",
+          "D/t2/L1/12",
+          "D/t2/L2/4",
+          "D/t3/L1/6",
+          "D/t3/L2/6"
+        ],
+        "contradicted": [],
+        "counterexamples": []
+      },
+      "id": "craft_crafting_table",
+      "preconditions": {
+        "consumes": {
+          "oak_planks": 4
+        },
+        "station": null
+      },
+      "rank": 0,
+      "rationale": "Four planks in a 2x2 make a crafting table.",
+      "revision_of": null,
+      "scope": "train",
+      "source": "prior",
+      "status": "certified"
+    },
+    {
+      "action": {
+        "item": "wooden_pickaxe",
+        "type": "craft"
+      },
+      "effects": {
+        "gains": {
+          "wooden_pickaxe": 1
+        }
+      },
+      "evidence": {
+        "confirmed": [
+          "D/t1/L1/9",
+          "D/t1/L2/9",
+          "D/t2/L1/9",
+          "D/t2/L2/10",
+          "D/t3/L1/9",
+          "D/t3/L2/9"
+        ],
+        "contradicted": [],
+        "counterexamples": []
+      },
+      "id": "craft_wooden_pickaxe",
+      "preconditions": {
+        "consumes": {
+          "oak_planks": 3,
+          "stick": 2
+        },
+        "station": "crafting_table"
+      },
+      "rank": 0,
+      "rationale": "Three planks across the top and two sticks down the middle.",
+      "revision_of": null,
+      "scope": "train",
+      "source": "prior",
+      "status": "certified"
+    },
+    {
+      "action": {
+        "item": "stone_pickaxe",
+        "type": "craft"
+      },
+      "effects": {
+        "gains": {
+          "stone_pickaxe": 1
+        }
+      },
+      "evidence": {
+        "confirmed": [
+          "D/t2/L1/17",
+          "D/t2/L2/14"
+        ],
+        "contradicted": [],
+        "counterexamples": []
+      },
+      "id": "craft_stone_pickaxe",
+      "preconditions": {
+        "consumes": {
+          "cobblestone": 3,
+          "stick": 2
+        },
+        "station": "crafting_table"
+      },
+      "rank": 0,
+      "rationale": "Three cobblestone across the top and two sticks down the middle.",
+      "revision_of": null,
+      "scope": "train",
+      "source": "prior",
+      "status": "certified"
+    },
+    {
+      "action": {
+        "item": "torch",
+        "type": "craft"
+      },
+      "effects": {
+        "gains": {
+          "torch": 4
+        }
+      },
+      "evidence": {
+        "confirmed": [
+          "D/t3/L1/11",
+          "D/t3/L2/11"
+        ],
+        "contradicted": [],
+        "counterexamples": []
+      },
+      "id": "craft_torch",
+      "preconditions": {
+        "consumes": {
+          "coal": 1,
+          "stick": 1
+        },
+        "station": null
+      },
+      "rank": 0,
+      "rationale": "Coal over a stick makes four torches.",
+      "revision_of": null,
+      "scope": "train",
+      "source": "prior",
+      "status": "certified"
+    },
+    {
+      "action": {
+        "block": "coal_ore",
+        "type": "mine"
+      },
+      "effects": {
+        "block_removed": true,
+        "drops": {
+          "coal": 1
+        }
+      },
+      "evidence": {
+        "confirmed": [
+          "D/h3/L6/15"
+        ],
+        "contradicted": [],
+        "counterexamples": []
+      },
+      "id": "mine_coal_ore.rev1@we77d2",
+      "preconditions": {
+        "tool_any": [
+          "stone_pickaxe"
+        ]
+      },
+      "rank": 0,
+      "rationale": "In this world coal ore may need a stone pickaxe, so a wooden pickaxe removes the block but drops nothing.",
+      "revision_of": "mine_coal_ore",
+      "scope": "we77d2",
+      "source": "revision",
+      "status": "hypothesis"
+    },
+    {
+      "action": {
+        "block": "coal_ore",
+        "type": "mine"
+      },
+      "effects": {
+        "block_removed": true,
+        "drops": {}
+      },
+      "evidence": {
+        "confirmed": [
+          "D/h3/L6/10"
+        ],
+        "contradicted": [
+          "D/h3/L6/15"
+        ],
+        "counterexamples": []
+      },
+      "id": "mine_coal_ore.rev2@we77d2",
+      "preconditions": {
+        "tool_any": []
+      },
+      "rank": 1,
+      "rationale": "Coal ore may drop nothing in this world, whatever tool is used.",
+      "revision_of": "mine_coal_ore",
+      "scope": "we77d2",
+      "source": "revision",
+      "status": "hypothesis"
+    },
+    {
+      "action": {
+        "block": "coal_ore",
+        "type": "mine"
+      },
+      "effects": {
+        "block_removed": true,
+        "drops": {
+          "coal": 1
+        }
+      },
+      "evidence": {
+        "confirmed": [
+          "D/h3/L7/15"
+        ],
+        "contradicted": [],
+        "counterexamples": []
+      },
+      "id": "mine_coal_ore.rev1@wda661",
+      "preconditions": {
+        "tool_any": [
+          "stone_pickaxe"
+        ]
+      },
+      "rank": 0,
+      "rationale": "In this world coal ore may need a stone pickaxe, so a wooden pickaxe removes the block but drops nothing.",
+      "revision_of": "mine_coal_ore",
+      "scope": "wda661",
+      "source": "revision",
+      "status": "hypothesis"
+    },
+    {
+      "action": {
+        "block": "coal_ore",
+        "type": "mine"
+      },
+      "effects": {
+        "block_removed": true,
+        "drops": {}
+      },
+      "evidence": {
+        "confirmed": [
+          "D/h3/L7/10"
+        ],
+        "contradicted": [
+          "D/h3/L7/15"
+        ],
+        "counterexamples": []
+      },
+      "id": "mine_coal_ore.rev2@wda661",
+      "preconditions": {
+        "tool_any": []
+      },
+      "rank": 1,
+      "rationale": "Coal ore may drop nothing in this world, whatever tool is used.",
+      "revision_of": "mine_coal_ore",
+      "scope": "wda661",
+      "source": "revision",
+      "status": "hypothesis"
+    },
+    {
+      "action": {
+        "block": "coal_ore",
+        "type": "mine"
+      },
+      "effects": {
+        "block_removed": true,
+        "drops": {
+          "coal": 1
+        }
+      },
+      "evidence": {
+        "confirmed": [
+          "D/h3/L8/50"
+        ],
+        "contradicted": [],
+        "counterexamples": []
+      },
+      "id": "mine_coal_ore.rev1@w3919c",
+      "preconditions": {
+        "tool_any": [
+          "stone_pickaxe"
+        ]
+      },
+      "rank": 0,
+      "rationale": "In this world coal ore may need a stone pickaxe, so the wooden pickaxe removes the block but drops nothing.",
+      "revision_of": "mine_coal_ore",
+      "scope": "w3919c",
+      "source": "revision",
+      "status": "hypothesis"
+    },
+    {
+      "action": {
+        "block": "coal_ore",
+        "type": "mine"
+      },
+      "effects": {
+        "block_removed": true,
+        "drops": {}
+      },
+      "evidence": {
+        "confirmed": [
+          "D/h3/L8/24"
+        ],
+        "contradicted": [
+          "D/h3/L8/50"
+        ],
+        "counterexamples": []
+      },
+      "id": "mine_coal_ore.rev2@w3919c",
+      "preconditions": {
+        "tool_any": []
+      },
+      "rank": 1,
+      "rationale": "Coal ore may drop nothing in this world, whatever tool is used.",
+      "revision_of": "mine_coal_ore",
+      "scope": "w3919c",
+      "source": "revision",
+      "status": "hypothesis"
+    }
+  ],
+  "skills": [
+    {
+      "evidence": [
+        "D/t1/L1",
+        "D/t1/L2"
+      ],
+      "flagged_by": null,
+      "goal_count": 1,
+      "goal_item": "wooden_pickaxe",
+      "id": "skill_wooden_pickaxe",
+      "rule_ids": [
+        "mine_oak_log",
+        "craft_oak_planks",
+        "craft_crafting_table",
+        "craft_stick",
+        "craft_wooden_pickaxe"
+      ],
+      "status": "ok",
+      "steps": [
+        {
+          "kind": "mine",
+          "target": "oak_log",
+          "times": 1,
+          "tool": null
+        },
+        {
+          "kind": "craft",
+          "target": "oak_planks",
+          "times": 1,
+          "tool": null
+        },
+        {
+          "kind": "craft",
+          "target": "crafting_table",
+          "times": 1,
+          "tool": null
+        },
+        {
+          "kind": "mine",
+          "target": "oak_log",
+          "times": 1,
+          "tool": null
+        },
+        {
+          "kind": "craft",
+          "target": "oak_planks",
+          "times": 1,
+          "tool": null
+        },
+        {
+          "kind": "craft",
+          "target": "stick",
+          "times": 1,
+          "tool": null
+        },
+        {
+          "kind": "mine",
+          "target": "oak_log",
+          "times": 1,
+          "tool": null
+        },
+        {
+          "kind": "craft",
+          "target": "oak_planks",
+          "times": 1,
+          "tool": null
+        },
+        {
+          "kind": "craft",
+          "target": "wooden_pickaxe",
+          "times": 1,
+          "tool": null
+        }
+      ]
+    },
+    {
+      "evidence": [
+        "D/t2/L1",
+        "D/t2/L2"
+      ],
+      "flagged_by": null,
+      "goal_count": 1,
+      "goal_item": "stone_pickaxe",
+      "id": "skill_stone_pickaxe",
+      "rule_ids": [
+        "mine_oak_log",
+        "craft_oak_planks",
+        "craft_crafting_table",
+        "craft_stick",
+        "craft_wooden_pickaxe",
+        "mine_stone",
+        "craft_stone_pickaxe"
+      ],
+      "status": "ok",
+      "steps": [
+        {
+          "kind": "mine",
+          "target": "oak_log",
+          "times": 1,
+          "tool": null
+        },
+        {
+          "kind": "craft",
+          "target": "oak_planks",
+          "times": 1,
+          "tool": null
+        },
+        {
+          "kind": "craft",
+          "target": "crafting_table",
+          "times": 1,
+          "tool": null
+        },
+        {
+          "kind": "mine",
+          "target": "oak_log",
+          "times": 1,
+          "tool": null
+        },
+        {
+          "kind": "craft",
+          "target": "oak_planks",
+          "times": 1,
+          "tool": null
+        },
+        {
+          "kind": "craft",
+          "target": "stick",
+          "times": 1,
+          "tool": null
+        },
+        {
+          "kind": "mine",
+          "target": "oak_log",
+          "times": 1,
+          "tool": null
+        },
+        {
+          "kind": "craft",
+          "target": "oak_planks",
+          "times": 1,
+          "tool": null
+        },
+        {
+          "kind": "craft",
+          "target": "wooden_pickaxe",
+          "times": 1,
+          "tool": null
+        },
+        {
+          "kind": "mine",
+          "target": "oak_log",
+          "times": 1,
+          "tool": null
+        },
+        {
+          "kind": "craft",
+          "target": "oak_planks",
+          "times": 1,
+          "tool": null
+        },
+        {
+          "kind": "craft",
+          "target": "crafting_table",
+          "times": 1,
+          "tool": null
+        },
+        {
+          "kind": "mine",
+          "target": "stone",
+          "times": 1,
+          "tool": "wooden_pickaxe"
+        },
+        {
+          "kind": "mine",
+          "target": "stone",
+          "times": 1,
+          "tool": "wooden_pickaxe"
+        },
+        {
+          "kind": "mine",
+          "target": "stone",
+          "times": 1,
+          "tool": "wooden_pickaxe"
+        },
+        {
+          "kind": "mine",
+          "target": "stone",
+          "times": 1,
+          "tool": "wooden_pickaxe"
+        },
+        {
+          "kind": "craft",
+          "target": "stone_pickaxe",
+          "times": 1,
+          "tool": null
+        }
+      ]
+    },
+    {
+      "evidence": [
+        "D/t3/L1",
+        "D/t3/L2"
+      ],
+      "flagged_by": "mine_coal_ore",
+      "goal_count": 4,
+      "goal_item": "torch",
+      "id": "skill_torch",
+      "rule_ids": [
+        "mine_oak_log",
+        "craft_oak_planks",
+        "craft_stick",
+        "craft_crafting_table",
+        "craft_wooden_pickaxe",
+        "mine_coal_ore",
+        "craft_torch"
+      ],
+      "status": "flagged",
+      "steps": [
+        {
+          "kind": "mine",
+          "target": "oak_log",
+          "times": 1,
+          "tool": null
+        },
+        {
+          "kind": "craft",
+          "target": "oak_planks",
+          "times": 1,
+          "tool": null
+        },
+        {
+          "kind": "craft",
+          "target": "stick",
+          "times": 1,
+          "tool": null
+        },
+        {
+          "kind": "mine",
+          "target": "oak_log",
+          "times": 1,
+          "tool": null
+        },
+        {
+          "kind": "craft",
+          "target": "oak_planks",
+          "times": 1,
+          "tool": null
+        },
+        {
+          "kind": "craft",
+          "target": "crafting_table",
+          "times": 1,
+          "tool": null
+        },
+        {
+          "kind": "mine",
+          "target": "oak_log",
+          "times": 1,
+          "tool": null
+        },
+        {
+          "kind": "craft",
+          "target": "oak_planks",
+          "times": 1,
+          "tool": null
+        },
+        {
+          "kind": "craft",
+          "target": "wooden_pickaxe",
+          "times": 1,
+          "tool": null
+        },
+        {
+          "kind": "mine",
+          "target": "coal_ore",
+          "times": 1,
+          "tool": "wooden_pickaxe"
+        },
+        {
+          "kind": "craft",
+          "target": "torch",
+          "times": 1,
+          "tool": null
+        }
+      ]
+    }
+  ],
+  "transitions": [
+    {
+      "action": {
+        "kind": "mine",
+        "target": "oak_log",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/t1/L1",
+      "id": "D/t1/L1/1",
+      "observed": {
+        "block_removed": true,
+        "drops": {
+          "oak_log": 1
+        }
+      },
+      "world_id": "train"
+    },
+    {
+      "action": {
+        "kind": "craft",
+        "target": "oak_planks",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/t1/L1",
+      "id": "D/t1/L1/2",
+      "observed": {
+        "inventory_delta": {
+          "oak_log": -1,
+          "oak_planks": 4
+        }
+      },
+      "world_id": "train"
+    },
+    {
+      "action": {
+        "kind": "craft",
+        "target": "crafting_table",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/t1/L1",
+      "id": "D/t1/L1/3",
+      "observed": {
+        "inventory_delta": {
+          "crafting_table": 1,
+          "oak_planks": -4
+        }
+      },
+      "world_id": "train"
+    },
+    {
+      "action": {
+        "kind": "mine",
+        "target": "oak_log",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/t1/L1",
+      "id": "D/t1/L1/4",
+      "observed": {
+        "block_removed": true,
+        "drops": {
+          "oak_log": 1
+        }
+      },
+      "world_id": "train"
+    },
+    {
+      "action": {
+        "kind": "craft",
+        "target": "oak_planks",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/t1/L1",
+      "id": "D/t1/L1/5",
+      "observed": {
+        "inventory_delta": {
+          "oak_log": -1,
+          "oak_planks": 4
+        }
+      },
+      "world_id": "train"
+    },
+    {
+      "action": {
+        "kind": "craft",
+        "target": "stick",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/t1/L1",
+      "id": "D/t1/L1/6",
+      "observed": {
+        "inventory_delta": {
+          "oak_planks": -2,
+          "stick": 4
+        }
+      },
+      "world_id": "train"
+    },
+    {
+      "action": {
+        "kind": "mine",
+        "target": "oak_log",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/t1/L1",
+      "id": "D/t1/L1/7",
+      "observed": {
+        "block_removed": true,
+        "drops": {
+          "oak_log": 1
+        }
+      },
+      "world_id": "train"
+    },
+    {
+      "action": {
+        "kind": "craft",
+        "target": "oak_planks",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/t1/L1",
+      "id": "D/t1/L1/8",
+      "observed": {
+        "inventory_delta": {
+          "oak_log": -1,
+          "oak_planks": 4
+        }
+      },
+      "world_id": "train"
+    },
+    {
+      "action": {
+        "kind": "craft",
+        "target": "wooden_pickaxe",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/t1/L1",
+      "id": "D/t1/L1/9",
+      "observed": {
+        "inventory_delta": {
+          "oak_planks": -3,
+          "stick": -2,
+          "wooden_pickaxe": 1
+        }
+      },
+      "world_id": "train"
+    },
+    {
+      "action": {
+        "kind": "mine",
+        "target": "oak_log",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/t1/L2",
+      "id": "D/t1/L2/1",
+      "observed": {
+        "block_removed": true,
+        "drops": {
+          "oak_log": 1
+        }
+      },
+      "world_id": "train"
+    },
+    {
+      "action": {
+        "kind": "craft",
+        "target": "oak_planks",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/t1/L2",
+      "id": "D/t1/L2/2",
+      "observed": {
+        "inventory_delta": {
+          "oak_log": -1,
+          "oak_planks": 4
+        }
+      },
+      "world_id": "train"
+    },
+    {
+      "action": {
+        "kind": "craft",
+        "target": "crafting_table",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/t1/L2",
+      "id": "D/t1/L2/3",
+      "observed": {
+        "inventory_delta": {
+          "crafting_table": 1,
+          "oak_planks": -4
+        }
+      },
+      "world_id": "train"
+    },
+    {
+      "action": {
+        "kind": "mine",
+        "target": "oak_log",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/t1/L2",
+      "id": "D/t1/L2/4",
+      "observed": {
+        "block_removed": true,
+        "drops": {
+          "oak_log": 1
+        }
+      },
+      "world_id": "train"
+    },
+    {
+      "action": {
+        "kind": "craft",
+        "target": "oak_planks",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/t1/L2",
+      "id": "D/t1/L2/5",
+      "observed": {
+        "inventory_delta": {
+          "oak_log": -1,
+          "oak_planks": 4
+        }
+      },
+      "world_id": "train"
+    },
+    {
+      "action": {
+        "kind": "craft",
+        "target": "stick",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/t1/L2",
+      "id": "D/t1/L2/6",
+      "observed": {
+        "inventory_delta": {
+          "oak_planks": -2,
+          "stick": 4
+        }
+      },
+      "world_id": "train"
+    },
+    {
+      "action": {
+        "kind": "mine",
+        "target": "oak_log",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/t1/L2",
+      "id": "D/t1/L2/7",
+      "observed": {
+        "block_removed": true,
+        "drops": {
+          "oak_log": 1
+        }
+      },
+      "world_id": "train"
+    },
+    {
+      "action": {
+        "kind": "craft",
+        "target": "oak_planks",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/t1/L2",
+      "id": "D/t1/L2/8",
+      "observed": {
+        "inventory_delta": {
+          "oak_log": -1,
+          "oak_planks": 4
+        }
+      },
+      "world_id": "train"
+    },
+    {
+      "action": {
+        "kind": "craft",
+        "target": "wooden_pickaxe",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/t1/L2",
+      "id": "D/t1/L2/9",
+      "observed": {
+        "inventory_delta": {
+          "oak_planks": -3,
+          "stick": -2,
+          "wooden_pickaxe": 1
+        }
+      },
+      "world_id": "train"
+    },
+    {
+      "action": {
+        "kind": "mine",
+        "target": "oak_log",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/t2/L1",
+      "id": "D/t2/L1/1",
+      "observed": {
+        "block_removed": true,
+        "drops": {
+          "oak_log": 1
+        }
+      },
+      "world_id": "train"
+    },
+    {
+      "action": {
+        "kind": "craft",
+        "target": "oak_planks",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/t2/L1",
+      "id": "D/t2/L1/2",
+      "observed": {
+        "inventory_delta": {
+          "oak_log": -1,
+          "oak_planks": 4
+        }
+      },
+      "world_id": "train"
+    },
+    {
+      "action": {
+        "kind": "craft",
+        "target": "crafting_table",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/t2/L1",
+      "id": "D/t2/L1/3",
+      "observed": {
+        "inventory_delta": {
+          "crafting_table": 1,
+          "oak_planks": -4
+        }
+      },
+      "world_id": "train"
+    },
+    {
+      "action": {
+        "kind": "mine",
+        "target": "oak_log",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/t2/L1",
+      "id": "D/t2/L1/4",
+      "observed": {
+        "block_removed": true,
+        "drops": {
+          "oak_log": 1
+        }
+      },
+      "world_id": "train"
+    },
+    {
+      "action": {
+        "kind": "craft",
+        "target": "oak_planks",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/t2/L1",
+      "id": "D/t2/L1/5",
+      "observed": {
+        "inventory_delta": {
+          "oak_log": -1,
+          "oak_planks": 4
+        }
+      },
+      "world_id": "train"
+    },
+    {
+      "action": {
+        "kind": "craft",
+        "target": "stick",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/t2/L1",
+      "id": "D/t2/L1/6",
+      "observed": {
+        "inventory_delta": {
+          "oak_planks": -2,
+          "stick": 4
+        }
+      },
+      "world_id": "train"
+    },
+    {
+      "action": {
+        "kind": "mine",
+        "target": "oak_log",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/t2/L1",
+      "id": "D/t2/L1/7",
+      "observed": {
+        "block_removed": true,
+        "drops": {
+          "oak_log": 1
+        }
+      },
+      "world_id": "train"
+    },
+    {
+      "action": {
+        "kind": "craft",
+        "target": "oak_planks",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/t2/L1",
+      "id": "D/t2/L1/8",
+      "observed": {
+        "inventory_delta": {
+          "oak_log": -1,
+          "oak_planks": 4
+        }
+      },
+      "world_id": "train"
+    },
+    {
+      "action": {
+        "kind": "craft",
+        "target": "wooden_pickaxe",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/t2/L1",
+      "id": "D/t2/L1/9",
+      "observed": {
+        "inventory_delta": {
+          "oak_planks": -3,
+          "stick": -2,
+          "wooden_pickaxe": 1
+        }
+      },
+      "world_id": "train"
+    },
+    {
+      "action": {
+        "kind": "mine",
+        "target": "oak_log",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/t2/L1",
+      "id": "D/t2/L1/10",
+      "observed": {
+        "block_removed": true,
+        "drops": {
+          "oak_log": 1
+        }
+      },
+      "world_id": "train"
+    },
+    {
+      "action": {
+        "kind": "craft",
+        "target": "oak_planks",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/t2/L1",
+      "id": "D/t2/L1/11",
+      "observed": {
+        "inventory_delta": {
+          "oak_log": -1,
+          "oak_planks": 4
+        }
+      },
+      "world_id": "train"
+    },
+    {
+      "action": {
+        "kind": "craft",
+        "target": "crafting_table",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/t2/L1",
+      "id": "D/t2/L1/12",
+      "observed": {
+        "inventory_delta": {
+          "crafting_table": 1,
+          "oak_planks": -4
+        }
+      },
+      "world_id": "train"
+    },
+    {
+      "action": {
+        "kind": "mine",
+        "target": "stone",
+        "times": 1,
+        "tool": "wooden_pickaxe"
+      },
+      "episode_id": "D/t2/L1",
+      "id": "D/t2/L1/13",
+      "observed": {
+        "block_removed": true,
+        "drops": {
+          "cobblestone": 1
+        }
+      },
+      "world_id": "train"
+    },
+    {
+      "action": {
+        "kind": "mine",
+        "target": "stone",
+        "times": 1,
+        "tool": "wooden_pickaxe"
+      },
+      "episode_id": "D/t2/L1",
+      "id": "D/t2/L1/14",
+      "observed": {
+        "block_removed": true,
+        "drops": {
+          "cobblestone": 1
+        }
+      },
+      "world_id": "train"
+    },
+    {
+      "action": {
+        "kind": "mine",
+        "target": "stone",
+        "times": 1,
+        "tool": "wooden_pickaxe"
+      },
+      "episode_id": "D/t2/L1",
+      "id": "D/t2/L1/15",
+      "observed": {
+        "block_removed": true,
+        "drops": {
+          "cobblestone": 1
+        }
+      },
+      "world_id": "train"
+    },
+    {
+      "action": {
+        "kind": "mine",
+        "target": "stone",
+        "times": 1,
+        "tool": "wooden_pickaxe"
+      },
+      "episode_id": "D/t2/L1",
+      "id": "D/t2/L1/16",
+      "observed": {
+        "block_removed": true,
+        "drops": {
+          "cobblestone": 1
+        }
+      },
+      "world_id": "train"
+    },
+    {
+      "action": {
+        "kind": "craft",
+        "target": "stone_pickaxe",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/t2/L1",
+      "id": "D/t2/L1/17",
+      "observed": {
+        "inventory_delta": {
+          "cobblestone": -3,
+          "stick": -2,
+          "stone_pickaxe": 1
+        }
+      },
+      "world_id": "train"
+    },
+    {
+      "action": {
+        "kind": "mine",
+        "target": "oak_log",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/t2/L2",
+      "id": "D/t2/L2/1",
+      "observed": {
+        "block_removed": true,
+        "drops": {
+          "oak_log": 1
+        }
+      },
+      "world_id": "train"
+    },
+    {
+      "action": {
+        "kind": "mine",
+        "target": "oak_log",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/t2/L2",
+      "id": "D/t2/L2/2",
+      "observed": {
+        "block_removed": true,
+        "drops": {
+          "oak_log": 1
+        }
+      },
+      "world_id": "train"
+    },
+    {
+      "action": {
+        "kind": "craft",
+        "target": "oak_planks",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/t2/L2",
+      "id": "D/t2/L2/3",
+      "observed": {
+        "inventory_delta": {
+          "oak_log": -1,
+          "oak_planks": 4
+        }
+      },
+      "world_id": "train"
+    },
+    {
+      "action": {
+        "kind": "craft",
+        "target": "crafting_table",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/t2/L2",
+      "id": "D/t2/L2/4",
+      "observed": {
+        "inventory_delta": {
+          "crafting_table": 1,
+          "oak_planks": -4
+        }
+      },
+      "world_id": "train"
+    },
+    {
+      "action": {
+        "kind": "mine",
+        "target": "oak_log",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/t2/L2",
+      "id": "D/t2/L2/5",
+      "observed": {
+        "block_removed": true,
+        "drops": {
+          "oak_log": 1
+        }
+      },
+      "world_id": "train"
+    },
+    {
+      "action": {
+        "kind": "craft",
+        "target": "oak_planks",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/t2/L2",
+      "id": "D/t2/L2/6",
+      "observed": {
+        "inventory_delta": {
+          "oak_log": -1,
+          "oak_planks": 4
+        }
+      },
+      "world_id": "train"
+    },
+    {
+      "action": {
+        "kind": "craft",
+        "target": "stick",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/t2/L2",
+      "id": "D/t2/L2/7",
+      "observed": {
+        "inventory_delta": {
+          "oak_planks": -2,
+          "stick": 4
+        }
+      },
+      "world_id": "train"
+    },
+    {
+      "action": {
+        "kind": "mine",
+        "target": "oak_log",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/t2/L2",
+      "id": "D/t2/L2/8",
+      "observed": {
+        "block_removed": true,
+        "drops": {
+          "oak_log": 1
+        }
+      },
+      "world_id": "train"
+    },
+    {
+      "action": {
+        "kind": "craft",
+        "target": "oak_planks",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/t2/L2",
+      "id": "D/t2/L2/9",
+      "observed": {
+        "inventory_delta": {
+          "oak_log": -1,
+          "oak_planks": 4
+        }
+      },
+      "world_id": "train"
+    },
+    {
+      "action": {
+        "kind": "craft",
+        "target": "wooden_pickaxe",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/t2/L2",
+      "id": "D/t2/L2/10",
+      "observed": {
+        "inventory_delta": {
+          "oak_planks": -3,
+          "stick": -2,
+          "wooden_pickaxe": 1
+        }
+      },
+      "world_id": "train"
+    },
+    {
+      "action": {
+        "kind": "mine",
+        "target": "stone",
+        "times": 1,
+        "tool": "wooden_pickaxe"
+      },
+      "episode_id": "D/t2/L2",
+      "id": "D/t2/L2/11",
+      "observed": {
+        "block_removed": true,
+        "drops": {
+          "cobblestone": 1
+        }
+      },
+      "world_id": "train"
+    },
+    {
+      "action": {
+        "kind": "mine",
+        "target": "stone",
+        "times": 1,
+        "tool": "wooden_pickaxe"
+      },
+      "episode_id": "D/t2/L2",
+      "id": "D/t2/L2/12",
+      "observed": {
+        "block_removed": true,
+        "drops": {
+          "cobblestone": 1
+        }
+      },
+      "world_id": "train"
+    },
+    {
+      "action": {
+        "kind": "mine",
+        "target": "stone",
+        "times": 1,
+        "tool": "wooden_pickaxe"
+      },
+      "episode_id": "D/t2/L2",
+      "id": "D/t2/L2/13",
+      "observed": {
+        "block_removed": true,
+        "drops": {
+          "cobblestone": 1
+        }
+      },
+      "world_id": "train"
+    },
+    {
+      "action": {
+        "kind": "craft",
+        "target": "stone_pickaxe",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/t2/L2",
+      "id": "D/t2/L2/14",
+      "observed": {
+        "inventory_delta": {
+          "cobblestone": -3,
+          "stick": -2,
+          "stone_pickaxe": 1
+        }
+      },
+      "world_id": "train"
+    },
+    {
+      "action": {
+        "kind": "mine",
+        "target": "oak_log",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/t3/L1",
+      "id": "D/t3/L1/1",
+      "observed": {
+        "block_removed": true,
+        "drops": {
+          "oak_log": 1
+        }
+      },
+      "world_id": "train"
+    },
+    {
+      "action": {
+        "kind": "craft",
+        "target": "oak_planks",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/t3/L1",
+      "id": "D/t3/L1/2",
+      "observed": {
+        "inventory_delta": {
+          "oak_log": -1,
+          "oak_planks": 4
+        }
+      },
+      "world_id": "train"
+    },
+    {
+      "action": {
+        "kind": "craft",
+        "target": "stick",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/t3/L1",
+      "id": "D/t3/L1/3",
+      "observed": {
+        "inventory_delta": {
+          "oak_planks": -2,
+          "stick": 4
+        }
+      },
+      "world_id": "train"
+    },
+    {
+      "action": {
+        "kind": "mine",
+        "target": "oak_log",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/t3/L1",
+      "id": "D/t3/L1/4",
+      "observed": {
+        "block_removed": true,
+        "drops": {
+          "oak_log": 1
+        }
+      },
+      "world_id": "train"
+    },
+    {
+      "action": {
+        "kind": "craft",
+        "target": "oak_planks",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/t3/L1",
+      "id": "D/t3/L1/5",
+      "observed": {
+        "inventory_delta": {
+          "oak_log": -1,
+          "oak_planks": 4
+        }
+      },
+      "world_id": "train"
+    },
+    {
+      "action": {
+        "kind": "craft",
+        "target": "crafting_table",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/t3/L1",
+      "id": "D/t3/L1/6",
+      "observed": {
+        "inventory_delta": {
+          "crafting_table": 1,
+          "oak_planks": -4
+        }
+      },
+      "world_id": "train"
+    },
+    {
+      "action": {
+        "kind": "mine",
+        "target": "oak_log",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/t3/L1",
+      "id": "D/t3/L1/7",
+      "observed": {
+        "block_removed": true,
+        "drops": {
+          "oak_log": 1
+        }
+      },
+      "world_id": "train"
+    },
+    {
+      "action": {
+        "kind": "craft",
+        "target": "oak_planks",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/t3/L1",
+      "id": "D/t3/L1/8",
+      "observed": {
+        "inventory_delta": {
+          "oak_log": -1,
+          "oak_planks": 4
+        }
+      },
+      "world_id": "train"
+    },
+    {
+      "action": {
+        "kind": "craft",
+        "target": "wooden_pickaxe",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/t3/L1",
+      "id": "D/t3/L1/9",
+      "observed": {
+        "inventory_delta": {
+          "oak_planks": -3,
+          "stick": -2,
+          "wooden_pickaxe": 1
+        }
+      },
+      "world_id": "train"
+    },
+    {
+      "action": {
+        "kind": "mine",
+        "target": "coal_ore",
+        "times": 1,
+        "tool": "wooden_pickaxe"
+      },
+      "episode_id": "D/t3/L1",
+      "id": "D/t3/L1/10",
+      "observed": {
+        "block_removed": true,
+        "drops": {
+          "coal": 1
+        }
+      },
+      "world_id": "train"
+    },
+    {
+      "action": {
+        "kind": "craft",
+        "target": "torch",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/t3/L1",
+      "id": "D/t3/L1/11",
+      "observed": {
+        "inventory_delta": {
+          "coal": -1,
+          "stick": -1,
+          "torch": 4
+        }
+      },
+      "world_id": "train"
+    },
+    {
+      "action": {
+        "kind": "mine",
+        "target": "oak_log",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/t3/L2",
+      "id": "D/t3/L2/1",
+      "observed": {
+        "block_removed": true,
+        "drops": {
+          "oak_log": 1
+        }
+      },
+      "world_id": "train"
+    },
+    {
+      "action": {
+        "kind": "craft",
+        "target": "oak_planks",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/t3/L2",
+      "id": "D/t3/L2/2",
+      "observed": {
+        "inventory_delta": {
+          "oak_log": -1,
+          "oak_planks": 4
+        }
+      },
+      "world_id": "train"
+    },
+    {
+      "action": {
+        "kind": "craft",
+        "target": "stick",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/t3/L2",
+      "id": "D/t3/L2/3",
+      "observed": {
+        "inventory_delta": {
+          "oak_planks": -2,
+          "stick": 4
+        }
+      },
+      "world_id": "train"
+    },
+    {
+      "action": {
+        "kind": "mine",
+        "target": "oak_log",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/t3/L2",
+      "id": "D/t3/L2/4",
+      "observed": {
+        "block_removed": true,
+        "drops": {
+          "oak_log": 1
+        }
+      },
+      "world_id": "train"
+    },
+    {
+      "action": {
+        "kind": "craft",
+        "target": "oak_planks",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/t3/L2",
+      "id": "D/t3/L2/5",
+      "observed": {
+        "inventory_delta": {
+          "oak_log": -1,
+          "oak_planks": 4
+        }
+      },
+      "world_id": "train"
+    },
+    {
+      "action": {
+        "kind": "craft",
+        "target": "crafting_table",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/t3/L2",
+      "id": "D/t3/L2/6",
+      "observed": {
+        "inventory_delta": {
+          "crafting_table": 1,
+          "oak_planks": -4
+        }
+      },
+      "world_id": "train"
+    },
+    {
+      "action": {
+        "kind": "mine",
+        "target": "oak_log",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/t3/L2",
+      "id": "D/t3/L2/7",
+      "observed": {
+        "block_removed": true,
+        "drops": {
+          "oak_log": 1
+        }
+      },
+      "world_id": "train"
+    },
+    {
+      "action": {
+        "kind": "craft",
+        "target": "oak_planks",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/t3/L2",
+      "id": "D/t3/L2/8",
+      "observed": {
+        "inventory_delta": {
+          "oak_log": -1,
+          "oak_planks": 4
+        }
+      },
+      "world_id": "train"
+    },
+    {
+      "action": {
+        "kind": "craft",
+        "target": "wooden_pickaxe",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/t3/L2",
+      "id": "D/t3/L2/9",
+      "observed": {
+        "inventory_delta": {
+          "oak_planks": -3,
+          "stick": -2,
+          "wooden_pickaxe": 1
+        }
+      },
+      "world_id": "train"
+    },
+    {
+      "action": {
+        "kind": "mine",
+        "target": "coal_ore",
+        "times": 1,
+        "tool": "wooden_pickaxe"
+      },
+      "episode_id": "D/t3/L2",
+      "id": "D/t3/L2/10",
+      "observed": {
+        "block_removed": true,
+        "drops": {
+          "coal": 1
+        }
+      },
+      "world_id": "train"
+    },
+    {
+      "action": {
+        "kind": "craft",
+        "target": "torch",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/t3/L2",
+      "id": "D/t3/L2/11",
+      "observed": {
+        "inventory_delta": {
+          "coal": -1,
+          "stick": -1,
+          "torch": 4
+        }
+      },
+      "world_id": "train"
+    },
+    {
+      "action": {
+        "kind": "mine",
+        "target": "oak_log",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/h3/L6",
+      "id": "D/h3/L6/1",
+      "observed": {
+        "block_removed": true,
+        "drops": {
+          "oak_log": 1
+        }
+      },
+      "world_id": "we77d2"
+    },
+    {
+      "action": {
+        "kind": "craft",
+        "target": "oak_planks",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/h3/L6",
+      "id": "D/h3/L6/2",
+      "observed": {
+        "inventory_delta": {
+          "oak_log": -1,
+          "oak_planks": 4
+        }
+      },
+      "world_id": "we77d2"
+    },
+    {
+      "action": {
+        "kind": "craft",
+        "target": "stick",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/h3/L6",
+      "id": "D/h3/L6/3",
+      "observed": {
+        "inventory_delta": {
+          "oak_planks": -2,
+          "stick": 4
+        }
+      },
+      "world_id": "we77d2"
+    },
+    {
+      "action": {
+        "kind": "mine",
+        "target": "oak_log",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/h3/L6",
+      "id": "D/h3/L6/4",
+      "observed": {
+        "block_removed": true,
+        "drops": {
+          "oak_log": 1
+        }
+      },
+      "world_id": "we77d2"
+    },
+    {
+      "action": {
+        "kind": "craft",
+        "target": "oak_planks",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/h3/L6",
+      "id": "D/h3/L6/5",
+      "observed": {
+        "inventory_delta": {
+          "oak_log": -1,
+          "oak_planks": 4
+        }
+      },
+      "world_id": "we77d2"
+    },
+    {
+      "action": {
+        "kind": "craft",
+        "target": "crafting_table",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/h3/L6",
+      "id": "D/h3/L6/6",
+      "observed": {
+        "inventory_delta": {
+          "crafting_table": 1,
+          "oak_planks": -4
+        }
+      },
+      "world_id": "we77d2"
+    },
+    {
+      "action": {
+        "kind": "mine",
+        "target": "oak_log",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/h3/L6",
+      "id": "D/h3/L6/7",
+      "observed": {
+        "block_removed": true,
+        "drops": {
+          "oak_log": 1
+        }
+      },
+      "world_id": "we77d2"
+    },
+    {
+      "action": {
+        "kind": "craft",
+        "target": "oak_planks",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/h3/L6",
+      "id": "D/h3/L6/8",
+      "observed": {
+        "inventory_delta": {
+          "oak_log": -1,
+          "oak_planks": 4
+        }
+      },
+      "world_id": "we77d2"
+    },
+    {
+      "action": {
+        "kind": "craft",
+        "target": "wooden_pickaxe",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/h3/L6",
+      "id": "D/h3/L6/9",
+      "observed": {
+        "inventory_delta": {
+          "oak_planks": -3,
+          "stick": -2,
+          "wooden_pickaxe": 1
+        }
+      },
+      "world_id": "we77d2"
+    },
+    {
+      "action": {
+        "kind": "mine",
+        "target": "coal_ore",
+        "times": 1,
+        "tool": "wooden_pickaxe"
+      },
+      "episode_id": "D/h3/L6",
+      "id": "D/h3/L6/10",
+      "observed": {
+        "block_removed": true,
+        "drops": {}
+      },
+      "world_id": "we77d2"
+    },
+    {
+      "action": {
+        "kind": "mine",
+        "target": "stone",
+        "times": 1,
+        "tool": "wooden_pickaxe"
+      },
+      "episode_id": "D/h3/L6",
+      "id": "D/h3/L6/11",
+      "observed": {
+        "block_removed": true,
+        "drops": {
+          "cobblestone": 1
+        }
+      },
+      "world_id": "we77d2"
+    },
+    {
+      "action": {
+        "kind": "mine",
+        "target": "stone",
+        "times": 1,
+        "tool": "wooden_pickaxe"
+      },
+      "episode_id": "D/h3/L6",
+      "id": "D/h3/L6/12",
+      "observed": {
+        "block_removed": true,
+        "drops": {
+          "cobblestone": 1
+        }
+      },
+      "world_id": "we77d2"
+    },
+    {
+      "action": {
+        "kind": "mine",
+        "target": "stone",
+        "times": 1,
+        "tool": "wooden_pickaxe"
+      },
+      "episode_id": "D/h3/L6",
+      "id": "D/h3/L6/13",
+      "observed": {
+        "block_removed": true,
+        "drops": {
+          "cobblestone": 1
+        }
+      },
+      "world_id": "we77d2"
+    },
+    {
+      "action": {
+        "kind": "craft",
+        "target": "stone_pickaxe",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/h3/L6",
+      "id": "D/h3/L6/14",
+      "observed": {
+        "inventory_delta": {
+          "cobblestone": -3,
+          "stick": -2,
+          "stone_pickaxe": 1
+        }
+      },
+      "world_id": "we77d2"
+    },
+    {
+      "action": {
+        "kind": "mine",
+        "target": "coal_ore",
+        "times": 1,
+        "tool": "stone_pickaxe"
+      },
+      "episode_id": "D/h3/L6",
+      "id": "D/h3/L6/15",
+      "observed": {
+        "block_removed": true,
+        "drops": {
+          "coal": 1
+        }
+      },
+      "world_id": "we77d2"
+    },
+    {
+      "action": {
+        "kind": "craft",
+        "target": "stick",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/h3/L6",
+      "id": "D/h3/L6/16",
+      "observed": {
+        "inventory_delta": {
+          "oak_planks": -2,
+          "stick": 4
+        }
+      },
+      "world_id": "we77d2"
+    },
+    {
+      "action": {
+        "kind": "craft",
+        "target": "torch",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/h3/L6",
+      "id": "D/h3/L6/17",
+      "observed": {
+        "inventory_delta": {
+          "coal": -1,
+          "stick": -1,
+          "torch": 4
+        }
+      },
+      "world_id": "we77d2"
+    },
+    {
+      "action": {
+        "kind": "mine",
+        "target": "oak_log",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/h3/L7",
+      "id": "D/h3/L7/1",
+      "observed": {
+        "block_removed": true,
+        "drops": {
+          "oak_log": 1
+        }
+      },
+      "world_id": "wda661"
+    },
+    {
+      "action": {
+        "kind": "craft",
+        "target": "oak_planks",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/h3/L7",
+      "id": "D/h3/L7/2",
+      "observed": {
+        "inventory_delta": {
+          "oak_log": -1,
+          "oak_planks": 4
+        }
+      },
+      "world_id": "wda661"
+    },
+    {
+      "action": {
+        "kind": "craft",
+        "target": "stick",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/h3/L7",
+      "id": "D/h3/L7/3",
+      "observed": {
+        "inventory_delta": {
+          "oak_planks": -2,
+          "stick": 4
+        }
+      },
+      "world_id": "wda661"
+    },
+    {
+      "action": {
+        "kind": "mine",
+        "target": "oak_log",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/h3/L7",
+      "id": "D/h3/L7/4",
+      "observed": {
+        "block_removed": true,
+        "drops": {
+          "oak_log": 1
+        }
+      },
+      "world_id": "wda661"
+    },
+    {
+      "action": {
+        "kind": "craft",
+        "target": "oak_planks",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/h3/L7",
+      "id": "D/h3/L7/5",
+      "observed": {
+        "inventory_delta": {
+          "oak_log": -1,
+          "oak_planks": 4
+        }
+      },
+      "world_id": "wda661"
+    },
+    {
+      "action": {
+        "kind": "craft",
+        "target": "crafting_table",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/h3/L7",
+      "id": "D/h3/L7/6",
+      "observed": {
+        "inventory_delta": {
+          "crafting_table": 1,
+          "oak_planks": -4
+        }
+      },
+      "world_id": "wda661"
+    },
+    {
+      "action": {
+        "kind": "mine",
+        "target": "oak_log",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/h3/L7",
+      "id": "D/h3/L7/7",
+      "observed": {
+        "block_removed": true,
+        "drops": {
+          "oak_log": 1
+        }
+      },
+      "world_id": "wda661"
+    },
+    {
+      "action": {
+        "kind": "craft",
+        "target": "oak_planks",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/h3/L7",
+      "id": "D/h3/L7/8",
+      "observed": {
+        "inventory_delta": {
+          "oak_log": -1,
+          "oak_planks": 4
+        }
+      },
+      "world_id": "wda661"
+    },
+    {
+      "action": {
+        "kind": "craft",
+        "target": "wooden_pickaxe",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/h3/L7",
+      "id": "D/h3/L7/9",
+      "observed": {
+        "inventory_delta": {
+          "oak_planks": -3,
+          "stick": -2,
+          "wooden_pickaxe": 1
+        }
+      },
+      "world_id": "wda661"
+    },
+    {
+      "action": {
+        "kind": "mine",
+        "target": "coal_ore",
+        "times": 1,
+        "tool": "wooden_pickaxe"
+      },
+      "episode_id": "D/h3/L7",
+      "id": "D/h3/L7/10",
+      "observed": {
+        "block_removed": true,
+        "drops": {}
+      },
+      "world_id": "wda661"
+    },
+    {
+      "action": {
+        "kind": "mine",
+        "target": "stone",
+        "times": 1,
+        "tool": "wooden_pickaxe"
+      },
+      "episode_id": "D/h3/L7",
+      "id": "D/h3/L7/11",
+      "observed": {
+        "block_removed": true,
+        "drops": {
+          "cobblestone": 1
+        }
+      },
+      "world_id": "wda661"
+    },
+    {
+      "action": {
+        "kind": "mine",
+        "target": "stone",
+        "times": 1,
+        "tool": "wooden_pickaxe"
+      },
+      "episode_id": "D/h3/L7",
+      "id": "D/h3/L7/12",
+      "observed": {
+        "block_removed": true,
+        "drops": {
+          "cobblestone": 1
+        }
+      },
+      "world_id": "wda661"
+    },
+    {
+      "action": {
+        "kind": "mine",
+        "target": "stone",
+        "times": 1,
+        "tool": "wooden_pickaxe"
+      },
+      "episode_id": "D/h3/L7",
+      "id": "D/h3/L7/13",
+      "observed": {
+        "block_removed": true,
+        "drops": {
+          "cobblestone": 1
+        }
+      },
+      "world_id": "wda661"
+    },
+    {
+      "action": {
+        "kind": "craft",
+        "target": "stone_pickaxe",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/h3/L7",
+      "id": "D/h3/L7/14",
+      "observed": {
+        "inventory_delta": {
+          "cobblestone": -3,
+          "stick": -2,
+          "stone_pickaxe": 1
+        }
+      },
+      "world_id": "wda661"
+    },
+    {
+      "action": {
+        "kind": "mine",
+        "target": "coal_ore",
+        "times": 1,
+        "tool": "stone_pickaxe"
+      },
+      "episode_id": "D/h3/L7",
+      "id": "D/h3/L7/15",
+      "observed": {
+        "block_removed": true,
+        "drops": {
+          "coal": 1
+        }
+      },
+      "world_id": "wda661"
+    },
+    {
+      "action": {
+        "kind": "craft",
+        "target": "stick",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/h3/L7",
+      "id": "D/h3/L7/16",
+      "observed": {
+        "inventory_delta": {
+          "oak_planks": -2,
+          "stick": 4
+        }
+      },
+      "world_id": "wda661"
+    },
+    {
+      "action": {
+        "kind": "craft",
+        "target": "torch",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/h3/L7",
+      "id": "D/h3/L7/17",
+      "observed": {
+        "inventory_delta": {
+          "coal": -1,
+          "stick": -1,
+          "torch": 4
+        }
+      },
+      "world_id": "wda661"
+    },
+    {
+      "action": {
+        "kind": "mine",
+        "target": "oak_log",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/h3/L8",
+      "id": "D/h3/L8/1",
+      "observed": {
+        "block_removed": true,
+        "drops": {
+          "oak_log": 1
+        }
+      },
+      "world_id": "w3919c"
+    },
+    {
+      "action": {
+        "kind": "craft",
+        "target": "oak_planks",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/h3/L8",
+      "id": "D/h3/L8/2",
+      "observed": {
+        "inventory_delta": {
+          "oak_log": -1,
+          "oak_planks": 4
+        }
+      },
+      "world_id": "w3919c"
+    },
+    {
+      "action": {
+        "kind": "craft",
+        "target": "stick",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/h3/L8",
+      "id": "D/h3/L8/3",
+      "observed": {
+        "inventory_delta": {
+          "oak_planks": -2,
+          "stick": 4
+        }
+      },
+      "world_id": "w3919c"
+    },
+    {
+      "action": {
+        "kind": "mine",
+        "target": "oak_log",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/h3/L8",
+      "id": "D/h3/L8/4",
+      "observed": {
+        "block_removed": true,
+        "drops": {
+          "oak_log": 1
+        }
+      },
+      "world_id": "w3919c"
+    },
+    {
+      "action": {
+        "kind": "craft",
+        "target": "oak_planks",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/h3/L8",
+      "id": "D/h3/L8/5",
+      "observed": {
+        "inventory_delta": {
+          "oak_log": -1,
+          "oak_planks": 4
+        }
+      },
+      "world_id": "w3919c"
+    },
+    {
+      "action": {
+        "kind": "craft",
+        "target": "crafting_table",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/h3/L8",
+      "id": "D/h3/L8/6",
+      "observed": {
+        "inventory_delta": {
+          "crafting_table": 1,
+          "oak_planks": -4
+        }
+      },
+      "world_id": "w3919c"
+    },
+    {
+      "action": {
+        "kind": "mine",
+        "target": "oak_log",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/h3/L8",
+      "id": "D/h3/L8/7",
+      "observed": {
+        "block_removed": true,
+        "drops": {
+          "oak_log": 1
+        }
+      },
+      "world_id": "w3919c"
+    },
+    {
+      "action": {
+        "kind": "mine",
+        "target": "oak_log",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/h3/L8",
+      "id": "D/h3/L8/8",
+      "observed": {
+        "block_removed": true,
+        "drops": {
+          "oak_log": 1
+        }
+      },
+      "world_id": "w3919c"
+    },
+    {
+      "action": {
+        "kind": "mine",
+        "target": "oak_log",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/h3/L8",
+      "id": "D/h3/L8/9",
+      "observed": {
+        "block_removed": true,
+        "drops": {
+          "oak_log": 1
+        }
+      },
+      "world_id": "w3919c"
+    },
+    {
+      "action": {
+        "kind": "craft",
+        "target": "oak_planks",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/h3/L8",
+      "id": "D/h3/L8/10",
+      "observed": {
+        "inventory_delta": {
+          "oak_log": -1,
+          "oak_planks": 4
+        }
+      },
+      "world_id": "w3919c"
+    },
+    {
+      "action": {
+        "kind": "craft",
+        "target": "wooden_pickaxe",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/h3/L8",
+      "id": "D/h3/L8/23",
+      "observed": {
+        "inventory_delta": {
+          "oak_planks": -3,
+          "stick": -2,
+          "wooden_pickaxe": 1
+        }
+      },
+      "world_id": "w3919c"
+    },
+    {
+      "action": {
+        "kind": "mine",
+        "target": "coal_ore",
+        "times": 1,
+        "tool": "wooden_pickaxe"
+      },
+      "episode_id": "D/h3/L8",
+      "id": "D/h3/L8/24",
+      "observed": {
+        "block_removed": true,
+        "drops": {}
+      },
+      "world_id": "w3919c"
+    },
+    {
+      "action": {
+        "kind": "mine",
+        "target": "stone",
+        "times": 1,
+        "tool": "wooden_pickaxe"
+      },
+      "episode_id": "D/h3/L8",
+      "id": "D/h3/L8/25",
+      "observed": {
+        "block_removed": true,
+        "drops": {
+          "cobblestone": 1
+        }
+      },
+      "world_id": "w3919c"
+    },
+    {
+      "action": {
+        "kind": "mine",
+        "target": "stone",
+        "times": 1,
+        "tool": "wooden_pickaxe"
+      },
+      "episode_id": "D/h3/L8",
+      "id": "D/h3/L8/26",
+      "observed": {
+        "block_removed": true,
+        "drops": {
+          "cobblestone": 1
+        }
+      },
+      "world_id": "w3919c"
+    },
+    {
+      "action": {
+        "kind": "mine",
+        "target": "stone",
+        "times": 1,
+        "tool": "wooden_pickaxe"
+      },
+      "episode_id": "D/h3/L8",
+      "id": "D/h3/L8/27",
+      "observed": {
+        "block_removed": true,
+        "drops": {
+          "cobblestone": 1
+        }
+      },
+      "world_id": "w3919c"
+    },
+    {
+      "action": {
+        "kind": "mine",
+        "target": "oak_log",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/h3/L8",
+      "id": "D/h3/L8/28",
+      "observed": {
+        "block_removed": true,
+        "drops": {
+          "oak_log": 1
+        }
+      },
+      "world_id": "w3919c"
+    },
+    {
+      "action": {
+        "kind": "mine",
+        "target": "oak_log",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/h3/L8",
+      "id": "D/h3/L8/29",
+      "observed": {
+        "block_removed": true,
+        "drops": {
+          "oak_log": 1
+        }
+      },
+      "world_id": "w3919c"
+    },
+    {
+      "action": {
+        "kind": "mine",
+        "target": "oak_log",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/h3/L8",
+      "id": "D/h3/L8/35",
+      "observed": {
+        "block_removed": true,
+        "drops": {
+          "oak_log": 1
+        }
+      },
+      "world_id": "w3919c"
+    },
+    {
+      "action": {
+        "kind": "craft",
+        "target": "oak_planks",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/h3/L8",
+      "id": "D/h3/L8/36",
+      "observed": {
+        "inventory_delta": {
+          "oak_log": -1,
+          "oak_planks": 4
+        }
+      },
+      "world_id": "w3919c"
+    },
+    {
+      "action": {
+        "kind": "craft",
+        "target": "stick",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/h3/L8",
+      "id": "D/h3/L8/37",
+      "observed": {
+        "inventory_delta": {
+          "oak_planks": -2,
+          "stick": 4
+        }
+      },
+      "world_id": "w3919c"
+    },
+    {
+      "action": {
+        "kind": "mine",
+        "target": "oak_log",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/h3/L8",
+      "id": "D/h3/L8/38",
+      "observed": {
+        "block_removed": true,
+        "drops": {
+          "oak_log": 1
+        }
+      },
+      "world_id": "w3919c"
+    },
+    {
+      "action": {
+        "kind": "craft",
+        "target": "oak_planks",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/h3/L8",
+      "id": "D/h3/L8/39",
+      "observed": {
+        "inventory_delta": {
+          "oak_log": -1,
+          "oak_planks": 4
+        }
+      },
+      "world_id": "w3919c"
+    },
+    {
+      "action": {
+        "kind": "craft",
+        "target": "crafting_table",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/h3/L8",
+      "id": "D/h3/L8/40",
+      "observed": {
+        "inventory_delta": {
+          "crafting_table": 1,
+          "oak_planks": -4
+        }
+      },
+      "world_id": "w3919c"
+    },
+    {
+      "action": {
+        "kind": "mine",
+        "target": "oak_log",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/h3/L8",
+      "id": "D/h3/L8/43",
+      "observed": {
+        "block_removed": true,
+        "drops": {
+          "oak_log": 1
+        }
+      },
+      "world_id": "w3919c"
+    },
+    {
+      "action": {
+        "kind": "craft",
+        "target": "oak_planks",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/h3/L8",
+      "id": "D/h3/L8/44",
+      "observed": {
+        "inventory_delta": {
+          "oak_log": -1,
+          "oak_planks": 4
+        }
+      },
+      "world_id": "w3919c"
+    },
+    {
+      "action": {
+        "kind": "craft",
+        "target": "wooden_pickaxe",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/h3/L8",
+      "id": "D/h3/L8/45",
+      "observed": {
+        "inventory_delta": {
+          "oak_planks": -3,
+          "stick": -2,
+          "wooden_pickaxe": 1
+        }
+      },
+      "world_id": "w3919c"
+    },
+    {
+      "action": {
+        "kind": "mine",
+        "target": "stone",
+        "times": 1,
+        "tool": "wooden_pickaxe"
+      },
+      "episode_id": "D/h3/L8",
+      "id": "D/h3/L8/46",
+      "observed": {
+        "block_removed": true,
+        "drops": {
+          "cobblestone": 1
+        }
+      },
+      "world_id": "w3919c"
+    },
+    {
+      "action": {
+        "kind": "mine",
+        "target": "stone",
+        "times": 1,
+        "tool": "wooden_pickaxe"
+      },
+      "episode_id": "D/h3/L8",
+      "id": "D/h3/L8/47",
+      "observed": {
+        "block_removed": true,
+        "drops": {
+          "cobblestone": 1
+        }
+      },
+      "world_id": "w3919c"
+    },
+    {
+      "action": {
+        "kind": "mine",
+        "target": "stone",
+        "times": 1,
+        "tool": "wooden_pickaxe"
+      },
+      "episode_id": "D/h3/L8",
+      "id": "D/h3/L8/48",
+      "observed": {
+        "block_removed": true,
+        "drops": {
+          "cobblestone": 1
+        }
+      },
+      "world_id": "w3919c"
+    },
+    {
+      "action": {
+        "kind": "craft",
+        "target": "stone_pickaxe",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/h3/L8",
+      "id": "D/h3/L8/49",
+      "observed": {
+        "inventory_delta": {
+          "cobblestone": -3,
+          "stick": -2,
+          "stone_pickaxe": 1
+        }
+      },
+      "world_id": "w3919c"
+    },
+    {
+      "action": {
+        "kind": "mine",
+        "target": "coal_ore",
+        "times": 1,
+        "tool": "stone_pickaxe"
+      },
+      "episode_id": "D/h3/L8",
+      "id": "D/h3/L8/50",
+      "observed": {
+        "block_removed": true,
+        "drops": {
+          "coal": 1
+        }
+      },
+      "world_id": "w3919c"
+    },
+    {
+      "action": {
+        "kind": "craft",
+        "target": "stick",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/h3/L8",
+      "id": "D/h3/L8/51",
+      "observed": {
+        "inventory_delta": {
+          "oak_planks": -2,
+          "stick": 4
+        }
+      },
+      "world_id": "w3919c"
+    },
+    {
+      "action": {
+        "kind": "craft",
+        "target": "torch",
+        "times": 1,
+        "tool": null
+      },
+      "episode_id": "D/h3/L8",
+      "id": "D/h3/L8/52",
+      "observed": {
+        "inventory_delta": {
+          "coal": -1,
+          "stick": -1,
+          "torch": 4
+        }
+      },
+      "world_id": "w3919c"
+    }
+  ]
+}

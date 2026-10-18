@@ -1,0 +1,282 @@
+"""Backward-chaining planner over rules.
+
+The planner sees only rules from the schema store. It never reads the
+simulator's recipe tables, so a wrong rule produces a wrong plan, which the
+step check then catches.
+"""
+
+from __future__ import annotations
+
+import math
+from collections import Counter
+from dataclasses import dataclass
+from typing import Callable
+
+from . import normalize
+from .models import Action, Rule, Skill
+
+MAX_DEPTH = 12
+# Items smelted per fuel item (burn time / 200 ticks), by family; a nether `*_stem` burns like a log.
+ITEMS_PER_FUEL = {"coal": 8, "charcoal": 8, "#log": 1.5, "#planks": 1.5, "stick": 0.5}
+
+
+class PlanningError(Exception):
+    pass
+
+
+@dataclass
+class PlanStep:
+    action: Action
+    rule: Rule
+    expected_inventory: dict[str, int]
+
+    @property
+    def experimental(self) -> bool:
+        """Steps that rely on an uncertified rule are marked experiments."""
+        return self.rule.status != "certified"
+
+
+def make_plan(
+    goal_item: str,
+    goal_count: int,
+    inventory: dict[str, int],
+    rules: list[Rule],
+    skill_for: Callable[[str], Skill | None] = lambda item: None,
+    visible: dict[str, int] | None = None,
+    stations: frozenset[str] = frozenset(),
+) -> list[PlanStep]:
+    """`visible` (natural worlds): normalized counts of the block families the agent
+    sees now; among rules producing one item, those it can reach come first. `stations` (v3.5): the home
+    stations within reach, usable without holding one."""
+    planner = _Planner(rules, skill_for, visible, stations)
+    return planner.achieve(goal_item, goal_count, Counter(inventory), [])
+
+
+def make_plan_for(
+    needs: dict[str, int],
+    inventory: dict[str, int],
+    rules: list[Rule],
+    skill_for: Callable[[str], Skill | None] = lambda item: None,
+    visible: dict[str, int] | None = None,
+    stations: frozenset[str] = frozenset(),
+) -> list[PlanStep]:
+    """Steps that leave every need (item -> count to hold) held at once, deeper items first; a need that spends
+    another (sticks spend planks) is gathered again. Several needs are what a build asks for (v3.4b)."""
+    planner = _Planner(rules, skill_for, visible, stations)
+    return planner._gather(needs, Counter(inventory), [], "could not hold every need at once")
+
+
+class _Planner:
+    def __init__(
+        self, rules: list[Rule], skill_for: Callable[[str], Skill | None], visible: dict[str, int] | None,
+        stations: frozenset[str] = frozenset(),
+    ):
+        self.producers: dict[str, list[Rule]] = {}
+        for rule in rules:
+            for item, count in rule.yields().items():
+                if count > 0:
+                    self.producers.setdefault(item, []).append(rule)
+        self.skill_for = skill_for
+        self.visible = visible
+        self.stations = stations
+
+    def achieve(self, item: str, count: int, inv: Counter, stack: list[str]) -> list[PlanStep]:
+        if inv[item] >= count:
+            return []
+        if item in stack or len(stack) > MAX_DEPTH:
+            raise PlanningError(f"circular need for {item}")
+
+        candidates = self.producers.get(item, [])
+        if not candidates:
+            raise PlanningError(f"no usable rule produces {item}")
+        skill = self.skill_for(item)
+        preferred = set(skill.rule_ids) if skill else set()
+        candidates = sorted(
+            candidates,
+            key=lambda r: (
+                r.id not in preferred, self._sightings(r) == 0, r.status != "certified", -self._sightings(r), r.rank, r.id
+            ),
+        )
+
+        reasons = []
+        for rule in candidates:
+            trial = inv.copy()
+            try:
+                if rule.kind == "craft":
+                    steps = self._craft(rule, item, count, trial, stack + [item])
+                elif rule.kind == "smelt":
+                    steps = self._smelt(rule, item, count, trial, stack + [item])
+                elif rule.kind in ("mine", "kill"):
+                    steps = self._harvest(rule, item, count, trial, stack + [item])
+                else:
+                    raise PlanningError(f"{rule.id}: unknown rule kind {rule.kind}")
+            except PlanningError as error:
+                reasons.append(f"{rule.id}: {error}")
+                continue
+            _replace(inv, trial)
+            return steps
+        raise PlanningError(f"cannot obtain {item} ({'; '.join(reasons)})")
+
+    def _sightings(self, rule: Rule) -> float:
+        """How many blocks (or mobs) of the rule's subject are in view; crafts and smelts are always
+        within reach. Without a view (v1) every rule ties."""
+        if self.visible is None:
+            return 1
+        if rule.kind not in ("mine", "kill"):
+            return math.inf
+        return self.visible.get(normalize.family(rule.subject), 0)
+
+    def _craft(self, rule: Rule, item: str, count: int, inv: Counter, stack: list[str]) -> list[PlanStep]:
+        runs = math.ceil((count - inv[item]) / rule.yields()[item])
+        needs = {ingredient: n * runs for ingredient, n in rule.preconditions.get("consumes", {}).items()}
+        station = rule.preconditions.get("station")
+        if station and station not in self.stations:
+            needs_with_station = {station: 1, **needs}
+        else:
+            needs_with_station = needs
+
+        steps = self._gather(needs_with_station, inv, stack, f"could not hold every ingredient for {item} at once")
+
+        for ingredient, n in needs.items():
+            inv[ingredient] -= n
+        for gained, n in rule.yields().items():
+            inv[gained] += n * runs
+        steps.append(PlanStep(Action("craft", rule.subject, times=runs), rule, _snapshot(inv)))
+        return steps
+
+    def _gather(self, needs: dict[str, int], inv: Counter, stack: list[str], failure: str) -> list[PlanStep]:
+        """Steps that leave every need held at once. Gathering one need can spend
+        another (sticks spend planks), so repeat until they all hold."""
+        steps: list[PlanStep] = []
+        for _ in range(4):
+            for ingredient in sorted(needs, key=self._depth, reverse=True):
+                steps += self.achieve(ingredient, needs[ingredient], inv, stack)
+            if all(inv[i] >= n for i, n in needs.items()):
+                return steps
+        raise PlanningError(failure)
+
+    def _smelt(self, rule: Rule, item: str, count: int, inv: Counter, stack: list[str]) -> list[PlanStep]:
+        runs = math.ceil((count - inv[item]) / rule.yields()[item])
+        needs = {ingredient: n * runs for ingredient, n in rule.preconditions.get("consumes", {}).items()}
+        station = rule.preconditions.get("station")
+        steps = self._gather(
+            {station: 1, **needs} if station and station not in self.stations else needs, inv, stack, f"could not hold every ingredient for {item} at once"
+        )
+        fuel, fuel_steps = self._cheapest_fuel(rule.preconditions.get("fuel_any", []), runs, inv, stack)
+        steps += fuel_steps
+
+        inv[fuel] -= _fuel_units(fuel, runs)
+        for ingredient, n in needs.items():
+            inv[ingredient] -= n
+        for gained, n in rule.yields().items():
+            inv[gained] += n * runs
+        action = Action("smelt", rule.subject, times=runs, fuel=fuel, ingredient=next(iter(needs)))
+        steps.append(PlanStep(action, rule, _snapshot(inv)))
+        return steps
+
+    def _cheapest_fuel(self, fuels: list[str], items: int, inv: Counter, stack: list[str]) -> tuple[str, list[PlanStep]]:
+        """A fuel already held enough of, else the one with the shortest plan to obtain."""
+        fuels = [fuel for fuel in fuels if _items_per_fuel(fuel) is not None]
+        if not fuels:
+            raise PlanningError("no known fuel among the rule's fuels")
+        held = next((fuel for fuel in fuels if inv[fuel] >= _fuel_units(fuel, items)), None)
+        if held is not None:
+            return held, []
+        best: tuple[str, list[PlanStep], Counter] | None = None
+        for fuel in fuels:
+            trial = inv.copy()
+            try:
+                steps = self.achieve(fuel, _fuel_units(fuel, items), trial, stack)
+            except PlanningError:
+                continue
+            if best is None or len(steps) < len(best[1]):
+                best = (fuel, steps, trial)
+        if best is None:
+            raise PlanningError(f"no obtainable fuel among {fuels}")
+        _replace(inv, best[2])
+        return best[0], best[1]
+
+    def _harvest(self, rule: Rule, item: str, count: int, inv: Counter, stack: list[str]) -> list[PlanStep]:
+        tools = rule.preconditions.get("tool_any", [])
+        steps: list[PlanStep] = []
+        tool = None
+        if tools:
+            tool = next((t for t in tools if inv[t] > 0), None)
+            if tool is None:
+                tool, steps = self._cheapest_tool(tools, inv, stack)
+
+        repeats = math.ceil((count - inv[item]) / rule.yields()[item])
+        for _ in range(repeats):
+            for gained, n in rule.yields().items():
+                inv[gained] += n
+            steps.append(PlanStep(Action(rule.kind, rule.subject, tool=tool), rule, _snapshot(inv)))
+        return steps
+
+    def _cheapest_tool(self, tools: list[str], inv: Counter, stack: list[str]) -> tuple[str, list[PlanStep]]:
+        best: tuple[str, list[PlanStep], Counter] | None = None
+        for tool in tools:
+            trial = inv.copy()
+            try:
+                steps = self.achieve(tool, 1, trial, stack)
+            except PlanningError:
+                continue
+            if best is None or len(steps) < len(best[1]):
+                best = (tool, steps, trial)
+        if best is None:
+            raise PlanningError(f"no obtainable tool among {tools}")
+        _replace(inv, best[2])
+        return best[0], best[1]
+
+    def _depth(self, item: str, seen: frozenset[str] = frozenset()) -> int:
+        """How many crafts deep an item is; gathered first when deeper."""
+        crafts = [r for r in self.producers.get(item, []) if r.kind in ("craft", "smelt")]
+        if not crafts or item in seen:
+            return 0
+        ingredients = crafts[0].preconditions.get("consumes", {})
+        return 1 + max((self._depth(i, seen | {item}) for i in ingredients), default=0)
+
+
+def withdrawals(plan: list[PlanStep], start: dict[str, int], held: dict[str, int], needs: dict[str, int]) -> dict[str, int]:
+    """How much of each item must come out of the home chest (v3.5d) for `plan`, made from `start` (held plus
+    stored), to leave `needs` held: what the plan draws below what is held, or what the end state is short of
+    the needs, capped at what is stored. All in the planner's names."""
+    low = dict(start)
+    for step in plan:
+        for item in start:
+            low[item] = min(low[item], step.expected_inventory.get(item, 0))
+    final = plan[-1].expected_inventory if plan else start
+
+    result: dict[str, int] = {}
+    for item, have in start.items():
+        stored = have - held.get(item, 0)
+        draw = max(
+            0,
+            have - low[item] - held.get(item, 0),
+            have - final.get(item, 0) + needs.get(item, 0) - held.get(item, 0),
+        )
+        if min(stored, draw) > 0:
+            result[item] = min(stored, draw)
+    return result
+
+
+def _items_per_fuel(fuel: str) -> float | None:
+    """Items one fuel item smelts; None for an item the bot does not accept as fuel."""
+    family = "#log" if fuel.endswith("_stem") else normalize.family(fuel)
+    return ITEMS_PER_FUEL.get(family)
+
+
+def _fuel_units(fuel: str, items: int) -> int:
+    """Fuel items needed to smelt `items` items."""
+    per_fuel = _items_per_fuel(fuel)
+    if per_fuel is None:
+        raise PlanningError(f"{fuel} is not a fuel")
+    return math.ceil(items / per_fuel)
+
+
+def _replace(target: Counter, source: Counter) -> None:
+    target.clear()
+    target.update(source)
+
+
+def _snapshot(inv: Counter) -> dict[str, int]:
+    return {item: count for item, count in sorted(inv.items()) if count > 0}

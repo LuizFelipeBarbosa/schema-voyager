@@ -1,0 +1,271 @@
+{
+  "demoted_in": {},
+  "rules": [
+    {
+      "action": {
+        "block": "oak_log",
+        "type": "mine"
+      },
+      "effects": {
+        "block_removed": true,
+        "drops": {
+          "oak_log": 1
+        }
+      },
+      "evidence": {
+        "confirmed": [],
+        "contradicted": [],
+        "counterexamples": []
+      },
+      "id": "mine_oak_log",
+      "preconditions": {
+        "tool_any": []
+      },
+      "rank": 0,
+      "rationale": "Logs drop themselves when broken by hand or any tool.",
+      "revision_of": null,
+      "scope": "train",
+      "source": "prior",
+      "status": "hypothesis"
+    },
+    {
+      "action": {
+        "block": "stone",
+        "type": "mine"
+      },
+      "effects": {
+        "block_removed": true,
+        "drops": {
+          "cobblestone": 1
+        }
+      },
+      "evidence": {
+        "confirmed": [],
+        "contradicted": [],
+        "counterexamples": []
+      },
+      "id": "mine_stone",
+      "preconditions": {
+        "tool_any": [
+          "wooden_pickaxe",
+          "stone_pickaxe"
+        ]
+      },
+      "rank": 0,
+      "rationale": "Stone needs at least a wooden pickaxe and drops cobblestone.",
+      "revision_of": null,
+      "scope": "train",
+      "source": "prior",
+      "status": "hypothesis"
+    },
+    {
+      "action": {
+        "block": "coal_ore",
+        "type": "mine"
+      },
+      "effects": {
+        "block_removed": true,
+        "drops": {
+          "coal": 1
+        }
+      },
+      "evidence": {
+        "confirmed": [],
+        "contradicted": [],
+        "counterexamples": []
+      },
+      "id": "mine_coal_ore",
+      "preconditions": {
+        "tool_any": [
+          "wooden_pickaxe",
+          "stone_pickaxe"
+        ]
+      },
+      "rank": 0,
+      "rationale": "Coal ore needs at least a wooden pickaxe and drops coal.",
+      "revision_of": null,
+      "scope": "train",
+      "source": "prior",
+      "status": "hypothesis"
+    },
+    {
+      "action": {
+        "item": "oak_planks",
+        "type": "craft"
+      },
+      "effects": {
+        "gains": {
+          "oak_planks": 4
+        }
+      },
+      "evidence": {
+        "confirmed": [],
+        "contradicted": [],
+        "counterexamples": []
+      },
+      "id": "craft_oak_planks",
+      "preconditions": {
+        "consumes": {
+          "oak_log": 1
+        },
+        "station": null
+      },
+      "rank": 0,
+      "rationale": "One log makes four planks in the inventory grid.",
+      "revision_of": null,
+      "scope": "train",
+      "source": "prior",
+      "status": "hypothesis"
+    },
+    {
+      "action": {
+        "item": "stick",
+        "type": "craft"
+      },
+      "effects": {
+        "gains": {
+          "stick": 4
+        }
+      },
+      "evidence": {
+        "confirmed": [],
+        "contradicted": [],
+        "counterexamples": []
+      },
+      "id": "craft_stick",
+      "preconditions": {
+        "consumes": {
+          "oak_planks": 2
+        },
+        "station": null
+      },
+      "rank": 0,
+      "rationale": "Two stacked planks make four sticks.",
+      "revision_of": null,
+      "scope": "train",
+      "source": "prior",
+      "status": "hypothesis"
+    },
+    {
+      "action": {
+        "item": "crafting_table",
+        "type": "craft"
+      },
+      "effects": {
+        "gains": {
+          "crafting_table": 1
+        }
+      },
+      "evidence": {
+        "confirmed": [],
+        "contradicted": [],
+        "counterexamples": []
+      },
+      "id": "craft_crafting_table",
+      "preconditions": {
+        "consumes": {
+          "oak_planks": 4
+        },
+        "station": null
+      },
+      "rank": 0,
+      "rationale": "Four planks in a 2x2 make a crafting table.",
+      "revision_of": null,
+      "scope": "train",
+      "source": "prior",
+      "status": "hypothesis"
+    },
+    {
+      "action": {
+        "item": "wooden_pickaxe",
+        "type": "craft"
+      },
+      "effects": {
+        "gains": {
+          "wooden_pickaxe": 1
+        }
+      },
+      "evidence": {
+        "confirmed": [],
+        "contradicted": [],
+        "counterexamples": []
+      },
+      "id": "craft_wooden_pickaxe",
+      "preconditions": {
+        "consumes": {
+          "oak_planks": 3,
+          "stick": 2
+        },
+        "station": "crafting_table"
+      },
+      "rank": 0,
+      "rationale": "Three planks across the top and two sticks down the middle.",
+      "revision_of": null,
+      "scope": "train",
+      "source": "prior",
+      "status": "hypothesis"
+    },
+    {
+      "action": {
+        "item": "stone_pickaxe",
+        "type": "craft"
+      },
+      "effects": {
+        "gains": {
+          "stone_pickaxe": 1
+        }
+      },
+      "evidence": {
+        "confirmed": [],
+        "contradicted": [],
+        "counterexamples": []
+      },
+      "id": "craft_stone_pickaxe",
+      "preconditions": {
+        "consumes": {
+          "cobblestone": 3,
+          "stick": 2
+        },
+        "station": "crafting_table"
+      },
+      "rank": 0,
+      "rationale": "Three cobblestone across the top and two sticks down the middle.",
+      "revision_of": null,
+      "scope": "train",
+      "source": "prior",
+      "status": "hypothesis"
+    },
+    {
+      "action": {
+        "item": "torch",
+        "type": "craft"
+      },
+      "effects": {
+        "gains": {
+          "torch": 4
+        }
+      },
+      "evidence": {
+        "confirmed": [],
+        "contradicted": [],
+        "counterexamples": []
+      },
+      "id": "craft_torch",
+      "preconditions": {
+        "consumes": {
+          "coal": 1,
+          "stick": 1
+        },
+        "station": null
+      },
+      "rank": 0,
+      "rationale": "Coal over a stick makes four torches.",
+      "revision_of": null,
+      "scope": "train",
+      "source": "prior",
+      "status": "hypothesis"
+    }
+  ],
+  "skills": [],
+  "transitions": []
+}
