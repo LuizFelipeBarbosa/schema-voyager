@@ -33,7 +33,7 @@ function fightFixture ({ distance = 3, blocks = floorBlocks(), shield = false } 
   bot.deactivateItem = record('deactivate')
   bot.goals = []
   bot.pathfinder = { setGoal: (goal) => bot.goals.push(goal) }
-  const target = { id: 7, name: 'player', height: 1.8, position: new Vec3(0.5, 10, 0.5 - distance) }
+  const target = { id: 7, name: 'player', height: 1.8, heldItem: { name: 'iron_sword' }, position: new Vec3(0.5, 10, 0.5 - distance) }
   const pvp = Object.assign(Object.create(PVP.prototype), {
     bot, target, timeToNextAttack: 0, wasInRange: false, attackRange: 3.5, followRange: 2, viewDistance: 128,
     blockingExplosion: false, meleeAttackRate: { getTicks: () => 5 }
@@ -67,7 +67,7 @@ test('validateTactics: [] is fine; a non-array, non-string, unknown or repeated 
   const registry = { a: () => ({}), b: () => ({}) }
   assert.equal(validateTactics(['b', 'a'], registry), null)
   assert.match(validateTactics(['a', 'b', 'a'], registry), /repeated/)
-  assert.deepEqual([...TACTICS], ['wtap', 'strafe', 'crit'])
+  assert.deepEqual([...TACTICS], ['wtap', 'strafe', 'shield', 'crit'])
   assert.deepEqual([...DEFAULT_TACTICS], [])
 })
 
@@ -472,7 +472,7 @@ test('wtap + crit: the hooks run in REGISTRY order, so both name orders apply th
 const scripted = (...values) => () => values.shift()
 
 test('strafe: it is registered between wtap and crit, and valid with crit', () => {
-  assert.deepEqual([...TACTICS], ['wtap', 'strafe', 'crit'])
+  assert.deepEqual([...TACTICS], ['wtap', 'strafe', 'shield', 'crit'])
   assert.equal(validateTactics(['crit', 'strafe']), null)
 })
 
@@ -544,4 +544,143 @@ test('strafe + crit: crit still jumps with sprint released, and the side is held
   assert.equal(bot.controls.right, true)
   assert.ok(!bot.controls.sprint)
   tactics.detach()
+})
+
+// shield: the opponent (iron sword, 13-tick cooldown) swings; the shield is wanted from 13 - 7 = 6 ticks later.
+const swing = (bot, target) => bot.emit('entitySwingArm', target)
+const shieldCalls = (calls) => calls.filter((call) => /^(de)?activate$|^attack$/.test(call))
+
+test('shield: it is registered between strafe and crit, and valid with crit', () => {
+  assert.deepEqual([...TACTICS], ['wtap', 'strafe', 'shield', 'crit'])
+  assert.equal(validateTactics(['crit', 'shield']), null)
+})
+
+test('shield: pvp\'s routine is skipped, so the strike has no 100 ms wait', async (t) => {
+  fakeTimers(t)
+  const { bot, pvp, target, calls } = fightFixture({ shield: true })
+  const tactics = createTactics(bot, ['shield'], { pvp })
+  tactics.attach(target)
+  bot.emit('physicsTick')
+  bot.emit('physicTick')
+  await flush() // no timers ticked
+  assert.ok(calls.includes('attack'))
+  tactics.detach()
+})
+
+test('shield: raised 7 ticks before their strike, up until they swing, lowered for ours', async (t) => {
+  fakeTimers(t)
+  const { bot, pvp, target, calls, attacks } = fightFixture({ shield: true, distance: 4.4 }) // in their range, out of ours
+  const tactics = createTactics(bot, ['shield'], { pvp })
+  tactics.attach(target)
+  swing(bot, target) // at tick 0: their next strike is due at tick 13
+  await tickBot(t, bot, 5)
+  assert.deepEqual(shieldCalls(calls), [])
+  await tickBot(t, bot, 1) // tick 6 = 13 - 7
+  assert.deepEqual(shieldCalls(calls), ['activate'])
+  await tickBot(t, bot, 4) // ticks 7..10
+  target.position = new Vec3(0.5, 10, -3) // in reach from tick 11, when the shield is warm
+  await tickBot(t, bot, 3) // ticks 11..13: our first strike is held, their strike is near
+  assert.equal(attacks(), 0)
+  swing(bot, target) // they strike at tick 13: the next is due at 26
+  await tickBot(t, bot, 1)
+  assert.deepEqual(shieldCalls(calls), ['activate', 'deactivate', 'attack'])
+  await tickBot(t, bot, 1) // 26 - 15 = 11 ticks away: the shield stays down
+  assert.deepEqual(shieldCalls(calls), ['activate', 'deactivate', 'attack'])
+  await tickBot(t, bot, 4) // tick 19 = 26 - 7
+  assert.deepEqual(shieldCalls(calls).slice(3), ['activate'])
+  tactics.detach()
+})
+
+test('shield: with their strike overdue it goes up again right after our strike, and leaving their range lowers it', async (t) => {
+  fakeTimers(t)
+  const { bot, pvp, target, calls } = fightFixture({ shield: true })
+  const tactics = createTactics(bot, ['shield'], { pvp })
+  tactics.attach(target)
+  await tickBot(t, bot, 1) // up, then down for the first strike
+  assert.deepEqual(shieldCalls(calls), ['activate', 'deactivate', 'attack'])
+  await tickBot(t, bot, 1)
+  assert.deepEqual(shieldCalls(calls).slice(3), ['activate'])
+  target.position = new Vec3(0.5, 10, -5)
+  await tickBot(t, bot, 1)
+  assert.deepEqual(shieldCalls(calls).slice(4), ['deactivate'])
+  tactics.detach()
+})
+
+test('shield: canStrike holds while warm and their strike is due within 3 ticks, releases after their swing', async (t) => {
+  fakeTimers(t)
+  const { bot, pvp, target, attacks } = fightFixture({ shield: true })
+  const tactics = createTactics(bot, ['shield'], { pvp })
+  tactics.attach(target)
+  await tickBot(t, bot, 1) // not warm: the first strike goes
+  swing(bot, target) // at tick 1: due at 14, the shield is up since tick 2 (their strike was overdue)
+  await tickBot(t, bot, 11) // ticks 2..12: warm, due in more than 3 ticks until tick 11; our cooldown is full at 14
+  assert.equal(attacks(), 1)
+  await tickBot(t, bot, 2) // ticks 13, 14: gate open, their strike due in 1 and 0 ticks
+  assert.equal(attacks(), 1)
+  swing(bot, target)
+  await tickBot(t, bot, 1)
+  assert.equal(attacks(), 2)
+  tactics.detach()
+})
+
+test('shield: canStrike never holds more than 8 ticks in a row', async (t) => {
+  fakeTimers(t)
+  const { bot, pvp, target, attacks } = fightFixture({ shield: true })
+  const tactics = createTactics(bot, ['shield'], { pvp })
+  tactics.attach(target)
+  await tickBot(t, bot, 1) // the first strike; they never swing, so their strike stays overdue
+  await tickBot(t, bot, 20) // ticks 2..21: the gate opens at 14, held ticks 14..21
+  assert.equal(attacks(), 1)
+  await tickBot(t, bot, 1)
+  assert.equal(attacks(), 2)
+  tactics.detach()
+})
+
+test('shield: a skeleton farther than 3 blocks keeps the shield up; closer, the normal rule applies', async (t) => {
+  fakeTimers(t)
+  const { bot, pvp, target, calls } = fightFixture({ shield: true, distance: 8 })
+  target.name = 'skeleton'
+  const tactics = createTactics(bot, ['shield'], { pvp })
+  tactics.attach(target)
+  swing(bot, target)
+  await tickBot(t, bot, 1)
+  assert.deepEqual(calls.filter((call) => /^(de)?activate$/.test(call)), ['activate'])
+  target.position = new Vec3(0.5, 10, -2) // 2 blocks, its strike not due for 12 ticks
+  await tickBot(t, bot, 1)
+  assert.deepEqual(calls.filter((call) => /^(de)?activate$/.test(call)), ['activate', 'deactivate'])
+  tactics.detach()
+})
+
+test('shield + crit: crit\'s strike lead is 1 (no pvp routine), crit alone with a shield still 3', async (t) => {
+  fakeTimers(t)
+  const rising = async (tactics) => {
+    const { bot, pvp, target, attacks } = fightFixture({ shield: true })
+    const controller = createTactics(bot, tactics, { pvp })
+    controller.attach(target)
+    await tickBot(t, bot, 1) // jump requested at tick 1
+    bot.entity.onGround = false
+    bot.entity.velocity.y = 0.3
+    let ticks = 0
+    while (attacks() === 0 && ticks < 30) { await tickBot(t, bot, 1); ticks++ }
+    controller.detach()
+    return ticks
+  }
+  const crit = await rising(['crit'])
+  const withShield = await rising(['shield', 'crit'])
+  assert.ok(withShield >= crit + 2, `${withShield} vs ${crit}`)
+})
+
+test('shield: detach lowers a raised shield and removes the entitySwingArm listener', async (t) => {
+  fakeTimers(t)
+  const { bot, pvp, target, calls } = fightFixture({ shield: true, distance: 8 })
+  target.name = 'skeleton'
+  const listeners = bot.listenerCount('entitySwingArm')
+  const tactics = createTactics(bot, ['shield'], { pvp })
+  tactics.attach(target)
+  assert.equal(bot.listenerCount('entitySwingArm'), listeners + 1)
+  await tickBot(t, bot, 1)
+  assert.deepEqual(calls.filter((call) => call === 'activate').length, 1)
+  tactics.detach()
+  assert.ok(calls.includes('deactivate'))
+  assert.equal(bot.listenerCount('entitySwingArm'), listeners)
 })

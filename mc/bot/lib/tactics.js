@@ -12,10 +12,12 @@
 //                              {forward, back, left, right, jump, sprint} before the safety check
 //   afterSafety(ctx, released) right after the safety check: the horizontal controls it released
 //                              (names, e.g. ['left']) because that step was blocked or unsafe
+//   onTick(ctx)                every physics tick while attached, before the mover, active or not
 //   attach(ctx) / detach(ctx)  with the controller
 //   ownsShield: true           pvp's shield routine is skipped; the tactic raises and lowers it itself
 // ctx: {bot, pvp, target, tick, ticksSinceStrike (Infinity before the first strike), cooldownTicks,
-//   distance (3D, as pvp measures it), horizontal, dy (target y - bot y), inReach (pvp.wasInRange)}.
+//   distance (3D, as pvp measures it), horizontal, dy (target y - bot y), inReach (pvp.wasInRange),
+//   shieldRoutine (pvp's shield routine runs: no tactic owns the shield and the bot has one)}.
 // Registry functions are called as (bot, {random}), random being Math.random unless createTactics is given one.
 // Hooks run in REGISTRY order, whatever the order of the names: movement shapers first, crit last so
 // its sprint and jump decisions win.
@@ -43,6 +45,14 @@ const CRIT_FALLBACK_TICKS = 10 // full cooldown and in reach this long without a
 const CRIT_MARGIN_TICKS = 1 // aim the strike this many ticks after the first descending one
 const SHIELD_STRIKE_LEAD = 3 // gate open -> bot.attack: shield down (2 ticks) plus the lookAt
 const BARE_STRIKE_LEAD = 1 // the lookAt
+const SHIELD_RANGE = 4.5 // the opponent can strike from here
+const SHIELD_WARMUP_TICKS = 5 // a raised shield blocks only after this many ticks (vanilla)
+const SHIELD_MARGIN_TICKS = 2 // raise this much earlier than the warm-up needs
+const SHIELD_HOLD_TICKS = 3 // hold our strike when the opponent's is due within this many ticks
+const SHIELD_MAX_HOLD_TICKS = 8 // but never hold this many ticks in a row
+const SHIELD_RANGED_MOBS = new Set(['skeleton', 'stray', 'bogged', 'pillager'])
+const SHIELD_RANGED_CLOSE = 3 // against ranged mobs the shield stays up beyond this distance
+const SHIELD_STRIKE_STALE_TICKS = 10 // a strike sequence still running after this long has failed
 const WTAP_RELEASE_TICKS = 3 // ticks after a strike that forward and sprint stay released
 const STRAFE_RANGE = 4 // horizontal distance within which strafe circles
 const STRAFE_MIN_TICKS = 15 // a side is held for STRAFE_MIN_TICKS to STRAFE_MAX_TICKS steer ticks
@@ -117,6 +127,91 @@ const REGISTRY = {
     }
   },
 
+  // Shield timing, replacing pvp's routine: raise the shield when the opponent's next strike is due (its last
+  // swing plus its weapon's cooldown) within the warm-up, lower it only for our own strike, and hold our
+  // strike for a moment when the block is about to count, so that we strike right after its swing.
+  // Ticks are the controller's: a swing is stamped with the last tick onTick saw.
+  shield (bot) {
+    let target = null
+    let currentTick = 0
+    let lastSwingTick = null // null before the opponent's first swing: its strike is due now
+    let raisedAt = null // the tick the shield went up, null while it is down
+    let strikeStartedAt = null // the tick our strike sequence began, until afterStrike
+    let heldTicks = 0 // consecutive ticks the gate has been held
+
+    const onSwing = (entity) => {
+      if (entity.id === target?.id) lastSwingTick = currentTick
+    }
+    const ticksUntilTheirStrike = (ctx) => {
+      if (lastSwingTick === null) return 0
+      return lastSwingTick + Math.ceil(20 / getAttackSpeed(ctx.target.heldItem?.name)) - ctx.tick
+    }
+    const shieldWanted = (ctx) => {
+      // a sequence that failed before bot.attack never reaches afterStrike, so it counts only SHIELD_STRIKE_STALE_TICKS
+      const striking = strikeStartedAt !== null && ctx.tick - strikeStartedAt < SHIELD_STRIKE_STALE_TICKS
+      if (striking || !ctx.pvp.hasShield()) return false
+      if (SHIELD_RANGED_MOBS.has(ctx.target.name) && ctx.distance > SHIELD_RANGED_CLOSE) return true
+      return ctx.distance <= SHIELD_RANGE &&
+        ticksUntilTheirStrike(ctx) <= SHIELD_WARMUP_TICKS + SHIELD_MARGIN_TICKS
+    }
+    const lower = () => {
+      if (raisedAt === null) return
+      bot.deactivateItem()
+      raisedAt = null
+    }
+
+    return {
+      ownsShield: true,
+
+      attach (ctx) {
+        target = ctx.target
+        currentTick = ctx.tick
+        lastSwingTick = null
+        raisedAt = null
+        strikeStartedAt = null
+        heldTicks = 0
+        bot.on('entitySwingArm', onSwing)
+      },
+
+      onTick (ctx) {
+        currentTick = ctx.tick
+        const wanted = shieldWanted(ctx)
+        if (wanted && raisedAt === null) {
+          bot.activateItem(true)
+          raisedAt = ctx.tick
+        } else if (!wanted) {
+          lower()
+        }
+      },
+
+      canStrike (ctx) {
+        const warm = raisedAt !== null && ctx.tick - raisedAt >= SHIELD_WARMUP_TICKS
+        if (!warm || ticksUntilTheirStrike(ctx) > SHIELD_HOLD_TICKS) {
+          heldTicks = 0
+          return true
+        }
+        if (heldTicks >= SHIELD_MAX_HOLD_TICKS) return true
+        heldTicks++
+        return false
+      },
+
+      beforeStrike (ctx) {
+        lower()
+        strikeStartedAt = ctx.tick
+      },
+
+      afterStrike () {
+        strikeStartedAt = null
+        heldTicks = 0
+      },
+
+      detach () {
+        lower()
+        bot.removeListener('entitySwingArm', onSwing)
+      }
+    }
+  },
+
   // Jump so that the strike lands while falling, with sprint released: a critical hit (1.5x damage).
   // The server needs the descent in the position packets and the stop-sprinting before the jump.
   // Ticks here are counted from the physicsTick that requested the jump (0); the jump is simulated in the next.
@@ -126,7 +221,7 @@ const REGISTRY = {
     let waitingSince = null // the first tick of the current run of open cooldown gates
     let lastGateTick = null
 
-    const strikeLead = (ctx) => ctx.pvp.hasShield() ? SHIELD_STRIKE_LEAD : BARE_STRIKE_LEAD
+    const strikeLead = (ctx) => ctx.shieldRoutine ? SHIELD_STRIKE_LEAD : BARE_STRIKE_LEAD
     const hasCeiling = () => {
       const above = bot.blockAt(bot.entity.position.floored().offset(0, 2, 0))
       return Boolean(above) && above.boundingBox !== 'empty'
@@ -252,7 +347,8 @@ function createTactics (bot, names = [], { pvp = bot.pvp, registry = REGISTRY, r
       distance: target.position.distanceTo(bot.entity.position),
       horizontal: Math.hypot(offset.x, offset.z),
       dy: offset.y,
-      inReach: pvp.wasInRange
+      inReach: pvp.wasInRange,
+      shieldRoutine: !ownsShield && pvp.hasShield()
     }
   }
 
@@ -332,6 +428,7 @@ function createTactics (bot, names = [], { pvp = bot.pvp, registry = REGISTRY, r
   function onPhysicsTick () {
     tick++
     const ctx = context()
+    runHooks('onTick', ctx)
     const near = ctx.horizontal <= MOVER_RANGE && Math.abs(ctx.dy) <= MOVER_MAX_DY
     const far = ctx.horizontal > MOVER_RELEASE || Math.abs(ctx.dy) > MOVER_RELEASE_DY
     if (!moverActive && near) {
