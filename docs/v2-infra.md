@@ -62,6 +62,10 @@ stop that process, or `scripts/v2-demo.sh stop`.
 `screen -S sv2-<inst>-life -X quit` is not a stop: the Python life outlives the screen and keeps the lock
 (seen in S12's `runs/v3-m5-live*`). Stop a life with SIGINT to the pid in `run/lock-<inst>` (it saves and
 releases the lock), or `scripts/v2-demo.sh stop`, then quit the screen.
+The node bot is the same: quitting `sv2-<inst>-bot` leaves it running. Stop it with SIGTERM to the pid in
+`run/bot-<inst>.pid`, or with `scripts/v2-down.sh` (bot, then server; it does not touch the life).
+`scripts/v2-demo.sh stop` stops the life (SIGINT to its pid file, then SIGTERM, then kill); `stop --all` also
+runs `v2-down.sh`. Never kill by name or pattern.
 
 ## The demo in one command
 
