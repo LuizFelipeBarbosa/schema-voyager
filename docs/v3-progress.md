@@ -58,7 +58,7 @@ pushed to `origin` until the user says so.
   (g016). Inconclusive as a live test of the fix: there was no directional explore, so the hop, the neighbour
   directions and the hole exit didn't run. No regression: a blind explore that stops moving now ends after about
   4 s, where the old code waited 30 s (preview-2005 g021 step 8).
-- 23:14 S01 81a9fc1 merge `v3/explorefast` (rebased c25e121), on the offline tests: pytest 342, bot 108 (5 new),
+- 23:15 S01 81a9fc1 merge `v3/explorefast` (rebased c25e121), on the offline tests: pytest 342, bot 108 (5 new),
   panel pass. The live run shows no regression. The directional fallbacks are not tested live.
 
 ## S01 setup and baseline (done 2026-10-17)
@@ -66,7 +66,7 @@ pushed to `origin` until the user says so.
 - Commits on `main`: 6e28c6a plan; 819b175 progress and interfaces skeleton; cb00942 merge `v3/baseline-ref`;
   81a9fc1 merge `v3/explorefast`. Suite on 81a9fc1: pytest 342, bot unit 108, panel all passed.
 - Instance b is down, with no lock. Instance a was not touched. Leftovers: the branch `v2/explorefast` (c25e121, superseded by
-  81a9fc1) is kept because S01 didn't create it. No `sv2-wt/*` worktrees are left. `origin/main` is 111 commits behind
+  81a9fc1) is kept because S01 didn't create it. No `sv2-wt/*` worktrees are left. `origin/main` is 115 commits behind (at b6503c6 plus this fix)
   and not pushed (user: not yet).
 - Open, for the first S02/S04 life that has 3 or more directional explores that don't move on the first try: no
   zero-move explore over 25 s; at least 20% of directional explores move 2 blocks or more; no goal asks for the same
