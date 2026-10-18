@@ -395,7 +395,11 @@ Plan S0.9. Lanes: `backend-health`, `life-robust`, `panel-live`, `door-species`,
 - Not back within `bot_wait_s`: the goal, if any, still ends `interrupted` with `bot` and is requeued, and `run()`
   returns `stop_reason="bot_down"`. Nothing on the way out needs the bot.
 - Bot-side state the life sets once at its start, if any, is sent again after `bot_back` (`protect` and `keep_out`
-  already go with every request).
+  already go with every request; `set_protected` is re-sent anyway).
+- Known limit: a loss outside `_run_until_interrupted` doesn't count toward the 3, so a call that keeps failing while
+  `connected()` is True (a `409` past 60 s on every try) loops through `bot_down`/`bot_back` until a stop check ends it.
+- The build's scaffold cleanup catches `BackendError` per cell (a lost bot leaves the cell): the build has matched, so
+  its success stands.
 
 **Which life the panel talks to** (`life-robust` writes, `panel-live` reads)
 
@@ -417,8 +421,8 @@ Plan S0.9. Lanes: `backend-health`, `life-robust`, `panel-live`, `door-species`,
 **Small fixes** (`life-polish`, `trace-interrupted`, `bot-polish`)
 
 - Play mode: `_needed_items` leaves the curriculum frontier out, as `_unasked_families` does.
-- A goal whose `mark(id, "done")` is refused because it is `cancelled` says "Cancelled: <label>" (once: not if the
-  chat already said it), not "Done: <label>".
+- A goal whose final `mark(id, "done")` (or `"failed"`) is refused because it is `cancelled` says "Cancelled: <label>"
+  (once: not if the chat already said it), not "Done: <label>" or "Couldn't ...".
 - `!status` with no goal running and goals queued: "Next: u004: 10 torches. Queued: 2." (`Queued` counts `queued`
   goals; the "Waiting for approval" part is unchanged). "Idle." only when nothing is queued.
 - The terminal trace: the `episode_end` line of an episode that logged `goal_interrupted` reads
