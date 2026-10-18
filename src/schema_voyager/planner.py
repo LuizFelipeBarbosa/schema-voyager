@@ -16,8 +16,8 @@ from . import normalize
 from .models import Action, Rule, Skill
 
 MAX_DEPTH = 12
-ITEMS_PER_BATCH_FUEL = 8  # coal and charcoal smelt 8 items each; any other fuel, 1
-BATCH_FUELS = frozenset({"coal", "charcoal"})
+# Items smelted per fuel item (burn time / 200 ticks), by family; a nether `*_stem` burns like a log.
+ITEMS_PER_FUEL = {"coal": 8, "charcoal": 8, "#log": 1.5, "#planks": 1.5, "stick": 0.5}
 
 
 class PlanningError(Exception):
@@ -154,6 +154,9 @@ class _Planner:
 
     def _cheapest_fuel(self, fuels: list[str], items: int, inv: Counter, stack: list[str]) -> tuple[str, list[PlanStep]]:
         """A fuel already held enough of, else the one with the shortest plan to obtain."""
+        fuels = [fuel for fuel in fuels if _items_per_fuel(fuel) is not None]
+        if not fuels:
+            raise PlanningError("no known fuel among the rule's fuels")
         held = next((fuel for fuel in fuels if inv[fuel] >= _fuel_units(fuel, items)), None)
         if held is not None:
             return held, []
@@ -211,9 +214,18 @@ class _Planner:
         return 1 + max((self._depth(i, seen | {item}) for i in ingredients), default=0)
 
 
+def _items_per_fuel(fuel: str) -> float | None:
+    """Items one fuel item smelts; None for an item the bot does not accept as fuel."""
+    family = "#log" if fuel.endswith("_stem") else normalize.family(fuel)
+    return ITEMS_PER_FUEL.get(family)
+
+
 def _fuel_units(fuel: str, items: int) -> int:
     """Fuel items needed to smelt `items` items."""
-    return math.ceil(items / ITEMS_PER_BATCH_FUEL) if fuel in BATCH_FUELS else items
+    per_fuel = _items_per_fuel(fuel)
+    if per_fuel is None:
+        raise PlanningError(f"{fuel} is not a fuel")
+    return math.ceil(items / per_fuel)
 
 
 def _replace(target: Counter, source: Counter) -> None:

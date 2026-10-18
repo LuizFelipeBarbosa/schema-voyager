@@ -646,7 +646,7 @@ def test_smelt_plans_name_the_ingredient_fuel_and_runs(tmp_path):
     assert plan[0].expected_inventory == {"furnace": 1, "iron_ingot": 2}
 
 
-def test_coal_covers_eight_items_and_other_fuel_one(tmp_path):
+def test_coal_covers_eight_items_and_planks_one_and_a_half(tmp_path):
     rules = smelting_rules(tmp_path)
     nine = make_plan("iron_ingot", 9, {"raw_iron": 9, "furnace": 1, "coal": 2}, rules)
     assert nine[-1].action.fuel == "coal" and nine[-1].action.times == 9 and len(nine) == 1
@@ -655,7 +655,7 @@ def test_coal_covers_eight_items_and_other_fuel_one(tmp_path):
     assert eight[-1].expected_inventory.get("coal", 0) == 0
     planks = make_plan("iron_ingot", 3, {"raw_iron": 3, "furnace": 1, "#planks": 3}, rules)
     assert (planks[-1].action.fuel, len(planks)) == ("#planks", 1)  # a fuel already held wins
-    assert planks[-1].expected_inventory.get("#planks", 0) == 0  # one plank per item
+    assert planks[-1].expected_inventory.get("#planks", 0) == 1  # ceil(3 / 1.5) = 2 planks used
 
 
 def test_a_smelt_plan_gathers_its_furnace_and_fuel(tmp_path):
