@@ -70,6 +70,7 @@ class DiggingMovements extends Movements {
   constructor (bot, { scaffoldNames = [], protectedBlock = null } = {}) {
     super(bot)
     this.canDig = true
+    this.allowSprinting = false // sprinting costs hunger; walking does not
     this.dontCreateFlow = true
     this.dontMineUnderFallingBlock = true
     this.maxDropDown = MAX_DROP_DOWN

@@ -21,6 +21,10 @@ test('DiggingMovements: drop limit, scaffold from the request only, towers only 
   assert.equal(withDirt.allow1by1towers, true)
 })
 
+test('DiggingMovements never sprints (sprinting costs hunger)', () => {
+  assert.equal(new DiggingMovements(stoneWorld()).allowSprinting, false)
+})
+
 test('DiggingMovements treats gravel, sand and powder as gravity blocks', () => {
   const movements = new DiggingMovements(stoneWorld())
   for (const name of ['sand', 'red_sand', 'gravel', 'white_concrete_powder']) {
