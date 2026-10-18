@@ -476,3 +476,33 @@ test('guard: respond resolves only after the fight cleanup, with fight_end alrea
   assert.equal(bot.setGoals.at(-1), null)
   assert.equal(log.since(0).at(-1).type, 'fight_end')
 })
+
+// ---- fight: tactics and fleeBelow ----
+
+test('fight: tactics attach right after pvp.attack and detach before pvp.stop', async () => {
+  const { bot, pvp, target } = fakeFightBot()
+  const order = []
+  pvp.attack = function (entity) { order.push('pvp.attack') }
+  pvp.stop = function () { order.push('pvp.stop') }
+  const tactics = { attach: (entity) => order.push(`attach:${entity.id}`), detach: () => order.push('detach') }
+  later(20, () => bot.emit('entityDead', target))
+  const result = await fight(bot, target, { timeoutMs: 1000, tactics })
+  assert.equal(result.outcome, 'killed')
+  assert.deepEqual(order, ['pvp.attack', 'attach:7', 'detach', 'pvp.stop'])
+})
+
+test('fight: fleeBelow 0 keeps fighting at 3 health; the default ends fled below 6', async () => {
+  const bold = fakeFightBot()
+  later(20, () => { bold.bot.health = 3; bold.bot.emit('health') })
+  later(60, () => bold.bot.emit('entityDead', bold.target))
+  assert.equal((await fight(bold.bot, bold.target, { timeoutMs: 1000, fleeBelow: 0 })).outcome, 'killed')
+
+  const startsLow = fakeFightBot({ health: 3 })
+  later(10, () => startsLow.bot.emit('entityDead', startsLow.target))
+  assert.equal((await fight(startsLow.bot, startsLow.target, { timeoutMs: 1000, fleeBelow: 0 })).outcome, 'killed')
+
+  const careful = fakeFightBot()
+  later(20, () => { careful.bot.health = 3; careful.bot.emit('health') })
+  later(50, () => { careful.target.position = new Vec3(17, 64, 0) })
+  assert.equal((await fight(careful.bot, careful.target, { timeoutMs: 1000 })).outcome, 'fled')
+})
