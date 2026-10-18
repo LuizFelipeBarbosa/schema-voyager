@@ -99,3 +99,23 @@ Re-read this first after a restart or context compaction. The session prompt is
 | M2 life loop | live run done (runs/m2-live-1, 16:16-16:51, 35 min unattended, stop wall_clock): 29 goals, 22 success, 14 certified (all T1-T3 + furnace, iron_ore, smelt_iron_ingot, iron_pickaxe, bucket), 69 exact MATCH, 0 contradictions, 2 quarantined (interference), $0.127. Stuck: after iron the bot was ~60 blocks underground; log goals (chest, stone_sword, stone_axe) failed 2x each on not_found -> skipped. Fixes: `surface` (explore up, merged 3695a0a) and `nav` (go up when the seen resource is far above, no E<->W reversal, cheapest-tool travel digging, wall-clock interruption not a failure; in progress). Opus review: **M2 met with caveats** (all 14 certifications legitimate; stall = navigation; iron pickaxes worn by travel digs; stochastic path never exercised). Timeline: T1-T3 certified by 6.6 min, iron pickaxe 13.4 min, bucket 28.8 min; 27,109 tokens, 12 calls (9 prior, 3 expansion). Offline rerun at 2645df7 (runs/sim-m2-seed{1,2,3}): seeds 2, 3 certify all 9 T1-T3; seed 1 certifies mine_deepslate in place of mine_stone |
 | M3 mid-run rule change | not started |
 | M4 generalization | **stopped 18:50 at the user's request (hand-off)**: m4-2024 complete with 2 FALSE contradictions (smelt with stick fuel gives no ingot but ok:true; craft stick x2 lost planks in the grid), m4-31337 partial; to be rerun after fixes by the next session (prompts/v2-demo-refine.md). Was relaunched 18:17 at 138d574 on instance b only, sequential (2024, 31337, 22, 555; 20 min each; ETA ~19:45), while the demo life runs on instance a. Earlier attempts invalid (runs/invalid/). First launch 17:30 at d5329e6 (a: 2024, 22; b: 31337, 555; 20 min each); seeds chosen by spawn-biome survey only (logs/survey-b.log, survey-b2.log): 2024 forest (birch+oak), 31337 grove (spruce), 22 savanna_plateau, 555 snowy_plains (hard); M3 rerun on 2024. Runs wait for M2/M3 review |
+
+## Demo-refine session (2026-10-17, from ~19:00 PDT)
+
+Brief: `prompts/v2-demo-refine.md`. Orchestrator Opus 5.5.
+
+- Start state verified: HEAD b566197; 267 Python, 76 bot unit, panel tests pass. v2 instances a and b down;
+  only `sv2-panel` (:8766) up. v1 demo still live (bot node pid 71552 on 3000/3007, ssh tunnel on 25565, panel 8765).
+- User decisions: take over instances a and b; pass the hardening; the MISMATCH within 6 minutes is OK; the trace
+  page must show the goal clearly, the current plan stage and the hypothesis being tested; **scramble more rules
+  than coal** (-> contract v2.4: `stick2`, `planks2`, `r2`, one open change at a time); proceed with the plan.
+  Defaults taken (not contradicted): live LLM on stage with a recorded run as fallback; Otopo stays spectator;
+  fuel values coal/charcoal 8, logs/planks 1.5, stick 0.5.
+- Contradiction audit (first pass, all live logs): false = 3 (smelt with stick fuel: m4-2024 g014, m3-live-1 g024;
+  craft grid loss: m4-2024 g034). Real = r2 in m3-live-1, demo-v2, demo-v2-live. m4-a-attempt1's two (stick2, r2)
+  are real changes from leaked datapacks: invalid run.
+- Contracts: v2.3 (smelt fuel values + shortfall is `craft_failed`; nothing left in the craft grid; the bot never
+  judges output counts, since datapacks change them; stage trace events `step_start` and enriched `plan`; panel
+  routes; instance lock with hand-over), v2.4 (change schedule).
+- Wave A lanes (19:30): fuel (P0-1), grid (P0-2, P0-3), launch (P3-1 lock, P3-2 v2-demo.sh), story (trace
+  events, chat narration, exploration episode_end), lifeview (panel life view). Next: scramble (v2.4), targets (P1-5).
