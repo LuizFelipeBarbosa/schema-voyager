@@ -103,6 +103,21 @@ function attachEventTracker (bot, log) {
         bot.once('death', onDeath)
       })
       return { promise, dispose: () => bot.removeListener('death', onDeath) }
+    },
+
+    // A promise that rejects (code "interrupted", with `found` attached) when
+    // the guard calls reject(found), once at most; dispose() when the action is over.
+    rejectOnThreat () {
+      let rejectPromise = null
+      let disposed = false
+      const promise = new Promise((resolve, reject) => { rejectPromise = reject })
+      return {
+        promise,
+        reject: (found) => {
+          if (!disposed) rejectPromise(Object.assign(new Error('the guard interrupted the action'), { code: 'interrupted', found }))
+        },
+        dispose: () => { disposed = true }
+      }
     }
   }
 }
