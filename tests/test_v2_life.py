@@ -710,7 +710,7 @@ def test_the_guard_accepts_an_instance():
 
 def test_the_v1_llm_constants_are_unchanged(tmp_path, monkeypatch):
     source = subprocess.run(
-        ["git", "show", "v2/open-world:src/schema_voyager/llm.py"], cwd=ROOT, capture_output=True, text=True, check=True
+        ["git", "show", "main:src/schema_voyager/llm.py"], cwd=ROOT, capture_output=True, text=True, check=True
     ).stdout
     old_file = tmp_path / "llm_v1.py"
     old_file.write_text(source)
