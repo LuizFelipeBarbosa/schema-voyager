@@ -405,3 +405,20 @@ for the bot process's lifetime.
 ## Error codes (v2)
 
 v1 codes, plus `hazard`, `quarantined` and `missing_furnace`.
+
+## v2.5: positions and the viewer (lane `view`)
+
+- **`position` on every action response** (`/mine`, `/craft`, `/smelt`,
+  `/explore`, `/look`, `/probe`): `{"x", "y", "z"}`, the bot's position when
+  the response is built. Python passes it into the step's `detail.position`.
+  Tolerant: never part of a check.
+- **CORS** on `GET`/`POST /status` and `POST /viewer`: answer
+  `Access-Control-Allow-Origin` for any `http://localhost:<port>` or
+  `http://127.0.0.1:<port>` origin, and `OPTIONS` preflights, so the trace
+  panel (port 8766) can read the bot's live position and switch the camera.
+  Nothing else gets CORS.
+- **`POST /viewer {"mode": "third" | "first"}`**: restarts prismarine-viewer on
+  the same `VIEWER_PORT` with that camera (`third` = today's, following the bot
+  from behind and above; `first` = the bot's eyes), answers
+  `{"ok": true, "mode": "..."}`. Doesn't take the action lock. `VIEWER_MODE`
+  (env, default `third`) sets the mode at start.
