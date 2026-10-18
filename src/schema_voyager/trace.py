@@ -20,6 +20,7 @@ class EpisodeLog:
         self.say = say
         self.events: list[dict[str, Any]] = []
         self._color = sys.stdout.isatty()
+        self._interrupted_reason: str | None = None
         if path is not None:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text("", encoding="utf-8")
@@ -59,6 +60,7 @@ class EpisodeLog:
                 line += f" {d['goal_id']} {d['source']}: {d['text']!r}"
             return line
         if kind == "goal_interrupted":
+            self._interrupted_reason = d["reason"]
             return f"{tag} {self._c(_YELLOW, 'interrupted')} {d['goal_id']}: {d['reason']}"
         if kind == "travel":
             return f"{tag}  {self._c(_DIM, 'travel ' + self._travel_summary(d))}"
@@ -98,7 +100,12 @@ class EpisodeLog:
         if kind == "plan_failed":
             return f"{tag} {self._c(_RED, 'no plan')}: {d['reason']}"
         if kind == "episode_end":
-            result = self._c(_GREEN, "SUCCESS") if d["success"] else self._c(_RED, "FAIL")
+            if d["success"]:
+                result = self._c(_GREEN, "SUCCESS")
+            elif self._interrupted_reason is not None:
+                result = self._c(_YELLOW, f"INTERRUPTED ({self._interrupted_reason})")
+            else:
+                result = self._c(_RED, "FAIL")
             return (f"{tag} {result} actions={d['actions']} llm_tokens={d['llm_tokens']} "
                     f"walked={d['blocks_walked']} repeated_failures={d['repeated_failures']}")
         return None
