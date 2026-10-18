@@ -32,6 +32,11 @@ const MOVER_MAX_DY = 1
 const MOVER_RELEASE_DY = 2 // a jump (1.25 blocks) or a knockback doesn't release the mover
 const STAND_DISTANCE = 2.5
 const STEP_BLOCKS = 0.8
+const LINE_SAMPLE_BLOCKS = 0.5 // clearLine samples the segment this often
+const GATE_TICKS = 3 // consecutive ticks of a clear (or blocked) line that hand the chase over (or back)
+const STUCK_TICKS = 10 // forward pressed this long ...
+const STUCK_BLOCKS = 0.2 // ... without moving this far: the mover is pushing into something
+const STUCK_COOLDOWN_TICKS = 40 // the mover stays out this long after a stuck hand-back
 const SHIELD_DOWN_MS = 100
 const SHIELD_UP_DELAY_MS = 150
 const STRIKE_RUNNING = 1e9 // pvp.timeToNextAttack while a strike sequence runs, so update() doesn't re-enter
@@ -50,6 +55,7 @@ const SHIELD_WARMUP_TICKS = 5 // a raised shield blocks only after this many tic
 const SHIELD_MARGIN_TICKS = 2 // raise this much earlier than the warm-up needs
 const SHIELD_HOLD_TICKS = 3 // hold our strike when the opponent's is due within this many ticks
 const SHIELD_MAX_HOLD_TICKS = 8 // but never hold this many ticks in a row
+const MOB_COOLDOWN_TICKS = 20 // the vanilla melee interval of a mob, whatever it holds
 const SHIELD_RANGED_MOBS = new Set(['skeleton', 'stray', 'bogged', 'pillager'])
 const SHIELD_RANGED_CLOSE = 3 // against ranged mobs the shield stays up beyond this distance
 const SHIELD_STRIKE_STALE_TICKS = 10 // a strike sequence still running after this long has failed
@@ -144,7 +150,10 @@ const REGISTRY = {
     }
     const ticksUntilTheirStrike = (ctx) => {
       if (lastSwingTick === null) return 0
-      return lastSwingTick + Math.ceil(20 / getAttackSpeed(ctx.target.heldItem?.name)) - ctx.tick
+      const cooldownTicks = ctx.target.type === 'player'
+        ? Math.ceil(20 / getAttackSpeed(ctx.target.heldItem?.name))
+        : MOB_COOLDOWN_TICKS
+      return lastSwingTick + cooldownTicks - ctx.tick
     }
     const shieldWanted = (ctx) => {
       // a sequence that failed before bot.attack never reaches afterStrike, so it counts only SHIELD_STRIKE_STALE_TICKS
@@ -296,20 +305,46 @@ function validateTactics (names, registry = REGISTRY) {
   return null
 }
 
-// True when the bot can stand at `position` (the next position of a step): a full block as the
-// floor at the feet's y - 1 or y - 2, and no hazard in the feet cell, the cell below or the floor.
+// True when the bot can stand in the cell (x, y, z): passable feet and head cells, a full block as the
+// floor at y - 1 or y - 2, and no hazard in the feet cell, the cell below or the floor.
 // Blocks that aren't loaded count as unsafe.
-function isSafeStep (bot, position) {
-  const x = Math.floor(position.x)
-  const y = Math.floor(position.y)
-  const z = Math.floor(position.z)
+function canStandAt (bot, x, y, z) {
   const feet = bot.blockAt(new Vec3(x, y, z))
+  const head = bot.blockAt(new Vec3(x, y + 1, z))
   const below = bot.blockAt(new Vec3(x, y - 1, z))
   const farBelow = bot.blockAt(new Vec3(x, y - 2, z))
-  if (!feet || !below || !farBelow) return false
+  if (!feet || !head || !below || !farBelow) return false
+  if (feet.boundingBox !== 'empty' || head.boundingBox !== 'empty') return false
   const floor = below.boundingBox === 'block' ? below : farBelow
   if (floor.boundingBox !== 'block') return false
   return ![feet, below, floor].some((block) => HAZARDS.has(block.name))
+}
+
+// True when the bot can stand at `position` (the next position of a step).
+function isSafeStep (bot, position) {
+  return canStandAt(bot, Math.floor(position.x), Math.floor(position.y), Math.floor(position.z))
+}
+
+// True when the bot can walk the straight horizontal line from `from` (its feet) to `to` (the target's):
+// every sample, every 0.5 blocks and both ends, is a cell it can stand in at the starting feet's y, which
+// allows a drop of one block at most and no step up. False when the bot is itself in a liquid.
+function clearLine (bot, from, to) {
+  const y = Math.floor(from.y)
+  const inLiquid = [y, y + 1].some((cellY) => {
+    const name = bot.blockAt(new Vec3(Math.floor(from.x), cellY, Math.floor(from.z)))?.name
+    return name === 'water' || name === 'lava'
+  })
+  if (inLiquid || bot.entity?.isInWater) return false
+
+  const length = Math.hypot(to.x - from.x, to.z - from.z)
+  const segments = Math.ceil(length / LINE_SAMPLE_BLOCKS)
+  for (let i = 0; i <= segments; i++) {
+    const fraction = segments === 0 ? 0 : i / segments
+    const x = Math.floor(from.x + (to.x - from.x) * fraction)
+    const z = Math.floor(from.z + (to.z - from.z) * fraction)
+    if (!canStandAt(bot, x, y, z)) return false
+  }
+  return true
 }
 
 // Where each horizontal control moves the bot, as a unit vector; mineflayer's yaw 0 faces -z.
@@ -337,6 +372,10 @@ function createTactics (bot, names = [], { pvp = bot.pvp, registry = REGISTRY, r
   let tick = 0
   let lastStrikeTick = -Infinity
   let moverActive = false
+  let clearTicks = 0 // consecutive ticks the line was clear while the mover was off
+  let blockedTicks = 0 // consecutive ticks it was blocked while the mover was on
+  let moverBackAt = 0 // the tick from which the mover may take over again (after a stuck hand-back)
+  let forwardPositions = [] // the bot's position at the start of each of the last ticks that began with forward pressed
   const applied = Object.fromEntries(CONTROLS.map((control) => [control, false])) // what the mover pressed
 
   function context () {
@@ -436,15 +475,30 @@ function createTactics (bot, names = [], { pvp = bot.pvp, registry = REGISTRY, r
     runHooks('onTick', ctx)
     const near = ctx.horizontal <= MOVER_RANGE && Math.abs(ctx.dy) <= MOVER_MAX_DY
     const far = ctx.horizontal > MOVER_RELEASE || Math.abs(ctx.dy) > MOVER_RELEASE_DY
-    if (!moverActive && near) {
-      // pathfinder's stop at each path end clears all controls and the horizontal velocity,
-      // which would cancel jumps, strafes and knockback, so it must not hold the goal here
-      moverActive = true
-      bot.pathfinder.setGoal(null)
-    } else if (moverActive && far) {
-      moverActive = false
-      releaseControls()
-      bot.pathfinder.setGoal(new goals.GoalFollow(target, pvp.followRange), true)
+    const lineClear = (near || moverActive) && clearLine(bot, bot.entity.position, target.position)
+    if (!moverActive) {
+      clearTicks = near && lineClear && tick >= moverBackAt ? clearTicks + 1 : 0
+      if (clearTicks >= GATE_TICKS) {
+        // pathfinder's stop at each path end clears all controls and the horizontal velocity,
+        // which would cancel jumps, strafes and knockback, so it must not hold the goal here
+        moverActive = true
+        blockedTicks = 0
+        forwardPositions = []
+        bot.pathfinder.setGoal(null)
+      }
+    } else {
+      blockedTicks = lineClear ? 0 : blockedTicks + 1
+      if (applied.forward) forwardPositions = [...forwardPositions, bot.entity.position.clone()].slice(-STUCK_TICKS)
+      else forwardPositions = []
+      const stuck = forwardPositions.length === STUCK_TICKS &&
+        Math.hypot(bot.entity.position.x - forwardPositions[0].x, bot.entity.position.z - forwardPositions[0].z) < STUCK_BLOCKS
+      if (far || blockedTicks >= GATE_TICKS || stuck) {
+        moverActive = false
+        clearTicks = 0
+        if (stuck) moverBackAt = tick + STUCK_COOLDOWN_TICKS
+        releaseControls()
+        bot.pathfinder.setGoal(new goals.GoalFollow(target, pvp.followRange), true)
+      }
     }
     if (!moverActive) return
 
@@ -464,6 +518,8 @@ function createTactics (bot, names = [], { pvp = bot.pvp, registry = REGISTRY, r
       target = newTarget
       tick = 0
       lastStrikeTick = -Infinity
+      clearTicks = 0
+      moverBackAt = 0
       pvp.attemptAttack = attemptAttack
       bot.on('physicsTick', onPhysicsTick)
       runHooks('attach', context())
@@ -491,5 +547,6 @@ module.exports = {
   jumpTimeline,
   validateTactics,
   createTactics,
-  isSafeStep
+  isSafeStep,
+  clearLine
 }

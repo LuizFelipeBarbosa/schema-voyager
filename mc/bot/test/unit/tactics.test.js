@@ -4,7 +4,7 @@ const { EventEmitter } = require('node:events')
 const { Vec3 } = require('vec3')
 const { goals } = require('mineflayer-pathfinder')
 const { PVP } = require('mineflayer-pvp/lib/PVP')
-const { TACTICS, DEFAULT_TACTICS, jumpTimeline, validateTactics, createTactics, isSafeStep } = require('../../lib/tactics')
+const { TACTICS, DEFAULT_TACTICS, jumpTimeline, validateTactics, createTactics, isSafeStep, clearLine } = require('../../lib/tactics')
 const { fakeWorldBot } = require('./world_fixture')
 
 // A flat stone floor at y 9 under a bot at y 10, facing -z (yaw 0); `without` lists floor cells to remove.
@@ -33,7 +33,7 @@ function fightFixture ({ distance = 3, blocks = floorBlocks(), shield = false } 
   bot.deactivateItem = record('deactivate')
   bot.goals = []
   bot.pathfinder = { setGoal: (goal) => bot.goals.push(goal) }
-  const target = { id: 7, name: 'player', height: 1.8, heldItem: { name: 'iron_sword' }, position: new Vec3(0.5, 10, 0.5 - distance) }
+  const target = { id: 7, name: 'player', type: 'player', height: 1.8, heldItem: { name: 'iron_sword' }, position: new Vec3(0.5, 10, 0.5 - distance) }
   const pvp = Object.assign(Object.create(PVP.prototype), {
     bot, target, timeToNextAttack: 0, wasInRange: false, attackRange: 3.5, followRange: 2, viewDistance: 128,
     blockingExplosion: false, meleeAttackRate: { getTicks: () => 5 }
@@ -58,6 +58,16 @@ async function tickBot (t, bot, count = 1) {
 }
 
 const fakeTimers = (t) => t.mock.timers.enable({ apis: ['setTimeout'] })
+
+// Attaches, and runs the 2 ticks the mover's line gate needs with the target 3.8 blocks away (in range of
+// the mover, out of reach), then puts the target back where it was: the next tick takes over and may strike.
+async function attachWithMover (t, tactics, bot, target) {
+  const place = target.position
+  target.position = new Vec3(place.x, place.y, bot.entity.position.z - 3.8)
+  tactics.attach(target)
+  await tickBot(t, bot, 2)
+  target.position = place
+}
 
 test('validateTactics: [] is fine; a non-array, non-string, unknown or repeated name is a problem', () => {
   assert.equal(validateTactics([]), null)
@@ -167,7 +177,7 @@ test('mover: within 4 blocks the goal is cleared; forward and sprint from 3.5, r
   fakeTimers(t)
   const { bot, pvp, target } = fightFixture({ distance: 3.5 })
   const tactics = createTactics(bot, [], { pvp })
-  tactics.attach(target)
+  await attachWithMover(t, tactics, bot, target)
   await tickBot(t, bot, 1)
   assert.deepEqual(bot.goals, [null])
   assert.equal(bot.controls.forward, true)
@@ -194,7 +204,7 @@ test('mover: past 5 blocks the follow goal returns and its controls are released
   fakeTimers(t)
   const { bot, pvp, target } = fightFixture({ distance: 3.5 })
   const tactics = createTactics(bot, [], { pvp })
-  tactics.attach(target)
+  await attachWithMover(t, tactics, bot, target)
   await tickBot(t, bot, 1)
   target.position = new Vec3(0.5, 10, -4.5) // between 4 and 5: still active
   await tickBot(t, bot, 1)
@@ -212,12 +222,91 @@ test('mover: past 5 blocks the follow goal returns and its controls are released
   tactics.detach()
 })
 
+test('mover: the line gate takes over after 3 clear ticks; a wall on the line keeps GoalFollow', async (t) => {
+  fakeTimers(t)
+  const clear = fightFixture({ distance: 3 })
+  const clearTactics = createTactics(clear.bot, [], { pvp: clear.pvp })
+  clearTactics.attach(clear.target)
+  await tickBot(t, clear.bot, 2)
+  assert.deepEqual(clear.bot.goals, [])
+  await tickBot(t, clear.bot, 1)
+  assert.deepEqual(clear.bot.goals, [null])
+  assert.equal(clear.bot.controls.forward, true)
+  clearTactics.detach()
+
+  const walled = fightFixture({ distance: 3, blocks: floorBlocks([], { '0,10,-2': 'stone', '0,11,-2': 'stone' }) })
+  const walledTactics = createTactics(walled.bot, [], { pvp: walled.pvp })
+  walledTactics.attach(walled.target)
+  await tickBot(t, walled.bot, 10)
+  assert.deepEqual(walled.bot.goals, [])
+  assert.ok(!walled.bot.controls.forward)
+  walledTactics.detach()
+})
+
+test('mover: 3 failing gate ticks in a row hand the chase back; a single failing tick does not', async (t) => {
+  fakeTimers(t)
+  const blocks = floorBlocks()
+  const { bot, pvp, target } = fightFixture({ distance: 3, blocks })
+  const tactics = createTactics(bot, [], { pvp })
+  await attachWithMover(t, tactics, bot, target)
+  await tickBot(t, bot, 1)
+  assert.equal(bot.goals.length, 1)
+  blocks['0,10,-2'] = 'stone'
+  await tickBot(t, bot, 2)
+  delete blocks['0,10,-2'] // clear again before the third
+  await tickBot(t, bot, 1)
+  assert.equal(bot.goals.length, 1)
+  blocks['0,10,-2'] = 'stone'
+  await tickBot(t, bot, 2)
+  assert.equal(bot.goals.length, 1)
+  await tickBot(t, bot, 1)
+  assert.equal(bot.goals.length, 2)
+  assert.ok(bot.goals[1] instanceof goals.GoalFollow)
+  assert.equal(bot.controls.forward, false)
+  assert.equal(bot.controls.sprint, false)
+  tactics.detach()
+})
+
+test('mover: forward pressed 10 ticks without moving 0.2 blocks hands back, and the mover stays out for 40 ticks', async (t) => {
+  fakeTimers(t)
+  const { bot, pvp, target } = fightFixture({ distance: 3 })
+  const tactics = createTactics(bot, [], { pvp })
+  await attachWithMover(t, tactics, bot, target)
+  await tickBot(t, bot, 1)
+  assert.equal(bot.controls.forward, true)
+  await tickBot(t, bot, 9) // the fake bot never moves
+  assert.equal(bot.goals.length, 1)
+  await tickBot(t, bot, 1)
+  assert.equal(bot.goals.length, 2)
+  assert.ok(bot.goals[1] instanceof goals.GoalFollow)
+  assert.equal(bot.controls.forward, false)
+  await tickBot(t, bot, 40) // the line is clear all along
+  assert.equal(bot.goals.length, 2)
+  await tickBot(t, bot, 2)
+  assert.equal(bot.goals.length, 3)
+  assert.equal(bot.goals[2], null)
+  tactics.detach()
+})
+
+test('mover: a bot that is moving is not stuck', async (t) => {
+  fakeTimers(t)
+  const { bot, pvp, target } = fightFixture({ distance: 4 })
+  const tactics = createTactics(bot, [], { pvp })
+  await attachWithMover(t, tactics, bot, target)
+  for (let i = 0; i < 30; i++) {
+    bot.entity.position.z -= 0.03
+    await tickBot(t, bot, 1)
+  }
+  assert.equal(bot.goals.length, 1)
+  tactics.detach()
+})
+
 test('mover: a steer hook changes the plan', async (t) => {
   fakeTimers(t)
   const { bot, pvp, target } = fightFixture({ distance: 3.5 })
   const registry = { sidestep: () => ({ steer: (ctx, controls) => { controls.left = true; controls.sprint = false } }) }
   const tactics = createTactics(bot, ['sidestep'], { pvp, registry })
-  tactics.attach(target)
+  await attachWithMover(t, tactics, bot, target)
   await tickBot(t, bot, 1)
   assert.equal(bot.controls.left, true)
   assert.equal(bot.controls.forward, true)
@@ -229,16 +318,20 @@ test('safety: no floor 2 blocks down or lava ahead releases forward; a 1-block d
   fakeTimers(t)
   const ahead = ['0,9,-1', '0,9,-2', '0,9,-3'] // the bot stands in x 0, z 0; forward is -z, 0.8 block ahead is z -1
   const cases = [
-    ['a 2-block drop', floorBlocks(ahead), false],
-    ['lava on the floor', floorBlocks([], { '0,9,-1': 'lava' }), false],
-    ['lava in the feet cell', floorBlocks([], { '0,10,-1': 'lava' }), false],
-    ['a 1-block drop', floorBlocks(ahead, { '0,8,-1': 'stone' }), true],
-    ['solid ground', floorBlocks(), true]
+    ['a 2-block drop', (blocks) => ahead.forEach((key) => delete blocks[key]), false],
+    ['lava on the floor', (blocks) => { blocks['0,9,-1'] = 'lava' }, false],
+    ['lava in the feet cell', (blocks) => { blocks['0,10,-1'] = 'lava' }, false],
+    ['a 1-block drop', (blocks) => { ahead.forEach((key) => delete blocks[key]); blocks['0,8,-1'] = 'stone' }, true],
+    ['solid ground', () => {}, true]
   ]
-  for (const [label, blocks, walks] of cases) {
+  for (const [label, change, walks] of cases) {
+    const blocks = floorBlocks()
     const { bot, pvp, target } = fightFixture({ distance: 3.5, blocks })
     const tactics = createTactics(bot, [], { pvp })
-    tactics.attach(target)
+    await attachWithMover(t, tactics, bot, target)
+    await tickBot(t, bot, 1) // the mover takes over and walks in
+    assert.equal(bot.controls.forward, true, label)
+    change(blocks) // the line gate needs 3 ticks to notice; the step check is at once
     await tickBot(t, bot, 1)
     assert.equal(Boolean(bot.controls.forward), walks, label)
     tactics.detach()
@@ -254,12 +347,42 @@ test('isSafeStep: hazards and unloaded blocks', () => {
   assert.equal(isSafeStep({ blockAt: () => null }, at(0)), false)
 })
 
+test('isSafeStep: a wall or step at the feet, or a block at the head, is unsafe', () => {
+  const bot = fakeWorldBot(floorBlocks([], { '1,10,0': 'stone', '2,11,0': 'stone', '3,10,0': 'oak_leaves' }))
+  const at = (x) => new Vec3(x + 0.5, 10, 0.5)
+  assert.equal(isSafeStep(bot, at(0)), true)
+  assert.equal(isSafeStep(bot, at(1)), false) // feet and head blocked by a wall, or just the feet by a step
+  assert.equal(isSafeStep(bot, at(2)), false) // head only
+  assert.equal(isSafeStep(bot, at(3)), false)
+  assert.equal(isSafeStep({ blockAt: (pos) => pos.y === 11 ? null : fakeWorldBot(floorBlocks()).blockAt(pos) }, at(0)), false) // head unloaded
+})
+
+test('clearLine: open floor and a 1-block drop are clear; a trunk, a step, a 2-block hole, lava and water are not', () => {
+  const from = new Vec3(0.5, 10, 0.5)
+  const to = new Vec3(0.5, 10, -3.5)
+  const line = (blocks, position = {}) => {
+    const bot = fakeWorldBot(blocks)
+    Object.assign(bot.entity, position)
+    return clearLine(bot, from, to)
+  }
+  const hole = ['0,9,-2']
+  assert.equal(line(floorBlocks()), true)
+  assert.equal(line(floorBlocks([], { '0,10,-2': 'oak_log', '0,11,-2': 'oak_log' })), false, 'a trunk')
+  assert.equal(line(floorBlocks([], { '0,10,-2': 'stone' })), false, 'a step up')
+  assert.equal(line(floorBlocks(hole, { '0,8,-2': 'stone' })), true, 'a 1-block drop')
+  assert.equal(line(floorBlocks(hole)), false, 'a 2-block hole')
+  assert.equal(line(floorBlocks([], { '0,9,-2': 'lava' })), false, 'lava')
+  assert.equal(line(floorBlocks([], { '0,10,0': 'water', '0,9,0': 'stone' })), false, 'standing in water')
+  assert.equal(line(floorBlocks([], { '0,11,0': 'water' })), false, 'water at the head')
+  assert.equal(line(floorBlocks(), { isInWater: true }), false, 'swimming')
+})
+
 test('detach: restores pvp, the listeners and the controls, and ends an in-flight strike harmlessly', async (t) => {
   fakeTimers(t)
   const { bot, pvp, target, calls, attacks } = fightFixture({ distance: 3.5, shield: true })
   const before = { physicsTick: bot.listenerCount('physicsTick'), physicTick: bot.listenerCount('physicTick') }
   const tactics = createTactics(bot, [], { pvp })
-  tactics.attach(target)
+  await attachWithMover(t, tactics, bot, target)
   assert.equal(Object.prototype.hasOwnProperty.call(pvp, 'attemptAttack'), true)
   bot.emit('physicsTick')
   bot.emit('physicTick') // the strike starts: the shield goes down and waits 100 ms
@@ -299,7 +422,7 @@ test('crit: with the cooldown nearly full the mover jumps with sprint released; 
   fakeTimers(t)
   const { bot, pvp, target } = fightFixture()
   const tactics = createTactics(bot, ['crit'], { pvp })
-  tactics.attach(target)
+  await attachWithMover(t, tactics, bot, target)
   await tickBot(t, bot, 1) // no strike yet: the cooldown counts as full
   assert.equal(bot.controls.jump, true)
   assert.ok(!bot.controls.sprint)
@@ -335,7 +458,7 @@ test('crit: on the ground with a jump planned there is no strike; descending, th
   fakeTimers(t)
   const { bot, pvp, target, attacks } = fightFixture()
   const tactics = createTactics(bot, ['crit'], { pvp })
-  tactics.attach(target)
+  await attachWithMover(t, tactics, bot, target)
   await tickBot(t, bot, 1) // jump requested, the fake bot stays put
   assert.equal(bot.controls.jump, true)
   assert.equal(attacks(), 0)
@@ -354,7 +477,7 @@ test('crit: a jump that is rising into the fall opens the gate early; with a shi
   fakeTimers(t)
   const { bot, pvp, target, attacks } = fightFixture({ shield: true })
   const tactics = createTactics(bot, ['crit'], { pvp })
-  tactics.attach(target)
+  await attachWithMover(t, tactics, bot, target)
   await tickBot(t, bot, 1) // jump requested at tick 1
   bot.entity.onGround = false
   bot.entity.velocity.y = 0.3
@@ -391,7 +514,7 @@ test('crit: a jump that lands without a strike allows the ground strike, and no 
   fakeTimers(t)
   const { bot, pvp, target, attacks } = fightFixture()
   const tactics = createTactics(bot, ['crit'], { pvp })
-  tactics.attach(target)
+  await attachWithMover(t, tactics, bot, target)
   await tickBot(t, bot, 1) // jump requested
   assert.equal(attacks(), 0)
   await tickBot(t, bot, 1) // still on the ground after the jump tick: it never left
@@ -422,7 +545,7 @@ test('wtap: forward and sprint are released for 3 ticks after a strike, then pre
   fakeTimers(t)
   const { bot, pvp, target, calls, attacks } = fightFixture({ distance: 2 })
   const tactics = createTactics(bot, ['wtap'], { pvp })
-  tactics.attach(target)
+  await attachWithMover(t, tactics, bot, target)
   await tickBot(t, bot, 1) // the first strike: nothing struck before, so the mover has pressed in
   assert.equal(attacks(), 1)
   assert.equal(bot.controls.forward, true)
@@ -442,10 +565,14 @@ test('wtap: forward and sprint are released for 3 ticks after a strike, then pre
 
 test('wtap: the safety check still releases an unsafe step', async (t) => {
   fakeTimers(t)
-  const { bot, pvp, target } = fightFixture({ distance: 3.5, blocks: floorBlocks(['0,9,-1', '0,9,-2', '0,9,-3']) })
+  const blocks = floorBlocks()
+  const { bot, pvp, target } = fightFixture({ distance: 3.5, blocks })
   const tactics = createTactics(bot, ['wtap'], { pvp })
-  tactics.attach(target)
-  await tickBot(t, bot, 5)
+  await attachWithMover(t, tactics, bot, target)
+  await tickBot(t, bot, 1)
+  assert.equal(bot.controls.forward, true)
+  for (const key of ['0,9,-1', '0,9,-2', '0,9,-3']) delete blocks[key]
+  await tickBot(t, bot, 1)
   assert.ok(!bot.controls.forward)
   assert.ok(!bot.controls.sprint)
   tactics.detach()
@@ -481,9 +608,10 @@ test('strafe: within 4 blocks exactly one side is held, switched after the drawn
   const { bot, pvp, target } = fightFixture({ distance: 3 })
   // side: 0.1 -> left; first duration 0 -> 15 ticks; second 0.999 -> 35 ticks; third 0 -> 15
   const tactics = createTactics(bot, ['strafe'], { pvp, random: scripted(0.1, 0, 0.999, 0) })
-  tactics.attach(target)
+  await attachWithMover(t, tactics, bot, target)
   const sides = []
   for (let i = 0; i < 15 + 35 + 1; i++) {
+    bot.entity.position.z -= 0.03 // walking in, so the stuck backstop stays out of it
     await tickBot(t, bot, 1)
     assert.equal(Boolean(bot.controls.left) !== Boolean(bot.controls.right), true, `tick ${i + 1}: exactly one side`)
     sides.push(bot.controls.left ? 'left' : 'right')
@@ -498,7 +626,7 @@ test('strafe: beyond 4 blocks (mover still active) neither side is pressed', asy
   fakeTimers(t)
   const { bot, pvp, target } = fightFixture({ distance: 3 })
   const tactics = createTactics(bot, ['strafe'], { pvp, random: scripted(0.1, 0.5) })
-  tactics.attach(target)
+  await attachWithMover(t, tactics, bot, target)
   await tickBot(t, bot, 1)
   target.position = new Vec3(0.5, 10, -4.5) // 4..5 blocks: strafe's range is over, the mover's is not
   await tickBot(t, bot, 1)
@@ -516,7 +644,7 @@ test('strafe: a side whose step is unsafe is released, and the next tick strafes
   // facing -z (yaw 0), left is -x: 0.8 block to the left is x -1, lava on the floor there
   const { bot, pvp, target } = fightFixture({ distance: 3, blocks: floorBlocks([], { '-1,9,0': 'lava' }) })
   const tactics = createTactics(bot, ['strafe'], { pvp, random: scripted(0.1, 0.5, 0.5) })
-  tactics.attach(target)
+  await attachWithMover(t, tactics, bot, target)
   await tickBot(t, bot, 1)
   assert.ok(!bot.controls.left && !bot.controls.right)
   await tickBot(t, bot, 1)
@@ -683,4 +811,21 @@ test('shield: detach lowers a raised shield and removes the entitySwingArm liste
   tactics.detach()
   assert.ok(calls.includes('deactivate'))
   assert.equal(bot.listenerCount('entitySwingArm'), listeners)
+})
+
+test('shield: a mob\'s next strike is due 20 ticks after its swing, a player\'s with an iron sword 13', async (t) => {
+  fakeTimers(t)
+  const raisedAfter = async (mob) => {
+    const { bot, pvp, target, calls } = fightFixture({ shield: true, distance: 4.4 })
+    if (mob) Object.assign(target, { name: 'zombie', type: 'mob', heldItem: undefined })
+    const tactics = createTactics(bot, ['shield'], { pvp })
+    tactics.attach(target)
+    swing(bot, target)
+    let ticks = 0
+    while (!calls.includes('activate') && ticks < 30) { await tickBot(t, bot, 1); ticks++ }
+    tactics.detach()
+    return ticks
+  }
+  assert.equal(await raisedAfter(false), 13 - 7) // raised at tick 6
+  assert.equal(await raisedAfter(true), 20 - 7) // raised at tick 13
 })
