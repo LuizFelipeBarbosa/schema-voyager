@@ -37,7 +37,7 @@ pushed to `origin` until the user says so.
 |---|---|---|---|
 | S01 setup and baseline | done | b | Baseline 342/103/panel; explorefast merged (bot 108); live tests via pre-approved forms; not pushed |
 | S02 fix the stuck loops | done | b | v3.0a/b/d/e; 7 lanes merged (pytest 455, bot 126); `runs/v3-baseline` 3 of 4 checks, (a) fails only on exempt `unreachable`; not pushed |
-| S03 retest demoted rules | running | none | Design v3.0f, then lanes `retest-store`, `retest-life` (offline) |
+| S03 retest demoted rules | done | none | v3.0f; 3 lanes merged (pytest 642, bot 191 on e76ea39); a demoted rule gets one retest as `<id>.retest@<world>`; offline only; not pushed |
 | S04 full inventory | done | a | `/toss`, `free_slots`, `inventory.py`, 36-slot sim, junk tossed before a goal; live `runs/s04-junk`; pytest 445, bot 120; not pushed |
 | S05 contracts for M1 and M2 | done | none | Contracts v3.1/v3.2 and stubs merged 1b80640; plugin pins in v3.2g; prompt changes for S06/S07 in v3.2h |
 | S06 goals you give it | running | a | Contract 3649653; lanes goal-queue, goal-parse, chat-bot, panel-ui, then panel-routes, life-queue, then goal-narration |
@@ -208,3 +208,32 @@ pushed to `origin` until the user says so.
 - Untested live: `rule_blocked` (no goal hit the craft loop, so units only); a `tools_broken` that isn't empty (the bot sends `[]`); the
   explorefast fallbacks.
 - Instance b is down, with no lock. No `sv2-wt/*` worktrees and no `v3/*` branches are left. Not pushed.
+
+## S03 retest demoted rules (done 2026-10-18)
+
+- Contract `docs/v3-interfaces.md` v3.0f (e5602f7); the replay bullet of `docs/v2-interfaces.md` "Epochs" notes the window.
+  Merges: ae4cf43 `v3/retest-store`, e66b334 `v3/retest-life`, f3e73dd `v3/retest-ids` (contract fix 379bba2). Suite on
+  e76ea39 (after S06's `life-queue`, dae44b8, which kept the retest calls): pytest 642, bot unit 191, panel and goals
+  tests pass. Offline only; no instance touched. Not pushed.
+- Design: a demoted rule is retested at most once per life, as a new rule `<rule id>.retest@<world>` (`source: "retest"`,
+  `revision_of` the original, empty evidence) whose replay starts at `Rule.since_seq`, the store's transition count at
+  the retest. The original stays demoted. A retest never opens or touches an epoch; once it runs it is an ordinary
+  hypothesis (a contradiction after a confirmation in its window opens one, as for any rule). Rejected: B (mark the
+  contradiction suspect: erases a real `r2` contradiction when the retest uses a stone pickaxe) and a store epoch at
+  the retest (it would stamp later revisions and move a certified revision's confirmations out of its epoch, failing
+  `change_report` (c)).
+- Trigger: `_repair_dead_ingredients` first runs `_retest_demoted`: report outcomes, then in passes retest the demoted
+  producer (most confirmations) of an asked item nothing usable produces and a usable rule consumes, uses as a station
+  or first tool, or the frontier names. Then repairs as before. `runs/v3-baseline-1` g018 and `runs/m4-2024` g014
+  would each have retested `smelt_iron_ingot` instead of the iron-consumer repairs (m4-2024: 27 repair calls).
+- Hidden-change guard: `_open_change` and `change_report` (c)/(d) read only `source == "revision"`, so a retest never
+  closes a change or counts as the revision. (e) now counts a retest's repeat of the mistaken action and tool
+  ("(M by a retest)"); (b) reports a retest's revise calls without failing on them.
+- `_run_goal` calls `self._log_unreported(log)` (repair, then retest events) and `self._attach_unreported(record)`
+  (`"repairs"`, `"retests"`). S06's `life-queue` (dae44b8) kept both; later rewrites of `_run_goal` must too.
+- Advisor (one Opus `Plan`, three consultations): design GO with changes (fixed-point passes, empty evidence, (e) and (b),
+  extra tests); final check NOT DONE on a retest-id collision (`x.rev1@w` and `x.rev1@w.rev1@w` both gave
+  `x.rev1.retest@w`, so `_retest_demoted` never ended), fixed in f3e73dd; re-check DONE.
+- Open: a retest's outcome is reported at the next `_repair_dead_ingredients`, so one still pending when the life ends is
+  only in the store. Not yet seen live: the first live life with a false demotion should show `retest started` then
+  `match` in the next goals' traces, and `change_report` unchanged.
