@@ -5,6 +5,7 @@
 
 const { goals } = require('mineflayer-pathfinder')
 const { round } = require('./world')
+const { parseOwners } = require('./chat_commands')
 
 const MODES = ['off', 'passive', 'defend']
 
@@ -199,6 +200,7 @@ function canSee (bot, entity) {
 
 function createGuard (bot, { eventLog, mode = process.env.BOT_GUARD || 'defend', movements = () => null, now = () => Date.now() / 1000 } = {}) {
   assertMode(mode)
+  const owners = parseOwners(process.env.BOT_OWNERS)
   const recentAttackers = new Map() // entity id -> seconds of its last hit on the bot
   const distanceSamples = new Map() // entity id -> [{t, distance}], oldest first
   let responding = false
@@ -206,6 +208,7 @@ function createGuard (bot, { eventLog, mode = process.env.BOT_GUARD || 'defend',
 
   const onEntityHurt = (entity, source) => {
     if (!source || !entity || (entity !== bot.entity && entity.id !== bot.entity.id)) return
+    if (source.type === 'player' && owners.includes(String(source.username).toLowerCase())) return // never fight an owner
     recentAttackers.set(source.id, now())
   }
   bot.on('entityHurt', onEntityHurt)

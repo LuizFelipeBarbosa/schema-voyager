@@ -236,6 +236,29 @@ test('guard: an entityHurt with a source makes that entity an attacked threat', 
   assert.equal(bot.listenerCount('entityHurt'), 0)
 })
 
+test('guard: a hit from an owner is no threat, from another player or a zombie it is', () => {
+  const previous = process.env.BOT_OWNERS
+  process.env.BOT_OWNERS = 'Otopo,Tester'
+  try {
+    const { bot, guard } = guardFixture({ mode: 'defend' })
+    delete bot.entities[7]
+    bot.entities[8] = { id: 8, type: 'player', username: 'otopo', name: 'player', position: new Vec3(3, 64, 0) }
+    bot.entities[9] = { id: 9, type: 'player', username: 'Stranger', name: 'player', position: new Vec3(3, 64, 0) }
+    bot.entities[10] = { id: 10, type: 'hostile', name: 'zombie', position: new Vec3(12, 64, 0) }
+
+    bot.emit('entityHurt', bot.entity, bot.entities[8])
+    assert.equal(guard.check(), null)
+    bot.emit('entityHurt', bot.entity, bot.entities[9])
+    assert.equal(guard.check().threat.reason, 'attacked')
+    delete bot.entities[9]
+    bot.emit('entityHurt', bot.entity, bot.entities[10])
+    assert.equal(guard.check().threat.mob, 'zombie')
+  } finally {
+    if (previous === undefined) delete process.env.BOT_OWNERS
+    else process.env.BOT_OWNERS = previous
+  }
+})
+
 test('guard: a near zombie is a threat in defend, ignored in off, and a closing one at 8 blocks counts', () => {
   const { bot, target, guard, advance } = guardFixture({ mode: 'defend' })
   assert.equal(guard.check().threat.reason, 'near')
