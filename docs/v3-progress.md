@@ -46,7 +46,7 @@ pushed to `origin` until the user says so.
 | S09 building foundations | done | a | Contract v3.4a and bot API v3.4; 5 lanes merged (pytest 821, bot 258); `runs/s09-place-live` ALL PASS (16 checks) from `main`; not pushed |
 | S10 build goals | done | a | Contract v3.4b and bot API v3.4b; 12 lanes merged (pytest 997, bot 312); live `runs/v3-build-live` and `-easy`: Claude's house approved in the panel, built and matched (0 failed steps); protection checked live; not pushed |
 | S11 duels | running | b | Contract v3.6 (`/duel`, tactics, the duel protocol); lanes fight-core, duel-bot, duel-runner, then one per tactic |
-| S12 home, storage, composite goals | running | a | Contract v3.5 and stubs (advisor: GO with changes, applied) |
+| S12 home, storage, composite goals | done | a | Contract v3.5; 12 lanes merged (pytest 1326, bot 471); live `runs/v3-m5-live-final` ALL PASS (junk stored in the home chest, 8 torches withdrawing the stored coal, get ready for night as 3 ordered children each checked); not pushed |
 | S13 mine reach (`unreachable` ore) | done | b | v3.0g; 4 lanes merged (pytest 997, bot 313); live `runs/v3-reach-2024` 1/44 ore `unreachable`, 11/12 iron goals, `runs/v3-reach-31337` 0/13, 4/4; `v2_iron.js` GATE PASS; not pushed |
 | S14 polish | done | a | Contract v3.0h; 11 lanes merged (pytest 1106 at 77b4bd1, 1147 on fed3117; bot 338/356); live `runs/v3-polish-live`: bot killed mid-goal -> `interrupted` `bot`, requeued, `done`; panel by `live.json`; second house leaves no scaffold; guard live test ALL PASS; not pushed |
 
@@ -141,31 +141,32 @@ pushed to `origin` until the user says so.
 - 07:37-07:57 S08 live `runs/v3-m3-soak` (learn mode, easy, daylight on, scramble, 20 min): 25/28 ok, 0 deaths, mismatches only at fired changes, mines 64 reached / 2 stalled / 0 unreachable; no hunting (no cow in view at a prior call). 7d94718 merge `v3/kill-polish`. pytest 1173 (1 skipped), bot 357, panel pass.
 - 08:38 S11 f7f37f2 contract v3.6 (duels: `/duel`, `/duel/stop`, `duel_end`, the tactics baseline, `fight()` `tactics`/`fleeBelow`, the duel protocol; advisor GO with changes: 40 duels per series, golden apple only, the strike gate counts its own ticks, one `attemptAttack` override, a close-range mover because pathfinder's path-end stop cancels jumps and knockback).
 - 08:38 S11 1b4de81 merge `v3/fight-core` (`lib/tactics.js`: full-cooldown strike gate, pvp's shield routine, the mover within 4 blocks with safe steps; release at 5 blocks or a 2-block height gap); 9419261 merge `v3/duel-bot` (`lib/duel.js`, `POST /duel`, `/duel/stop`); a59ef9f merge `v3/duel-runner` (`scripts/v3-duel.sh`, `scripts/v3-duel.js`; fix: `--vs` keeps the bot on set A). pytest 1174 (1 skipped), bot 403, panel pass.
-- 08:05 S12 dab14c0/38182b7 contract v3.5 (places, chests, home stations, composite goals; the bot never enters a house: stations and chest in the yard) after the advisor's review (GO with changes, all applied); stubs `withdraw`/`composite` kinds, `HOME_RANGE`, `HomeStock`, `ChestResult`, `Episode.home`, `LifeBackend.deposit`/`set_stations`. Instance a's world with S14's two houses saved as snapshot `s12-houses`. pytest 1173, bot 374, panel pass.
-- 08:40 S12 43bc8bb merge `v3/places` (`places.py`: `Home`, `Places`, `door_cell`, `home_box`, `yard_slots`, `home_from_protected`; `blueprint.merge_boxes`; `inventory.junk_to_store`). pytest 1208.
-- 08:43 S12 e68a163 merge `v3/composite-queue` (parents with ordered children in `goals.jsonl`, `accept_children`, `settle`, cancel cascade; `parse_goal` lists with `home=`, `replan_children`; architect's fix: a fake `build ...` text is never split). pytest 1247.
+- 08:14-08:33 S12 dab14c0/38182b7 contract v3.5 (places, chests, home stations, composite goals; the bot never enters a house: stations and chest in the yard) after the advisor's review (GO with changes, all applied); stubs `withdraw`/`composite` kinds, `HOME_RANGE`, `HomeStock`, `ChestResult`, `Episode.home`, `LifeBackend.deposit`/`set_stations`. Instance a's world with S14's two houses saved as snapshot `s12-houses`. pytest 1173, bot 374, panel pass.
+- 08:41 S12 43bc8bb merge `v3/places` (`places.py`: `Home`, `Places`, `door_cell`, `home_box`, `yard_slots`, `home_from_protected`; `blueprint.merge_boxes`; `inventory.junk_to_store`). pytest 1208.
+- 08:44 S12 e68a163 merge `v3/composite-queue` (parents with ordered children in `goals.jsonl`, `accept_children`, `settle`, cancel cascade; `parse_goal` lists with `home=`, `replan_children`; architect's fix: a fake `build ...` text is never split). pytest 1247.
 - 08:45 S12 f54526e merge `v3/chest-backend` (deposit, the withdraw action, `set_stations` with `station`/`protect` on `/craft` and `/smelt`; simulator chests and home stations; architect's fix: deposit `free_slots` is the inventory's in both backends). pytest 1280.
 - 08:47 S12 2b1c52c merge `v3/chest-bot` (`/deposit`, `/withdraw`, `/chest`). pytest 1280 (1 skipped), bot 415 (with S11's merges), panel pass.
 - S11 live `runs/v3-duel-smoke` (instance b, `fresh-2024`, 2 duels baseline vs baseline): the runner works end to end (arena, RCON reset, both `/duel`, the table). Found: double KOs (server log: both bots slain in the same second in 3 of 4 duels; each bot had ended `killed` on the other's `entityDead`), and 10 s lost per reset while the dead bot respawned. Every hit 3.12 (a full-cooldown iron sword on iron armor), 7 to kill; regen stays off (`health_end` = 20 − `damage_taken`).
 - S11 91ec089 contract `both_died`; 7100330 merge `v3/double-ko` (`killed` after a 0.5 s grace, `both_died`; the runner reads `death` events, a double KO is a draw, waits for both bots alive); 8d08c2d merge `v3/crit`. pytest 1280, bot 432, panel pass.
 - S11 live `runs/v3-duel-aa` (A/A, 40 duels, 0 invalid): 27 double KOs, A 10 wins to B 3 (58.8%, CI [43.4, 72.6]), A winning with either bot and on either side. The set whose request went first won: a few ms of head start decide a mirror duel. Fixed by 2f3fa99 (contract `start_at`) and 09:00 b19b7cc merge `v3/duel-sync` (one start instant 1 s ahead; `duration` ends at the deciding death). pytest 1297, bot 437, panel pass.
-- 09:05 S12 6136cf6 merge `v3/home-plan` (`HomeStock.near`; `stations` in `make_plan`/`make_plan_for`; `planner.withdrawals`; `pursue` withdraws from the chest before a plan, `lost`/`skipped` home kinds; `withdraw` in `BUILD_KINDS`). pytest 1297.
-- 09:07 S12 66317a1 merge `v3/station-bot` (`/craft` and `/smelt` take `station` and `protect`; held stations placed outside protected boxes; home station walked to and used in place; craft no longer reports a dug-up remembered table as a gain; architect's fix: one walking-movements helper exported from `goto.js`). bot 450.
-- 09:10 S12 ff7fcb0 merge `v3/composite-life` (children, one replan, parent endings and settling in `life.py`; architect's fix: `mark` updates fields in the same status, so a replanned parent stays `running`). pytest 1307.
-- 09:12 S12 b6af8a6 merge `v3/composite-panel` (children under their parent with "N of M done"; trace lines for `withdraw`, `stored`, `home_*`, `goal_children`, `goal_replanned`, `goal_parent_end`; architect's fix: home events carry `station`, not `kind`). pytest 1307 (1 skipped), bot 450, panel pass; contract v3.5 clarified from the lanes' notes.
+- 08:57 S12 6136cf6 merge `v3/home-plan` (`HomeStock.near`; `stations` in `make_plan`/`make_plan_for`; `planner.withdrawals`; `pursue` withdraws from the chest before a plan, `lost`/`skipped` home kinds; `withdraw` in `BUILD_KINDS`). pytest 1297.
+- 08:59 S12 66317a1 merge `v3/station-bot` (`/craft` and `/smelt` take `station` and `protect`; held stations placed outside protected boxes; home station walked to and used in place; craft no longer reports a dug-up remembered table as a gain; architect's fix: one walking-movements helper exported from `goto.js`). bot 450.
+- 09:01 S12 ff7fcb0 merge `v3/composite-life` (children, one replan, parent endings and settling in `life.py`; architect's fix: `mark` updates fields in the same status, so a replanned parent stays `running`). pytest 1307.
+- 09:02 S12 b6af8a6 merge `v3/composite-panel` (children under their parent with "N of M done"; trace lines for `withdraw`, `stored`, `home_*`, `goal_children`, `goal_replanned`, `goal_parent_end`; architect's fix: home events carry `station`, not `kind`). pytest 1307 (1 skipped), bot 450, panel pass; contract v3.5 clarified from the lanes' notes.
 - S11 live `runs/v3-duel-aa2` (A/A with `start_at`, 40 duels, 0 invalid): **A 51.2% [36.3, 65.9]**, 7 to 6, 27 double KOs; by bot 4/20 and 3/20, by side 4/20 and 3/20. The setup is unbiased.
 - S11 live `runs/v3-duel-crit` (crit vs baseline, 40 duels, 0 invalid): **crit 93.8% [81.8, 98.0], KEPT** (37 wins, 2 losses, 1 draw; by bot 18/20 and 19/20, by side 19/20 and 18/20). Only 41 of crit's 251 hits were crits (about 1 a duel): most of the gain is the shield's. Striking on its own rhythm, the crit bot has its shield up when the baseline strikes (it blocked 5 strikes a duel, the baseline 0.6), where two baselines strike in the same tick with both shields down. Best set: `[crit]`.
 - S11 a319c9c merge `v3/wtap` (release forward and sprint 3 ticks after each strike, keep pressing in otherwise; hooks run in `REGISTRY` order, crit last). pytest 1326, bot 454, panel pass.
 - S11 live `runs/v3-duel-wtap` (crit,wtap vs crit, 40 duels, 0 invalid): **crit,wtap 48.8% [34.1, 63.7], DROPPED** (14 wins, 15 losses, 11 double KOs). In the crit mirror the shields block almost nothing (0.1 a duel): both bots strike on the same rhythm again. Best set: `[crit]`.
 - S11 95edddd merge `v3/strafe` (within 4 blocks hold left or right, switch after 15-35 ticks or when the safety check releases the side; `afterSafety` hook). pytest 1326, bot 459, panel pass.
 - S11 live `runs/v3-duel-strafe` (crit,strafe vs crit, 40 duels, 0 invalid): **crit,strafe 45.0% [30.7, 60.2], DROPPED** (8 wins, 12 losses, 20 double KOs). Best set: `[crit]`.
-- 09:18 S12 472526e merge `v3/home-life` (places in `life_state.json` with the resume migration, the yard in `home_box` and `merge_boxes` to 32, furnishing, storing before tossing, one chest goal per home, `Episode.home` write-back, `home=` for parsing). Existing tests changed: two `test_v3_build_life.py` protected-box assertions (the home's box now includes the yard) and one `max_goals` (the chest goal runs first). pytest 1326 (1 skipped), bot 450, panel pass.
+- 09:16 S12 472526e merge `v3/home-life` (places in `life_state.json` with the resume migration, the yard in `home_box` and `merge_boxes` to 32, furnishing, storing before tossing, one chest goal per home, `Episode.home` write-back, `home=` for parsing). Existing tests changed: two `test_v3_build_life.py` protected-box assertions (the home's box now includes the yard) and one `max_goals` (the chest goal runs first). pytest 1326 (1 skipped), bot 450, panel pass.
 - 09:21-09:38 S12 live on instance a (`s12-houses`, peaceful, daylight off, `BOT_OWNERS=Otopo,Tester`, play mode, live LLM, resume of a copy of `runs/v3-polish-live`; `node mc/bot/test/v3_home_live.js`): `runs/v3-m5-live-try1` (`--south 4`): chest placed in the yard, but `/deposit`'s walk to `GoalNear(chest, 2)` stalled 45 s under a canopy (travel 1.3) and the life fell back to tossing; check 1 FAIL, reproduced 3/3 by hand. `runs/v3-m5-live` (`--south 5`, fresh restore): ALL PASS: junk + coal 64 stored (free slots 2 -> 23, nothing tossed), "8 torches" withdrew coal x2 (chest 64 -> 62), "get ready for night" -> u007 16 torches, u008 a bed, u009 a shield, in order, each `success`, parent `done`, no replan; houses `mismatches` `[]`; $0.12.
-- 09:44 S12 03360b2 merge `v3/home-live` (the live script). 09:58 bd5d161 merge `v3/chest-reach` (chest and home-station walks to range 3, 8 s stall cutoff; simulator `CHEST_RANGE` 3); 2a18fc3 contract. pytest 1326 (1 skipped), bot 470 (with S11's merges), panel pass.
+- 09:43 S12 03360b2 merge `v3/home-live` (the live script). 09:54 bd5d161 merge `v3/chest-reach` (chest and home-station walks to range 3, 8 s stall cutoff; simulator `CHEST_RANGE` 3); 2a18fc3 contract. pytest 1326 (1 skipped), bot 470 (with S11's merges), panel pass.
 - S11 0e1adef merge `v3/shield` (owns the shield: up when the opponent's next strike is due from its last swing and weapon cooldown, down only for the bot's strike, the strike held up to 8 ticks to block first; up while closing in on a skeleton, stray, bogged or pillager, the S08 line-of-sight follow-up; `onTick` hook; crit's strike lead without pvp's 100 ms wait). pytest 1326, bot 468, panel pass.
 - S11 live `runs/v3-duel-shield` (crit,shield vs crit, 40 duels, 0 invalid): **crit,shield 100.0% [91.2, 100.0], KEPT** (40 wins; by bot 20/20 and 20/20, by side 20/20 and 20/20; 3.5 s a duel). It blocked all 4.15 strikes a duel and took no damage; 4.0 of its 4.15 hits were crits (without the 100 ms wait, crit's jump timing lands; crit alone: 16%). Best set: `[crit, shield]`.
-- 10:05-10:15 S12 live `runs/v3-m5-live-fix` (bd5d161, fresh `s12-houses`, `--south 4`, the spot that failed in try1): check 1 PASS by deposit (`/deposit` 0.7 s, travel 0.8; coal 64 + 18 junk stacks stored, `tossed` {}), check 2 PASS (withdraw coal x2; but the withdraw's `inventory` missed the coal, so the next plan briefly planned to mine coal), check 3 FAIL: u007 20 torches and u008 a bed done in order; u009 a shield failed (`/smelt` `craft_failed` "could not place a furnace: no free spot next to the bot" at y 57, as in S08's soak), one replan (u010 1 iron ingot, u011 a shield), u010 failed, u011 cancelled "parent failed", parent `failed`: the replan path ran live. Houses `mismatches` `[]`; $0.13.
-- 10:20 S12 ddbdfdc merge `v3/chest-inventory` (chest calls read `inventory`/`free_slots` after the window closes). bot 471. `docs/v2-infra.md`: `screen -X quit` doesn't stop a life (SIGINT the lock's pid).
+- 09:57-10:03 S12 live `runs/v3-m5-live-fix` (bd5d161, fresh `s12-houses`, `--south 4`, the spot that failed in try1): check 1 PASS by deposit (`/deposit` 0.7 s, travel 0.8; coal 64 + 18 junk stacks stored, `tossed` {}), check 2 PASS (withdraw coal x2; but the withdraw's `inventory` missed the coal, so the next plan briefly planned to mine coal), check 3 FAIL: u007 20 torches and u008 a bed done in order; u009 a shield failed (`/smelt` `craft_failed` "could not place a furnace: no free spot next to the bot" at y 57, as in S08's soak), one replan (u010 1 iron ingot, u011 a shield), u010 failed, u011 cancelled "parent failed", parent `failed`: the replan path ran live. Houses `mismatches` `[]`; $0.13.
+- 10:04 S12 ddbdfdc merge `v3/chest-inventory` (chest calls read `inventory`/`free_slots` after the window closes). bot 471. `docs/v2-infra.md`: `screen -X quit` doesn't stop a life (SIGINT the lock's pid).
+- 10:06-10:13 S12 live `runs/v3-m5-live-final` (ddbdfdc, fresh `s12-houses`, `--south 4`, one invocation of `node mc/bot/test/v3_home_live.js --checks 1,2,3`): ALL PASS. Check 1: chest furnished at [12, 67, 13], `/deposit` 0.7 s, coal 64 + 18 junk stacks stored (free slots 2 -> 23), chest contents match over RCON, `tossed` {}. Check 2: "withdraw coal x2" with coal in the step's inventory, then only `craft torch x2` (no coal mining); torches 0 -> 8, chest coal 64 -> 62. Check 3: u006 "get ready for night" -> u007 24 torches (withdrew coal x6), u008 1 shield, u009 1 white bed (withdrew string x12 from the stored junk), in order, each `success`, parent `done`, no replan. Houses `mismatches` `[]`; $0.13. Instance a down, no lock.
 
 ## S01 setup and baseline (done 2026-10-17)
 
@@ -607,3 +608,52 @@ pushed to `origin` until the user says so.
   - Deferred: a datapack changing a mob's loot table (a new `CHANGE_STEPS` hidden change; with kill rules always stochastic, noticing it
     needs out-of-range counts M3 doesn't keep), breaking line of sight against skeletons, `/attack` ignores `protect` (its walks never dig),
     the simulator's creeper kill answers `not_found`.
+
+## S12 home, storage, composite goals (done 2026-10-18)
+
+- Contract: dab14c0/38182b7 v3.5 in `docs/v3-interfaces.md` and bot API v3.5 (plan S5.1-S5.3), after the advisor's review (GO
+  with changes, all applied: furnishing through `backend.act` before any Episode exists, `lost`/`skipped` home kinds so an
+  unusable chest or station never loops, `withdrawals` counting the needs, composite resume and per-pass settling, deposit in
+  request order, one home rule). Decisions: the bot never enters a house (S10's must): `canOpenDoors` stays off, the home's
+  chest and stations stand in the yard (the ring outside the walls), protected with the house as `home_box`; the first house
+  built is home (`--resume` of an older life migrates it); home stations within `HOME_RANGE` 48 plan as held and the bot walks
+  to them inside `/craft`/`/smelt` (`station`); chest contents are a planner input outside the rule system: `pursue` plans
+  from held plus stored and withdraws what that plan draws (D1: `withdraw` is never recorded); composite goals are parents
+  with ordered children in `goals.jsonl`, one replan by Claude on a child's failure. Later clarifications: 9a76f44, 88f3590
+  (the chest goal is decided when a goal ends), 2a18fc3 (walk range 3, 8 s stall cutoff).
+- Merges: 43bc8bb `places`, e68a163 `composite-queue`, f54526e `chest-backend`, 2b1c52c `chest-bot`, 6136cf6 `home-plan`,
+  66317a1 `station-bot`, ff7fcb0 `composite-life`, b6af8a6 `composite-panel`, 472526e `home-life`, 03360b2 `home-live`, then
+  from live findings bd5d161 `chest-reach` and ddbdfdc `chest-inventory`. Architect's merge fixes: a fake `build ...` text is
+  never split; deposit `free_slots` means the inventory in both backends; one walking-movements helper exported from
+  `goto.js`; `mark` updates fields in the same status; home events carry `station`. Existing tests changed: the `to_json` key
+  list (`test_v3_goals.py`), two protected-box assertions and one `max_goals` in `test_v3_build_life.py`, one range in
+  `station_home.test.js`. Suite on 11d8381: pytest 1326 (1 skipped), bot unit 476 (471 S12's plus S11's), trace, goals and
+  preview pass.
+- S10's musts: the way in (above); `/craft` and `/smelt` place a step's station outside every protected box (and fall
+  through to the home station); the protected list is merged to 32 boxes (`blueprint.merge_boxes`). Also fixed: craft
+  reported a dug-up remembered table as `crafting_table +1` (a verifier mismatch).
+- Live (instance a, snapshot `s12-houses` = S14's world with both houses, peaceful, daylight off, `BOT_OWNERS=Otopo,Tester`,
+  play mode, live LLM, `--resume` of a copy of `runs/v3-polish-live`; `mc/bot/test/v3_home_live.js`, Tester types `!goal`):
+  `runs/v3-m5-live-try1` (deposit walk stalled 45 s under a canopy, toss fallback), `runs/v3-m5-live` (ALL PASS from one
+  block further; a craft used the home crafting table: `used_home_station`, 8-block walk, table left standing),
+  `runs/v3-m5-live-fix` (checks 1-2 pass from the failing spot after `chest-reach`; check 3 failed on a furnace that couldn't
+  be placed at y 57, S08's open item; the replan path ran live), `runs/v3-m5-live-final` on the final code: ALL PASS (Log
+  10:06). About $0.13 per life. `builder.mismatches` `[]` on both houses after every run. Instance a is down with no lock.
+  No S12 worktrees or `v3/*` branches are left. Not pushed.
+- Advisor (one Opus `Plan`, two consultations): contract GO with changes (applied); final review GO, conditional on check 1
+  passing by deposit from `--south 4` (it did, twice).
+- Open:
+  - The smelt furnace placement can fail underground ("could not place a furnace: no free spot next to the bot", y 57): it
+    failed u009 "a shield" in `runs/v3-m5-live-fix` and two `iron_ingot` goals in S08's soak. Not S12's code; the next live
+    composite with an iron child can hit it.
+  - Yard slots aren't checked for reachability: a chest placed where no stance within 3 exists would stall every deposit for
+    8 s and fall back to tossing, with no event saying the home chest is unusable (advisor). Suggested: after 2 `unreachable`
+    deposits in a row, log `home_unreachable` and move it.
+  - The system chest goal is queued when a goal ends, so it can run between a composite's children (harmless in the runs:
+    the home had a chest).
+  - Not exercised live: a home furnace (no furnace was ever furnished), `station_gone`/`station_unreachable`, a chest-full
+    fallback, `merge_boxes` beyond 2 boxes, the chest goal, building a first home in the same life (only the migration ran),
+    `!cancel` of a composite, the panel's composite rows in a browser.
+  - `stored` is only what the bot reported: a player's changes to the chest show at the next chest call.
+  - The fake parser splits on " and ", " then " and commas (not for `build ...`); live texts go to Claude.
+  - `screen -S sv2-a-life -X quit` leaves the life running with `run/lock-a`: SIGINT its pid (now in `docs/v2-infra.md`).
