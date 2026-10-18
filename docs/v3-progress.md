@@ -46,7 +46,7 @@ pushed to `origin` until the user says so.
 | S09 building foundations | done | a | Contract v3.4a and bot API v3.4; 5 lanes merged (pytest 821, bot 258); `runs/s09-place-live` ALL PASS (16 checks) from `main`; not pushed |
 | S10 build goals | done | a | Contract v3.4b and bot API v3.4b; 12 lanes merged (pytest 997, bot 312); live `runs/v3-build-live` and `-easy`: Claude's house approved in the panel, built and matched (0 failed steps); protection checked live; not pushed |
 | S11 duels | running | b | Contract v3.6 (`/duel`, tactics, the duel protocol); lanes fight-core, duel-bot, duel-runner, then one per tactic |
-| S12 home, storage, composite goals | running | a | Contract v3.5 (draft, advisor review pending) |
+| S12 home, storage, composite goals | running | a | Contract v3.5 and stubs (advisor: GO with changes, applied) |
 | S13 mine reach (`unreachable` ore) | done | b | v3.0g; 4 lanes merged (pytest 997, bot 313); live `runs/v3-reach-2024` 1/44 ore `unreachable`, 11/12 iron goals, `runs/v3-reach-31337` 0/13, 4/4; `v2_iron.js` GATE PASS; not pushed |
 | S14 polish | done | a | Contract v3.0h; 11 lanes merged (pytest 1106 at 77b4bd1, 1147 on fed3117; bot 338/356); live `runs/v3-polish-live`: bot killed mid-goal -> `interrupted` `bot`, requeued, `done`; panel by `live.json`; second house leaves no scaffold; guard live test ALL PASS; not pushed |
 

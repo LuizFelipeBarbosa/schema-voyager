@@ -4,7 +4,7 @@ from collections.abc import Sequence
 from typing import Any, Protocol
 
 from .layouts import Layout
-from .models import Action, Observation, Outcome, Site, Status, Task
+from .models import Action, ChestResult, Observation, Outcome, Site, Status, Task
 
 DIRECTIONS = ("N", "NE", "E", "SE", "S", "SW", "W", "NW")  # N is -z, E is +x
 # direction -> raw block id -> {"x", "y", "z", "distance", "exposed"}
@@ -84,4 +84,13 @@ class LifeBackend(Backend, Protocol):
 
     def survey(self, size: tuple[int, int], radius: int = 24) -> list[Site]:
         """v3.4b: candidate build sites for a (width, depth) footprint near the bot, best first."""
+        ...
+
+    def deposit(self, pos: tuple[int, int, int], items: dict[str, int]) -> ChestResult:
+        """v3.5: walk to the chest at pos and put up to these counts (raw ids, in this order) into it. Action errors
+        come back in ChestResult.error. See docs/v3-interfaces.md, v3.5d."""
+        ...
+
+    def set_stations(self, stations: dict[str, tuple[int, int, int]]) -> None:
+        """v3.5: the home crafting_table and furnace, sent as "station" with every /craft and /smelt."""
         ...

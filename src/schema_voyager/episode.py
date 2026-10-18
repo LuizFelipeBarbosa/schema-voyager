@@ -11,7 +11,7 @@ from . import normalize
 from .adapter import DIRECTIONS, Backend
 from .evaluator import actions_after_contradiction, repeated_failures
 from .llm import LLM
-from .models import Action, EpisodeResult, Outcome, Task
+from .models import Action, EpisodeResult, HomeStock, Outcome, Task
 from .trace import EpisodeLog
 
 MAX_EXPLORES_PER_TARGET = 3
@@ -71,6 +71,8 @@ class Episode:
     revisions: int = 0
     # v3: rule id -> the error that blocked it for the rest of this goal (see agent.py).
     blocked_rules: dict[str, str] = field(default_factory=dict)
+    # v3.5: the home's stations and chest, set by the life for every goal; the agent replaces it after a withdraw.
+    home: HomeStock | None = None
     # v2: a natural world (backend.look exists, rules use normalized names) and
     # the time.monotonic() moment after which the episode may not act.
     natural: bool = False

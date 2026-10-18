@@ -1040,7 +1040,7 @@ No new codes: `/survey` answers `sites: []` rather than an error, and `/goto` us
 The Python side is `docs/v3-interfaces.md` v3.5. The bot never enters a house: walks keep `canOpenDoors` off, and the
 home's chest and stations stand outside the walls.
 
-### POST /deposit  `{"pos": [7, 76, 36], "items": {"coal": 64, "dirt": 120}, "protect": [...]}`
+### POST /deposit  `{"pos": [5, 76, 36], "items": {"coal": 64, "dirt": 120}, "protect": [...]}`
 
 Put items into the chest at `pos`. `items` is validated as `/toss`'s. It takes the action lock, the guard cuts into
 it (`cutIn: true`), and it honours `session.signal`. 60 s.
@@ -1048,8 +1048,9 @@ it (`cutIn: true`), and it honours `session.signal`. 60 s.
 1. Walk to `GoalNear(pos, 2)` with `/goto`'s world-preserving movements (no digging, no scaffold, no doors), at most
    45 s. Not there: `unreachable` with `travel`.
 2. The block at `pos` must be a `chest`: else `not_found` (with `detail: {"found": "<block>" | null}`).
-3. Open it (`bot.openContainer`, 5 s), move up to each count of each item, smallest stacks first, never the held
-   tool, stop when the chest has no room, close the window (also on any error or abort), settle the inventory.
+3. Open it (`bot.openContainer`, 5 s), move up to each count of each item, items in request order (a stack at a
+   time), never the held tool, stop when the chest has no room, close the window (also on any error or abort),
+   settle the inventory.
 
 ```json
 {"ok": true, "deposited": {"coal": 64, "dirt": 120}, "chest": {"coal": 64, "dirt": 120}, "chest_free_slots": 24,
@@ -1059,14 +1060,14 @@ it (`cutIn: true`), and it honours `session.signal`. 60 s.
 `deposited` has only positive counts and may be short of `items` (not held, or `chest_full`). `chest` is the whole
 content after the call, by raw id.
 
-### POST /withdraw  `{"pos": [7, 76, 36], "items": {"coal": 2}, "protect": [...]}`
+### POST /withdraw  `{"pos": [5, 76, 36], "items": {"coal": 2}, "protect": [...]}`
 
 The same walk, check and window; takes up to each count out of the chest, stopping when the inventory has no room
 (`inventory_full: true`). `{"ok": true, "withdrawn": {"coal": 2}, "chest": {...}, "chest_free_slots": 25,
 "inventory_full": false, "inventory": {...}, "free_slots": 6, "travel": {...}, "events": [...]}`. Short is still
 `ok: true`: Python compares `withdrawn` with what it asked.
 
-### POST /chest  `{"pos": [7, 76, 36], "protect": [...]}`
+### POST /chest  `{"pos": [5, 76, 36], "protect": [...]}`
 
 The same walk and check; opens the chest, reads it and closes it. `{"ok": true, "chest": {...}, "chest_free_slots":
 24, "travel": {...}, "events": [...]}`.
@@ -1076,13 +1077,14 @@ The same walk and check; opens the chest, reads it and closes it. `{"ok": true, 
 - Both take optional `"station": [x, y, z]` (three integers) and `"protect"` (as v3.4b), else 400 `bad_request`.
 - How a step gets its station (a crafting table for a recipe that needs one; the furnace for `/smelt`), in order:
   1. one within 4 blocks (as today); 2. a remembered standing one within 24 (as today); 3. a held one, placed on a
-  spot outside every `protect` box (`findSpots` skips a cell inside one) and dug up after the step, as today; 4. the
-  `station` given, when the block there is that station: walk to `GoalNear(station, 2)` with the world-preserving
-  movements (at most 45 s), use it, never dig it up (`table_retrieved`/`furnace_retrieved` `null`,
-  `used_home_station: true`); a home furnace is drained first as a remembered one is. 5. Else
-  `missing_crafting_table` / `missing_furnace`, with `station_gone: true` when `station` was given and its loaded
-  cell holds something else.
-- Responses gain `used_home_station` (boolean) and, when it applies, `station_gone`.
+  spot outside every `protect` box (`findSpots` skips a cell inside one) and dug up after the step, as today; no
+  such spot falls through to 4; 4. the `station` given, when the block there is that station: walk to
+  `GoalNear(station, 2)` with the world-preserving movements (at most 45 s), use it, never dig it up
+  (`table_retrieved`/`furnace_retrieved` `null`, `used_home_station: true`); a home furnace is drained first as a
+  remembered one is. A walk that doesn't get there answers `unreachable` with `station_unreachable: true` and
+  `travel`. 5. Else `missing_crafting_table` / `missing_furnace`, with `station_gone: true` when `station` was given
+  and its loaded cell holds something else.
+- Responses gain `used_home_station` (boolean) and, when they apply, `station_gone` and `station_unreachable`.
 
 ### Error codes (v3.5)
 

@@ -4,11 +4,11 @@ from dataclasses import asdict, dataclass, field
 from typing import Any, Literal
 
 
-ActionKind = Literal["mine", "craft", "explore", "smelt", "place", "clear", "goto", "kill"]
+ActionKind = Literal["mine", "craft", "explore", "smelt", "place", "clear", "goto", "kill", "withdraw"]
 RuleStatus = Literal["hypothesis", "certified", "demoted"]
 RuleCheck = Literal["exact", "stochastic"]
 # v3 goals (docs/v3-interfaces.md, v3.1)
-GoalKind = Literal["obtain", "build", "kill", "guard"]
+GoalKind = Literal["obtain", "build", "kill", "guard", "composite"]  # v3.5: composite is a parent goal, never run
 GoalSource = Literal["user", "curriculum", "system"]  # system: hunger, later threats
 GoalStatus = Literal["submitted", "queued", "running", "done", "failed", "cancelled", "unsupported", "awaiting_approval"]
 
@@ -27,6 +27,7 @@ class Action:
     ingredient: str | None = None  # smelt only: the input item; may be a group
     direction: str | None = None  # explore only: N, NE, E, SE, S, SW, W, NW; None is the v1 spiral
     # v3.4: place, clear and goto only, the cell in world coordinates. place's target is a raw block id.
+    # v3.5: withdraw too: the chest's cell; target is a raw item id and times the count.
     pos: tuple[int, int, int] | None = None
     # v3.0h: place and clear only. False sends "scaffold": [], so the walk places nothing; None sends the usual blocks.
     scaffold: bool | None = None
@@ -54,6 +55,8 @@ class Action:
             return f"goto {_cell(self.pos)}"
         if self.kind == "kill":
             return f"kill {self.target}" + (f" with {self.tool}" if self.tool else "")
+        if self.kind == "withdraw":
+            return f"withdraw {self.target}" + (f" x{self.times}" if self.times > 1 else "") + f" from {_cell(self.pos)}"
         return f"explore {self.direction}" if self.direction else "explore"
 
     def to_dict(self) -> dict[str, Any]:
@@ -129,6 +132,37 @@ class Site:
     @property
     def cost(self) -> int:
         return self.cut + self.fill
+
+
+HOME_RANGE = 48.0  # v3.5: blocks (3D) from the bot within which a home station or the home chest is planned as usable
+
+
+@dataclass(frozen=True)
+class HomeStock:
+    """v3.5: what the bot can use at home without carrying it. See docs/v3-interfaces.md, v3.5d."""
+
+    stations: dict[str, tuple[int, int, int]] = field(default_factory=dict)  # "crafting_table"/"furnace" -> pos
+    chest: tuple[int, int, int] | None = None
+    stored: dict[str, int] = field(default_factory=dict)  # the chest's contents, raw ids
+    lost: frozenset[str] = frozenset()  # kinds ("chest" too) found gone this goal: the life drops them from places
+    skipped: frozenset[str] = frozenset()  # kinds the bot couldn't reach this goal: not planned again in it
+
+    def near(
+        self, position: tuple[float, float, float], reach: float = HOME_RANGE
+    ) -> tuple[frozenset[str], dict[str, int]]:
+        """The station kinds within reach of position, and the stored items if the chest is within reach; never a
+        lost or skipped kind."""
+        raise NotImplementedError("v3.5 stub: lane home-plan")
+
+
+@dataclass(frozen=True)
+class ChestResult:
+    """v3.5: a /deposit (or a chest read) as the life sees it. See docs/v3-interfaces.md, v3.5d."""
+
+    moved: dict[str, int]  # deposited or withdrawn, raw ids
+    contents: dict[str, int]  # the chest after the call, raw ids
+    error: str | None = None  # not_found, unreachable, interrupted, timeout; a lost bot raises BackendError instead
+    detail: dict[str, Any] = field(default_factory=dict)  # chest_full, inventory_full, travel
 
 
 @dataclass
