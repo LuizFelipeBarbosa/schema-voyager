@@ -131,6 +131,7 @@ function worldPreservingMovements (current) {
   movements.canDig = false
   movements.allow1by1towers = false
   movements.scafoldingBlocks = []
+  movements.allowSprinting = false // sprinting costs hunger; walking does not
   return movements
 }
 
