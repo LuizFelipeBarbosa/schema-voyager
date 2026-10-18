@@ -695,9 +695,12 @@ Written by S05 for S07 (M2: plan steps S2.1–S2.8). The bot side (guard, entiti
 ### v3.2b Error codes and `409 busy`
 
 - `interrupted`: the guard cut into an action to fight or flee (`detail: {"threat", "outcome"}`). It is in
-  `RETRIED_ERRORS` (`episode.py`, stub on `main`), so the step is retried, at most `MAX_RETRIES` times. S07's
-  `python-survival` lane makes `Episode.act` retry an `interrupted` step in place, without the explore that the other
-  retried errors get: the fight already moved the bot, and an explore would walk it away from its furnace or table.
+  `RETRIED_ERRORS` (`episode.py`, stub on `main`), so the step is retried. S07's `python-survival` lane makes
+  `Episode.act` retry an `interrupted` step in place, without the explore that the other retried errors get: the
+  fight already moved the bot, and an explore would walk it away from its furnace or table. Interrupts have a budget
+  of their own, `MAX_INTERRUPTS = 4` per step, separate from `MAX_RETRIES` (S07: at night several fights can land
+  on one step, and the shared budget of 2 would fail it). The usual `budget_left` and `out_of_time` checks still
+  apply.
   It is never evidence:
   - a step whose last attempt is `interrupted` is a `failed` check, which records no transition;
   - each retry is judged only on its own response window;
@@ -716,8 +719,11 @@ Written by S05 for S07 (M2: plan steps S2.1–S2.8). The bot side (guard, entiti
 
 The guard must never turn a fight into evidence. These rules hold (S07 tests the bot-side ones with a fake bot):
 
-1. **An aborted handler never runs alongside another action.** On a guard abort the wrapper calls `interruptBot()`
-   and aborts `session.signal` (an `AbortSignal` that every handler gets). It waits for the handler to settle, at
+1. **An aborted handler never runs alongside another action.** On a guard abort the wrapper stops the bot's pathing
+   and digging (not its window: `contracts/bot_api.md`, v3.2, "Cutting into an action") and aborts `session.signal`
+   (an `AbortSignal` that every handler gets). Every handler that walks or waits checks it at its choke points and
+   throws (S07 `handler-abort`; in v2 none of them stopped: a cancelled walk looked like `unreachable`, so `/mine`
+   walked to the next candidate and remembered a good block as unreachable). It waits for the handler to settle, at
    most 10 s, before the guard fights; past 10 s it logs `orphaned_handler {"path"}` and fights anyway. `busy` is
    released only once the handler has settled, however long that takes: until then every request gets `409
    {"error": "busy", "detail": "orphan"}`, even after the response was sent. A timeout and a death release `busy`
@@ -728,18 +734,21 @@ The guard must never turn a fight into evidence. These rules hold (S07 tests the
    existing reconnect). The wrapper records `orphaned_handler {"path", "reconnected": true}` and releases `busy`.
    The old handler holds the old bot object, so it can't touch the new one, and Python's 60 s of 409 retries end
    before it gives up.
-2. **No item is left in a container for a later step to count.** `interruptBot()` closes the furnace window, so an
-   aborted smelt leaves its items in the furnace. Before its shortfall check, `/smelt` drains a placed furnace it
+2. **No item is left in a container for a later step to count.** On a guard abort `/smelt` takes its items back out
+   of the furnace and closes the window itself. A timeout or a death closes the window first (`interruptBot()`), so
+   the items stay in the furnace. Before its shortfall check, `/smelt` drains a placed furnace it
    is about to use: anything in it goes back into the inventory, and the step records `interference {"block":
    "furnace", "position"}`, so that step is quarantined and the next one is clean. Draining first also gives the
    in-place retry its ingredients back. A craft already clears the grids before it measures
    `inventory_before_step`.
 3. **While an action holds the lock, the survival plugins click nothing.**
-   - `onActionStart` is async. It disables auto-eat and waits until no eat is in progress (at most the plugin's
-     `eatingTimeout`, 3 s) before the handler runs.
-   - auto-eat runs with `equipOldItem: false`, so it never swaps the held item back later.
-   - armor-manager's own `playerCollect` listener is removed. `equipAll()` runs in `onActionEnd` and on idle ticks
-     instead.
+   - `await survival.hold()` (S07 changed `onActionStart`/`onActionEnd` to a counted hold that returns `release()`)
+     disables auto-eat and waits until no eat and no `equipAll()` is in progress (at most the plugin's
+     `eatingTimeout`, 3 s) before the handler runs. The guard's idle fight holds them too.
+   - auto-eat runs with `equipOldItem: false`, so it never swaps the held item back later, and `offhand: false`, so
+     it never pushes the shield out.
+   - armor-manager's own `playerCollect` listener is removed. `equipAll()` runs on the last `release()` and on idle
+     ticks instead, and so does `bot.autoEat.eat()`, since an eat trigger that came during a hold is dropped.
    - Eating mid-action would change a craft's delta or swap the tool mid-dig. Eating at low health happens only
      inside the guard's flee, after the action was aborted.
 4. **The guard cuts only into `/mine`, `/craft`, `/smelt` and `/explore`** (M3 and M4 add `/attack`, `/place` and
@@ -851,6 +860,28 @@ orchestrator to add these:
 - S07 `death-handling`: a system goal is cancelled on a death, and a user goal keeps its `target_count` (v3.2d).
   Edible foods join the junk toss's `wanted` (v3.1d).
 - S07 `guard-wire`: the 45 s reconnect backstop for a hung handler (v3.2c, rule 1).
+
+S07 re-split two lanes (2026-10-18), after finding that no handler stops after `interruptBot()`:
+
+- `handler-abort` (new): `session.signal` through `lib/world.js`, `mine.js`, `explore.js`, `craft.js` and
+  `station.js`, and the memory of stations left standing.
+- `smelt-abort` (new, after `handler-abort`): `lib/smelt.js`, which therefore leaves `guard-wire`: the abort in the
+  furnace loop (take the items back, close, throw), the furnace drain and `interference`.
+
+### v3.2i The simulator (`environment.py`, S07 `sim-threats`)
+
+- `NaturalWorld(seed, *, world_rules=(), species=None, difficulty="peaceful")`. On `peaceful` nothing below
+  happens, and every existing seeded result stays the same: threats and food roll on their own seeded streams,
+  never on the damage stream.
+- On `easy`, `normal` or `hard`, each `mine`, `craft`, `smelt` and `explore` may be cut into by a threat. It then
+  answers `interrupted` with `detail {"threat", "outcome"}` and the inventory unchanged, and its `events` carry
+  `threat`, `fight_start`, `damage` (phase `step`) and `fight_end`, shaped as in `contracts/bot_api.md` v3.2.
+- Food falls during actions (never on `peaceful`). The simulator eats held edible food at 14 or less, between
+  actions, and emits `ate`. `status().food` reports it.
+- `observe()` fills `Observation.entities`.
+- `die()` is public: the bot dies now. It emits `death` then `respawn`, moves the bot to the spawn, refills health
+  and food, and keeps the inventory (`keepInventory`). A fight that takes health to 0 calls it, and that action
+  answers `quarantined`. Tests use it to put a death where they want one.
 
 ## v3.3 Kill rules and `/attack`
 

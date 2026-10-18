@@ -41,7 +41,7 @@ pushed to `origin` until the user says so.
 | S04 full inventory | done | a | `/toss`, `free_slots`, `inventory.py`, 36-slot sim, junk tossed before a goal; live `runs/s04-junk`; pytest 445, bot 120; not pushed |
 | S05 contracts for M1 and M2 | done | none | Contracts v3.1/v3.2 and stubs merged 1b80640; plugin pins in v3.2g; prompt changes for S06/S07 in v3.2h |
 | S06 goals you give it | running | a | Contract 3649653; lanes goal-queue, goal-parse, chat-bot, panel-ui, then panel-routes, life-queue, then goal-narration |
-| S07 survival | not started | b | |
+| S07 survival | running | b | Lanes: entities-bot, guard-core, survival-plugins, handler-abort, then guard-wire, smelt-abort, python-survival, sim-threats, then difficulty-env, whitelist, death-handling (after S06 life-queue), live |
 | S08 combat and hunting | not started | b | |
 | S09 building foundations | not started | a | |
 | S10 build goals | not started | a | |

@@ -552,14 +552,18 @@ action. A walk that falls short is not an error: `ok: true`,
   guard tick.
 - **`/status` gains `guard`**: `{"mode": "defend", "fighting": "zombie" | null}`.
 - **The tick** runs every 4 game ticks. A threat is either of these:
-  - a hostile entity within 8 blocks that the bot can see. Hostile here means kind `hostile`, plus `slime`,
-    `magma_cube` and `phantom`, but not `enderman`, `zombified_piglin` or `piglin`, which count only once they hit
-    the bot;
-  - any entity that damaged the bot in the last 3 s.
+  - a hostile entity the bot can see, within 5 blocks, or within 8 blocks and closing in (its distance fell by 1
+    block or more over the last second). Hostile here means kind `hostile`, plus `slime`, `magma_cube` and
+    `phantom`, but not `enderman`, `zombified_piglin` or `piglin`, which count only once they hit the bot. (S07: a
+    plain 8-block radius would cut into most steps at night, when some hostile is in view nearly all the time);
+  - any entity that damaged the bot in the last 3 s (mineflayer's `entityHurt(entity, source)`, where `source` is
+    the cause: the skeleton, not its arrow).
+  - Several at once: a creeper closer than 5 blocks first, then the most recent attacker, then the nearest.
 - **What the guard does** (`decide(mode, threat, health)` → `fight | flee | back_off | ignore`):
   - `off`: always `ignore`;
   - a creeper closer than 5 blocks: `back_off`, to 8 blocks or more, in `passive` and `defend`;
-  - health below 6: `flee`, and eat if it holds food, in `passive` and `defend`;
+  - health below 6: `flee`, and eat if it holds food and its food is below 20 (with `bot.consume()`: auto-eat's
+    `eat()` does nothing while the guard holds the plugins), in `passive` and `defend`;
   - otherwise `passive` flees and `defend` fights.
 - **A fight**: equip the best sword (else axe) the bot holds and a shield in the off-hand if it has one, then
   `bot.pvp.attack(target)`. It ends in one of these outcomes:
@@ -573,8 +577,16 @@ action. A walk that falls short is not an error: `ok: true`,
   `/reset_episode`, `/toss`) runs to its end, and the guard acts after it. When the guard decides anything but
   `ignore` during one of those four, it rejects `rejectOnThreat()` (`lib/events.js`, next to `rejectOnDeath()`),
   which `action()` races like the death promise.
-  - The wrapper calls `interruptBot()` and aborts `session.signal`, an `AbortSignal` every handler gets. It then
-    waits for the handler to settle, at most 10 s. If it doesn't settle, the wrapper records
+  - The wrapper aborts `session.signal`, an `AbortSignal` every handler gets, and stops the bot's pathing and
+    digging. It does **not** close an open window on a guard abort: mineflayer sends a click on a closed window to
+    the player inventory's slot of the same number (a furnace's output slot 2 is a crafting-grid slot). The
+    handler that owns the window sees the abort at its next check, takes its items back out, closes the window and
+    throws. A timeout or a death calls `interruptBot()` as in v2 (which also closes the window) and aborts the
+    signal too.
+  - Every handler that walks or waits checks the signal at its choke points and throws once it is aborted (S07
+    lane `handler-abort`). The pathing helper throws at entry and on abort, so an aborted walk never counts as
+    `unreachable`, never marks a target unreachable, and an orphaned handler can't replace the fight's path goal.
+  - It then waits for the handler to settle, at most 10 s. If it doesn't settle, the wrapper records
     `orphaned_handler {"path"}` and goes on.
   - Then it awaits the guard's response: the fight or flight, at most 30 s.
   - It answers `{"ok": false, "error": "interrupted", "detail": {"threat": "zombie", "outcome": "killed"},
@@ -583,8 +595,13 @@ action. A walk that falls short is not an error: `ok: true`,
     `409 {"ok": false, "error": "busy", "detail": "orphan"}`, even after the response was sent. A timeout and a
     death release `busy` the same way.
   - A death at any point in this answers `quarantined`, as in v2.
-  - `/smelt` checks the signal in its furnace wait loop and before it retrieves the furnace. On an abort it stops
-    there and leaves the furnace standing.
+  - `/smelt` checks the signal in its furnace wait loop and before it retrieves the furnace. On an abort it takes
+    back what is in the furnace, closes the window and leaves the furnace standing. `/craft` checks it between
+    runs.
+  - **Stations left standing.** A crafting table or furnace that a handler placed and didn't dig back up because of
+    an abort is remembered in `session.episode` (name and position). The next `/craft` or `/smelt` that needs that
+    station uses it when it is within 24 blocks and still there, walking back to it, before it places a new one. A
+    fight chase easily takes the bot past the 4 blocks `findPlacedStation` searches.
   - Backstop: a handler still unsettled 45 s after the abort makes the bot reconnect (`bot.quit()`, then the
     existing reconnect). The wrapper records `orphaned_handler {"path", "reconnected": true}` and releases `busy`.
 - **Open windows.** While a container window is open (a craft at a table, a smelt), `fight` waits for the window to
@@ -595,19 +612,31 @@ action. A walk that falls short is not an error: `ok: true`,
   back.
 - **While idle** (no action holds the lock), the guard fights directly and holds `busy` while it does. A request
   then gets `409 {"ok": false, "error": "busy", "detail": "guard"}`. The guard holds it at most 30 s at a time, and
-  releases it for at least 1 s between fights so that a waiting request gets in.
+  releases it for at least 1 s between fights so that a waiting request gets in. An idle fight also holds the
+  survival plugins (`hold()`, below), so auto-eat and armor-manager click nothing mid-fight.
 
 ### Armor and food (lane `survival-plugins`)
 
-- `attachSurvival(bot)` loads `mineflayer-armor-manager` and `mineflayer-auto-eat`; the versions are in
-  `docs/v3-interfaces.md`, v3.2g. It returns `{onActionStart, onActionEnd}`, which `action()` calls when it takes
-  and releases the lock. `onActionStart` is async, and the handler starts only after it resolves.
-- Nothing from these plugins clicks in the inventory while an action holds the lock.
-- **auto-eat** is enabled only while the lock is free. `onActionStart` disables it and waits for an eat in progress
-  to end (at most 3 s). It eats at food 14 or less, with the plugin's default ban list and `equipOldItem: false`.
-- **Armor**: armor-manager's own pickup listener is removed. `equipAll()` runs in `onActionEnd` and on idle ticks,
-  so armor the bot picked up or crafted goes on once the lock is free. The guard holds a shield in the off-hand.
-  Armor and off-hand slots are counted in every `inventory`, so equipping changes no count.
+- `attachSurvival(bot, eventLog)` loads `mineflayer-armor-manager` and `mineflayer-auto-eat`; the versions are in
+  `docs/v3-interfaces.md`, v3.2g. It returns `{hold, onIdleTick}` (S07 changed this from `{onActionStart,
+  onActionEnd}`):
+  - `await hold()` returns a `release()` function. Holds are counted: the plugins click nothing while any hold is
+    open. `action()` holds them for every action, before the handler starts, and the guard's idle fight holds them
+    too, so an orphaned handler that settles mid-fight can't switch eating back on.
+  - `hold()` disables auto-eat, then waits for an eat in progress (`bot.autoEat.isEating`, at most the plugin's
+    3 s `eatingTimeout`) and an `equipAll()` in progress to end.
+  - The last `release()` enables auto-eat, runs `equipAll()`, then calls `bot.autoEat.eat()`: the plugin only
+    starts an eat on a `health` or `playerCollect` event, and one that came while a hold was open is dropped.
+  - `onIdleTick()` (called by the guard tick while nothing holds the lock) runs `equipAll()` and `eat()`, at most
+    once every 2 s.
+- **auto-eat** options: `startAt: 14`, raised to 17 while health is below 20 (health only regenerates at food 18 or
+  more, so at 14 the bot would sit at food 15-17 and never heal), the plugin's default ban list,
+  `equipOldItem: false`, and `offhand: false` (the default `true` would push the shield out of the off-hand).
+  It records `ate {"item", "food"}` when an eat finishes, and logs `autoeat_error` without throwing.
+- **Armor**: armor-manager's own pickup listener is removed (it is registered when mineflayer injects the plugin,
+  which can be after `loadPlugin` returns). `equipAll()` runs on the last `release()` and on idle ticks, so armor
+  the bot picked up or crafted goes on once the lock is free. The guard holds a shield in the off-hand. Armor and
+  off-hand slots are counted in every `inventory`, so equipping changes no count.
 
 ### Event types (v3.2)
 
