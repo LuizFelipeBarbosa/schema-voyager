@@ -12,7 +12,7 @@ from schema_voyager import verifier
 from schema_voyager.environment import NaturalWorld
 from schema_voyager.mineflayer_backend import MineflayerBackend
 from schema_voyager.models import Action, Rule
-from schema_voyager.planner import _fuel_units, _Planner
+from schema_voyager.planner import PlanningError, _fuel_units, _Planner
 
 SMELT_RULE = Rule(
     id="smelt_iron_ingot", action={"type": "smelt", "item": "iron_ingot"},
@@ -33,6 +33,31 @@ def test_cheapest_fuel_prefers_a_held_fuel_in_sufficient_quantity():
     planner = _Planner([SMELT_RULE], lambda item: None, None)
     assert planner._cheapest_fuel(["coal", "stick"], 1, Counter(stick=2), []) == ("stick", [])
     assert planner._cheapest_fuel(["coal", "stick"], 1, Counter(stick=1, coal=1), []) == ("coal", [])
+
+
+PRIOR_FUELS = ["coal", "charcoal", "#planks", "#log", "stick", "coal_block", "lava_bucket", "blaze_rod"]
+STICK_RULE = Rule(
+    id="craft_stick", action={"type": "craft", "item": "stick"},
+    preconditions={"consumes": {"bamboo": 2}, "station": None}, effects={"gains": {"stick": 2}},
+)
+
+
+def test_cheapest_fuel_skips_fuels_it_does_not_know():
+    planner = _Planner([SMELT_RULE], lambda item: None, None)
+    assert planner._cheapest_fuel(PRIOR_FUELS, 1, Counter(stick=2), []) == ("stick", [])
+
+
+def test_cheapest_fuel_plans_the_shortest_known_fuel_when_nothing_is_held():
+    planner = _Planner([SMELT_RULE, STICK_RULE], lambda item: None, None)
+    inv = Counter(bamboo=2)
+    fuel, steps = planner._cheapest_fuel(PRIOR_FUELS, 1, inv, [])
+    assert fuel == "stick" and [step.action.target for step in steps] == ["stick"]
+
+
+def test_cheapest_fuel_with_only_unknown_fuels_raises():
+    planner = _Planner([SMELT_RULE], lambda item: None, None)
+    with pytest.raises(PlanningError, match="no known fuel"):
+        planner._cheapest_fuel(["coal_block", "lava_bucket", "blaze_rod"], 1, Counter(coal_block=5), [])
 
 
 @pytest.mark.parametrize("fuel,held,times", [("stick", 1, 1), ("birch_planks", 1, 2), ("coal", 1, 9)])
