@@ -1423,8 +1423,9 @@ for several. It returns the completed steps (for the skill), and records, revise
   2. **Materials**: `pursue(episode, store, needs, before_step=before_step, excluded=excluded, narrate=False)`.
      Not all held when it returns: the goal fails "couldn't get 55 planks" (the first need not held).
   3. **On site**: if the bot is more than `NEAR_SITE` blocks (horizontally) from the footprint's centre, or the
-     last scan had a `None` cell, `goto` the centre at the origin's y with `range` `max(w, d) // 2 + 3` (the walk
-     only needs the chunks loaded, and the centre may be inside finished walls), up to 3 times. Then a fresh
+     last scan had a `None` cell, `goto` (`range` 3) a point 2 blocks out from the middle of the footprint's south
+     side at the origin's y, then on `unreachable` the east, north and west sides: up to 3 walks. The walk only
+     needs the chunks loaded, and the centre may be inside finished walls. Then a fresh
      scan of `site_box` and `build_steps` again. A pass whose scan still has `None` cells after the walks fails
      "can't see the site"; `None` cells never use up a pass otherwise.
   4. **Build**: the steps in order. Before each, `check_interrupts()` (the life's poll, parse, cancel, death and
