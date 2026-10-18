@@ -1912,7 +1912,7 @@ and every `/craft` near home would need it.
   recorded. `stored`: the home chest's contents (raw ids), as the bot last reported them; `{}` without a chest.
 - A station or chest the bot finds gone (`station_gone` on `/craft` or `/smelt`, `not_found` on a chest call) is
   removed from `stations` (and `stored` emptied for the chest) when the goal ends (`HomeStock.lost`, v3.5d). Event
-  `home_lost {kind, pos}`.
+  `home_lost {station, pos}` (`station`: `kind` is the event's own key).
 
 ```python
 YARD = 2
@@ -1958,8 +1958,8 @@ def yard_slots(home: Home, scan: dict[Pos, str | None], taken: Iterable[Pos] = (
   furnace, try the `yard_slots` cells in order (earlier placements in `taken`), at most 3 per kind:
   `backend.act(Action("place", target=kind, pos=cell, scaffold=False))` with `keep_out` unset. `occupied` or
   `no_support` tries the next cell; any other error stops that kind. On ok: add it to `stations` (`stored = {}` for
-  a chest), save, `set_stations`, event `home_placed {kind, pos}`, chat "I put a chest by my house at 5 76 36." On a
-  failure: event `home_place_failed {kind, pos, error}`, nothing more until the next goal. Then observe again, for
+  a chest), save, `set_stations`, event `home_placed {station, pos}`, chat "I put a chest by my house at 5 76 36." On a
+  failure: event `home_place_failed {station, pos, error}`, nothing more until the next goal. Then observe again, for
   the junk check.
 - **The chest goal**, decided at the same point: `home` is set, `stations` has no chest, the observed inventory holds
   none, and `chest_goal` is `None`: the life accepts one system goal `GoalSpec(kind="obtain", source="system",
@@ -1992,7 +1992,7 @@ class HomeStock:  # models.py
     skipped: frozenset[str] = frozenset()  # kinds the bot couldn't reach this goal: not planned again in it
     def near(self, position: tuple[float, float, float], reach: float = HOME_RANGE) -> tuple[frozenset[str], dict[str, int]]:
         """The station kinds within reach of position, and the stored items if the chest is within reach; never a
-        lost or skipped kind."""
+        lost or skipped kind. Distances run from position to the centre of the cell."""
 
 @dataclass(frozen=True)
 class ChestResult:  # models.py
@@ -2018,7 +2018,7 @@ class Episode:  # episode.py, new field
   not empty: plan once from held plus stored, take `withdrawals`, map each family back to the chest's raw ids
   (largest stack first), and `episode.act(Action("withdraw", target=raw_id, times=n, pos=chest))` for each; then
   plan again from the real inventory and run that plan as today. A raw id whose withdraw came back short is not asked
-  again in the same `pursue`. After every withdraw, `episode.home` gets `stored` from the outcome's `detail["chest"]`
+  again in the same `pursue`, and is left out of `stored` for its later plans. After every withdraw, `episode.home` gets `stored` from the outcome's `detail["chest"]`
   (`HomeStock` is frozen: the agent replaces it).
 - A home that can't be used must not loop: a withdraw that ends `not_found` with no `detail["chest"]` (no chest
   there) adds `"chest"` to `lost`; one that ends `unreachable`, `interrupted` or `timeout` adds `"chest"` to
@@ -2086,7 +2086,7 @@ class Episode:  # episode.py, new field
   once no child is `submitted`, `queued`, `running` or `awaiting_approval`, the parent becomes `done` if a child is
   `done`, else `cancelled`; it returns the new status, or `None` while children are pending or the parent is already
   terminal. `cancel(parent)` cancels every non-terminal child (a running one by the usual late cancel).
-  `mark` accepts `replanned`.
+  `mark` accepts `replanned`, and the same status with fields only updates them (a running parent's `replanned`).
 - The life (`_parse_pending`): `_resolve_me` runs on every child with the parent's speaker; a list goes to
   `accept_children`; event `goal_children {goal_id, children: [{id,
   label}]}`; chat "Queued u004: get ready for night: u005 8 torches, then u006 4 cooked beef, then u007 an iron
@@ -2097,7 +2097,7 @@ class Episode:  # episode.py, new field
   `Unsupported` or an `LLMError`, or a second failure after a replan: the parent is `failed` with the reason
   `"<child label>: <child reason>"`, and its queued children are cancelled with reason `"parent failed"`. Then
   `settle`. When the parent ends: event `goal_parent_end {goal_id, status}`, chat "Done u004: get ready for night."
-  (or "Couldn't finish u004: ..."). A preempted, died-in or bot-lost child is requeued as today and changes nothing.
+  (or "Couldn't finish u004: ...", or "Cancelled u004: ..." when every child was cancelled). A preempted, died-in or bot-lost child is requeued as today and changes nothing.
   The life also calls `settle` for every non-terminal parent once per pass, since a child cancelled while queued
   (panel or `!cancel`) never reaches `_end_goal`.
 - The panel's goals list shows children under their parent, indented, and the parent's progress ("2 of 4 done").

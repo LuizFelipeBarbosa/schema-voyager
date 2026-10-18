@@ -1078,7 +1078,8 @@ The same walk and check; opens the chest, reads it and closes it. `{"ok": true, 
 - How a step gets its station (a crafting table for a recipe that needs one; the furnace for `/smelt`), in order:
   1. one within 4 blocks (as today); 2. a remembered standing one within 24 (as today); 3. a held one, placed on a
   spot outside every `protect` box (`findSpots` skips a cell inside one) and dug up after the step, as today; no
-  such spot falls through to 4; 4. the `station` given, when the block there is that station: walk to
+  such spot falls through to 4 when a `station` is given (without one, and when the server refuses a placement, it
+  stays `craft_failed` as today); 4. the `station` given, when the block there is that station: walk to
   `GoalNear(station, 2)` with the world-preserving movements (at most 45 s), use it, never dig it up
   (`table_retrieved`/`furnace_retrieved` `null`, `used_home_station: true`); a home furnace is drained first as a
   remembered one is. A walk that doesn't get there answers `unreachable` with `station_unreachable: true` and
