@@ -157,6 +157,8 @@ pushed to `origin` until the user says so.
 - S11 live `runs/v3-duel-crit` (crit vs baseline, 40 duels, 0 invalid): **crit 93.8% [81.8, 98.0], KEPT** (37 wins, 2 losses, 1 draw; by bot 18/20 and 19/20, by side 19/20 and 18/20). Only 41 of crit's 251 hits were crits (about 1 a duel): most of the gain is the shield's. Striking on its own rhythm, the crit bot has its shield up when the baseline strikes (it blocked 5 strikes a duel, the baseline 0.6), where two baselines strike in the same tick with both shields down. Best set: `[crit]`.
 - S11 a319c9c merge `v3/wtap` (release forward and sprint 3 ticks after each strike, keep pressing in otherwise; hooks run in `REGISTRY` order, crit last). pytest 1326, bot 454, panel pass.
 - S11 live `runs/v3-duel-wtap` (crit,wtap vs crit, 40 duels, 0 invalid): **crit,wtap 48.8% [34.1, 63.7], DROPPED** (14 wins, 15 losses, 11 double KOs). In the crit mirror the shields block almost nothing (0.1 a duel): both bots strike on the same rhythm again. Best set: `[crit]`.
+- S11 95edddd merge `v3/strafe` (within 4 blocks hold left or right, switch after 15-35 ticks or when the safety check releases the side; `afterSafety` hook). pytest 1326, bot 459, panel pass.
+- S11 live `runs/v3-duel-strafe` (crit,strafe vs crit, 40 duels, 0 invalid): **crit,strafe 45.0% [30.7, 60.2], DROPPED** (8 wins, 12 losses, 20 double KOs). Best set: `[crit]`.
 
 ## S01 setup and baseline (done 2026-10-17)
 
