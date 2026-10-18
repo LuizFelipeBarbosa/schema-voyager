@@ -141,12 +141,12 @@ pushed to `origin` until the user says so.
 - 07:37-07:57 S08 live `runs/v3-m3-soak` (learn mode, easy, daylight on, scramble, 20 min): 25/28 ok, 0 deaths, mismatches only at fired changes, mines 64 reached / 2 stalled / 0 unreachable; no hunting (no cow in view at a prior call). 7d94718 merge `v3/kill-polish`. pytest 1173 (1 skipped), bot 357, panel pass.
 - 08:38 S11 f7f37f2 contract v3.6 (duels: `/duel`, `/duel/stop`, `duel_end`, the tactics baseline, `fight()` `tactics`/`fleeBelow`, the duel protocol; advisor GO with changes: 40 duels per series, golden apple only, the strike gate counts its own ticks, one `attemptAttack` override, a close-range mover because pathfinder's path-end stop cancels jumps and knockback).
 - 08:38 S11 1b4de81 merge `v3/fight-core` (`lib/tactics.js`: full-cooldown strike gate, pvp's shield routine, the mover within 4 blocks with safe steps; release at 5 blocks or a 2-block height gap); 9419261 merge `v3/duel-bot` (`lib/duel.js`, `POST /duel`, `/duel/stop`); a59ef9f merge `v3/duel-runner` (`scripts/v3-duel.sh`, `scripts/v3-duel.js`; fix: `--vs` keeps the bot on set A). pytest 1174 (1 skipped), bot 403, panel pass.
-
 - 08:05 S12 dab14c0/38182b7 contract v3.5 (places, chests, home stations, composite goals; the bot never enters a house: stations and chest in the yard) after the advisor's review (GO with changes, all applied); stubs `withdraw`/`composite` kinds, `HOME_RANGE`, `HomeStock`, `ChestResult`, `Episode.home`, `LifeBackend.deposit`/`set_stations`. Instance a's world with S14's two houses saved as snapshot `s12-houses`. pytest 1173, bot 374, panel pass.
 - 08:40 S12 43bc8bb merge `v3/places` (`places.py`: `Home`, `Places`, `door_cell`, `home_box`, `yard_slots`, `home_from_protected`; `blueprint.merge_boxes`; `inventory.junk_to_store`). pytest 1208.
 - 08:43 S12 e68a163 merge `v3/composite-queue` (parents with ordered children in `goals.jsonl`, `accept_children`, `settle`, cancel cascade; `parse_goal` lists with `home=`, `replan_children`; architect's fix: a fake `build ...` text is never split). pytest 1247.
 - 08:45 S12 f54526e merge `v3/chest-backend` (deposit, the withdraw action, `set_stations` with `station`/`protect` on `/craft` and `/smelt`; simulator chests and home stations; architect's fix: deposit `free_slots` is the inventory's in both backends). pytest 1280.
 - 08:47 S12 2b1c52c merge `v3/chest-bot` (`/deposit`, `/withdraw`, `/chest`). pytest 1280 (1 skipped), bot 415 (with S11's merges), panel pass.
+
 ## S01 setup and baseline (done 2026-10-17)
 
 - Commits on `main`: 6e28c6a plan; 819b175 progress and interfaces skeleton; cb00942 merge `v3/baseline-ref`;
