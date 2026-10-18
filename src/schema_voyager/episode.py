@@ -28,6 +28,10 @@ NEW_PLACE_BLOCKS = 8
 # interrupted (v3.2): the bot's guard cut in to fight or flee.
 RETRIED_ERRORS = frozenset({"unreachable", "craft_failed", "dig_failed", "timeout", "interrupted"})
 MAX_RETRIES = 2
+# v3.4b: place, clear and goto never explore (the site is where it is); a walk or dig that failed or timed out
+# gets one retry in place. Any other error is the build runner's to handle.
+BUILD_KINDS = frozenset({"place", "clear", "goto"})
+BUILD_RETRIED_ERRORS = frozenset({"unreachable", "timeout"})
 # An interrupted step is retried in place, on a budget of its own: several fights can land on one step at night.
 MAX_INTERRUPTS = 4
 # After fleeing below REST_BELOW_HEALTH the bot rests (polling status every REST_POLL_S, at most REST_MAX_S)
@@ -111,15 +115,17 @@ class Episode:
         without an explore, up to MAX_INTERRUPTS times, apart from those; after
         fleeing badly hurt it first rests (see `_rest_before_retry`). Every
         adapter call is logged and counted as an action; `annotate` adds fields
-        (such as the verifier's verdict) to each attempt's step."""
+        (such as the verifier's verdict) to each attempt's step. A BUILD_KINDS action never explores: an
+        `interrupted` one is retried as above, `unreachable` and `timeout` once in place, any other error returns."""
         outcome = self._act_once(action, annotate)
         explores = retries = interrupts = 0
+        building = action.kind in BUILD_KINDS
         went_up = False
         previous_direction: str | None = None
         max_explores = MAX_NATURAL_EXPLORES_PER_TARGET if self.natural else MAX_EXPLORES_PER_TARGET
         while not outcome.ok and self.budget_left >= 2 and not self.out_of_time:
             # A natural world's hazard (lava or water next to the target) means "look elsewhere" too.
-            searching = outcome.error == "not_found" or (self.natural and outcome.error == "hazard")
+            searching = not building and (outcome.error == "not_found" or (self.natural and outcome.error == "hazard"))
             if searching and explores < max_explores:
                 explores += 1
                 if self.natural and action.kind == "mine":
@@ -138,6 +144,12 @@ class Episode:
                 if _fled_hurt(outcome) and not self._rest_before_retry(outcome):
                     break
                 interrupts += 1
+                outcome = self._act_once(action, annotate)
+                continue
+            elif building:
+                if outcome.error not in BUILD_RETRIED_ERRORS or retries >= 1:
+                    break
+                retries += 1
                 outcome = self._act_once(action, annotate)
                 continue
             elif outcome.error in RETRIED_ERRORS and retries < MAX_RETRIES:
