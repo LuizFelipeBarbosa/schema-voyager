@@ -40,6 +40,8 @@ const FILL_FLOOR = `${BOX_MIN.x} ${BOX_MIN.y} ${BOX_MIN.z} ${BOX_MAX.x} ${BOX_MI
 const LOAD_WAIT_MS = 3000
 const SETTLE_MS = 1500
 const RESET_CHECK_TIMEOUT_MS = 10000
+const ALIVE_WAIT_MS = 15000
+const DEATH_LOG_WAIT_MS = 1500
 const RESET_ATTEMPTS = 3
 const SPOT_TOLERANCE_BLOCKS = 1.5
 const MAX_INVALID_IN_A_ROW = 5
@@ -59,7 +61,7 @@ function planDuel (i, vs = false) {
   return { aBot: vs ? 0 : Math.floor(i / 2) % 2, westBot: i % 2 }
 }
 
-const END_REASONS = ['died', 'killed', 'timeout']
+const END_REASONS = ['died', 'both_died', 'killed', 'timeout']
 
 // The bot's duel_end: the answer itself when ok, else the event in its events. Returns {end} or {problem}.
 function findDuelEnd (answer, duelId) {
@@ -75,8 +77,9 @@ function findDuelEnd (answer, duelId) {
 
 // Judges one duel from the answers {status, body} (or {error}) of the bot playing set A and the bot
 // playing set B; answerB is null when A fought a person (--vs), then only A's answer counts.
-// Returns {valid, result: 'A'|'B'|'draw'|null, reason, endA, endB}.
-function judge (answerA, answerB, duelId) {
+// diedA / diedB: the bot's event log holds a `death` (a double KO can leave a bot's own duel_end at
+// `killed`). Returns {valid, result: 'A'|'B'|'draw'|null, reason, endA, endB}.
+function judge (answerA, answerB, duelId, { diedA = false, diedB = false } = {}) {
   const a = findDuelEnd(answerA, duelId)
   const b = answerB === null ? { end: null } : findDuelEnd(answerB, duelId)
   const endA = a.end || null
@@ -89,14 +92,21 @@ function judge (answerA, answerB, duelId) {
   if (!END_REASONS.includes(endA.reason)) return invalid(`A ended with ${endA.reason}`)
   if (endB && !END_REASONS.includes(endB.reason)) return invalid(`B ended with ${endB.reason}`)
 
+  const hasDied = (end, flag) => flag || end.reason === 'died' || end.reason === 'both_died'
+  const aDied = hasDied(endA, diedA)
+
   if (endB === null) { // against a person
-    if (endA.reason === 'died') return valid('B', 'the player won')
-    if (endA.reason === 'killed') return valid('A', 'the bot won')
-    return valid('draw', 'timeout')
+    if (endA.reason === 'both_died') return valid('draw', 'double KO')
+    return aDied ? valid('B', 'the player won') : endA.reason === 'killed' ? valid('A', 'the bot won') : valid('draw', 'timeout')
   }
-  if (endA.reason === 'died' && endB.reason === 'died') return invalid('both died')
-  if (endA.reason === 'died' || endB.reason === 'died') {
-    const [winner, other] = endA.reason === 'died' ? ['B', endB] : ['A', endA]
+  const bDied = hasDied(endB, diedB)
+  if (aDied && bDied) return valid('draw', 'double KO')
+  // both_died says the opponent died too: an opponent that survived contradicts it.
+  if (endA.reason === 'both_died' || endB.reason === 'both_died') {
+    return invalid(`${endA.reason === 'both_died' ? 'A' : 'B'} said both_died, but the other bot did not die`)
+  }
+  if (aDied || bDied) {
+    const [winner, other] = aDied ? ['B', endB] : ['A', endA]
     const note = other.reason === 'killed' ? '' : ` (${winner} did not report killed, it said ${other.reason})`
     return valid(winner, `${winner === 'A' ? 'B' : 'A'} died${note}`)
   }
@@ -327,8 +337,23 @@ async function runSeries (options, ports, botNames, home) {
     return false
   }
 
+  // Waits until every bot is alive: a bot still respawning after a death can't be reset.
+  async function allAlive () {
+    const deadline = Date.now() + ALIVE_WAIT_MS
+    while (Date.now() < deadline) {
+      const statuses = await Promise.all(bots.map(botStatus))
+      if (statuses.every((status) => status && status.alive)) return true
+      await sleep(500)
+    }
+    return false
+  }
+
   async function resetDuel (plan) {
     for (let attempt = 1; attempt <= RESET_ATTEMPTS; attempt++) {
+      if (!await allAlive()) {
+        console.log(`reset failed, a bot is not alive (attempt ${attempt} of ${RESET_ATTEMPTS})`)
+        continue
+      }
       for (const command of sweepCommands()) await rcon.exec(command)
       for (const [index, name] of players.entries()) {
         const side = plan.westBot === index ? 'west' : 'east'
@@ -342,7 +367,8 @@ async function runSeries (options, ports, botNames, home) {
     throw new Error(`the reset failed ${RESET_ATTEMPTS} times in a row; aborting the series`)
   }
 
-  // Sends /duel to the bot playing each set at the same moment; returns the answers by set (A, B).
+  // Sends /duel to the bot playing each set at the same moment; returns the answers and, from the
+  // bots' event logs, whether each set's bot died, both by set (A, B).
   async function fightDuel (plan, duelId) {
     const sets = [setA, setB]
     const botFor = [plan.aBot, 1 - plan.aBot]
@@ -351,9 +377,18 @@ async function runSeries (options, ports, botNames, home) {
       const opponent = vs || botNames[1 - botFor[set]]
       return postBot(bot.port, '/duel', { player: opponent, tactics: sets[set], timeout_s: options.timeout, duel_id: duelId }, options.timeout * 1000 + HTTP_MARGIN_MS)
     }
+    const lastSeqs = await Promise.all(bots.map(async (bot) => (await botStatus(bot))?.last_seq))
     const answers = await Promise.all(vs ? [fight(0)] : [fight(0), fight(1)])
     await Promise.all(bots.map((bot) => postBot(bot.port, '/duel/stop', {}, 5000)))
-    return answers
+    await sleep(DEATH_LOG_WAIT_MS) // a bot's own death can come after its duel ended
+    const died = await Promise.all(answers.map(async (_, set) => {
+      const bot = bots[botFor[set]]
+      const since = lastSeqs[botFor[set]]
+      if (since === undefined) return false
+      const events = (await postBot(bot.port, '/status', { since }, 10000)).body?.events ?? []
+      return events.some((event) => event.type === 'death')
+    }))
+    return { answers, died }
   }
 
   const records = []
@@ -390,9 +425,9 @@ async function runSeries (options, ports, botNames, home) {
       const plan = planDuel(i, Boolean(vs))
       const duelId = `${outName.slice(-40)}-${i}${retries ? `-r${retries}` : ''}`.slice(0, MAX_DUEL_ID_LENGTH)
       await resetDuel(plan)
-      const [answerA, answerB = null] = await fightDuel(plan, duelId)
-      const outcome = judge(answerA, answerB, duelId)
-      const record = { i, duel_id: duelId, plan, ...outcome }
+      const { answers: [answerA, answerB = null], died: [diedA, diedB = false] } = await fightDuel(plan, duelId)
+      const outcome = judge(answerA, answerB, duelId, { diedA, diedB })
+      const record = { i, duel_id: duelId, plan, diedA, diedB, ...outcome }
       records.push(record)
       fs.appendFileSync(jsonl, `${JSON.stringify(record)}\n`)
       console.log(`${duelId}: ${outcome.valid ? `${outcome.result} (${outcome.reason})` : `INVALID, ${outcome.reason}`}`)

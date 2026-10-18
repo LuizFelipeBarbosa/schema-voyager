@@ -7,6 +7,7 @@ const { round } = require('./world')
 
 const DUEL_TIMEOUT_S = 60
 const NO_OPPONENT_MS = 10000
+const KILL_GRACE_MS = 500 // after the opponent's death, a death of the bot's own still counts as a double KO
 const OPPONENT_POLL_MS = 250
 const REENGAGE_PAUSE_MS = 100
 const SHIELD_BLOCK_STATUS = 29
@@ -39,7 +40,8 @@ function metadataHealth (entity) {
 // its fields. `signal` is the action lock's, `stopSignal` is /duel/stop's; either one ends it `stopped`.
 async function runDuel (bot, body, {
   eventLog, movements = null, signal = null, stopSignal = null,
-  fight = guard.fight, createTactics = tactics.createTactics, noOpponentMs = NO_OPPONENT_MS
+  fight = guard.fight, createTactics = tactics.createTactics, noOpponentMs = NO_OPPONENT_MS,
+  killGraceMs = KILL_GRACE_MS
 } = {}) {
   const opponent = body.player
   const duelTactics = createTactics(bot, body.tactics ?? [])
@@ -54,6 +56,8 @@ async function runDuel (bot, body, {
   let opponentHealth = metadataHealth(bot.players[opponent]?.entity)
   if (opponentHealth !== null) count.damageDealt = 0
   let result = null // set by the first ending, which also records duel_end
+  let opponentDied = false // the opponent's death is pending: `killed` is recorded after killGraceMs
+  let graceTimer = null
 
   // The first call fixes the result and records `duel_end` at once: a death ends the action on the
   // same emit, and the answer's events must already hold it.
@@ -79,9 +83,14 @@ async function runDuel (bot, body, {
     eventLog.record('duel_end', result)
   }
 
-  const onDeath = () => end('died')
-  // A respawn reuses the entity id, so a killed opponent is never fought again.
-  const onEntityDead = (entity) => { if (entity.id === opponentId()) end('killed') }
+  const onDeath = () => end(opponentDied ? 'both_died' : 'died')
+  // A respawn reuses the entity id, so a killed opponent is never fought again. Both bots often die
+  // in the same tick, so `killed` waits killGraceMs for the bot's own death.
+  const onEntityDead = (entity) => {
+    if (result || opponentDied || entity.id !== opponentId()) return
+    opponentDied = true
+    graceTimer = setTimeout(() => end('killed'), killGraceMs)
+  }
   const onAttackedTarget = () => { count.swings++ }
   const onEntityHurt = (entity) => { if (entity?.id === opponentId()) count.hits++ }
   const onCritical = (entity) => { if (entity.id === opponentId()) count.crits++ }
@@ -113,7 +122,8 @@ async function runDuel (bot, body, {
   try {
     let missingSince = null
     while (!result) {
-      if (isStopped()) end('stopped')
+      if (opponentDied) await sleep(REENGAGE_PAUSE_MS)
+      else if (isStopped()) end('stopped')
       else if (Date.now() >= deadline) end('timeout')
       else if (!bot.players[opponent]?.entity) {
         missingSince ??= Date.now()
@@ -125,7 +135,7 @@ async function runDuel (bot, body, {
         // `disengage` (later lane) changes fleeBelow here and adds the eating.
         await fight(bot, bot.players[opponent].entity, {
           timeoutMs: deadline - Date.now(), deadline, movements, eventLog, flee: false, sprint: true,
-          tactics: duelTactics, fleeBelow: 0, shouldStop: () => Boolean(result) || isStopped()
+          tactics: duelTactics, fleeBelow: 0, shouldStop: () => Boolean(result) || opponentDied || isStopped()
         })
         if (!result) await sleep(REENGAGE_PAUSE_MS)
       }
@@ -133,6 +143,7 @@ async function runDuel (bot, body, {
   } catch (err) {
     end('stopped') // fight() never rejects; this keeps the promise from rejecting if it ever does
   } finally {
+    clearTimeout(graceTimer)
     for (const [name, listener] of botEvents) bot.removeListener(name, listener)
     bot._client.removeListener('entity_status', onEntityStatus)
   }
