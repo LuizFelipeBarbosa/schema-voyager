@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import http.client
 import json
 import os
 import time
@@ -23,6 +24,7 @@ from .models import Action, Observation, Outcome, Site, Status, Task
 # 10 s for the handler to settle, then up to 30 s of fighting), so a slow action comes
 # back as an error the episode can retry instead of a dropped connection.
 REQUEST_TIMEOUT_S = 180
+HEALTH_TIMEOUT_S = 5
 SMELT_TIMEOUT_S = 150  # plus SMELT_TIMEOUT_PER_ITEM_S per item smelted
 SMELT_TIMEOUT_PER_ITEM_S = 12
 
@@ -405,7 +407,7 @@ class MineflayerBackend:
         while True:
             try:
                 with urllib.request.urlopen(request, timeout=timeout) as response:
-                    return json.loads(response.read().decode("utf-8"))
+                    body = json.loads(response.read().decode("utf-8"))
             except urllib.error.HTTPError as error:
                 text = error.read().decode()
                 if retry_busy and error.code == 409 and _is_busy(text) and _monotonic() - first_try < BUSY_GIVE_UP_S:
@@ -413,10 +415,24 @@ class MineflayerBackend:
                     wait = BUSY_WAIT_S
                     continue
                 raise BackendError(f"bot server returned {error.code} for {path}: {text[:200]}") from error
-            except (urllib.error.URLError, TimeoutError) as error:
+            except urllib.error.URLError as error:
                 raise BackendError(
-                    f"bot server not reachable at {self.api_url} ({error}). Start it with: npm --prefix mc/bot start"
+                    f"bot server not reachable at {self.api_url} for {path} ({error}). Start it with: npm --prefix mc/bot start"
                 ) from error
+            except (OSError, http.client.HTTPException, ValueError) as error:
+                # The bot died or answered garbage mid-request (TimeoutError, resets, a dropped socket, bad JSON).
+                raise BackendError(f"lost the bot during {path}: {type(error).__name__}: {error}") from error
+            if isinstance(body, dict) and body.get("ok") is False and body.get("error") == "not_connected":
+                raise BackendError(f"the bot is not connected to the server ({path})")
+            return body
+
+    def connected(self) -> bool:
+        """Whether the bot is up and in the game; False for any failure to ask."""
+        try:
+            with urllib.request.urlopen(self.api_url + "/health", timeout=HEALTH_TIMEOUT_S) as response:
+                return json.loads(response.read().decode("utf-8")).get("connected") is True
+        except (OSError, http.client.HTTPException, ValueError, AttributeError):
+            return False
 
 
 def _is_busy(error_text: str) -> bool:
