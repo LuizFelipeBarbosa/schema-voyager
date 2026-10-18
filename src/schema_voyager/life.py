@@ -503,8 +503,8 @@ class _Life:
 
     def _needed_items(self, rules: list[Rule], produced: set[str]) -> set[str]:
         """Items nothing usable produces that a usable rule consumes, uses as a station or needs as its
-        first tool (when it has no producible tool), or that are on the frontier."""
-        needed = set(self.curriculum.frontier)
+        first tool (when it has no producible tool), or that are on the frontier (not in play mode)."""
+        needed = set() if self.config.mode == "play" else set(self.curriculum.frontier)
         for rule in rules:
             needed.update(rule.preconditions.get("consumes", {}))
             if rule.preconditions.get("station"):
@@ -729,7 +729,11 @@ class _Life:
     def _doing_line(self) -> str:
         running = self._running
         if running is None:
-            return "Idle."
+            next_goal = self.queue.next()
+            if next_goal is None:
+                return "Idle."
+            queued = sum(1 for g in self.queue.goals() if g.status == "queued")
+            return f"Next: {next_goal.id}: {goal_label(next_goal)}. Queued: {queued}."
         if running.source == "curriculum":
             return f"Learning: {goal_label(running)}."
         waiting = sum(1 for g in self.queue.goals() if g.source != "curriculum" and g.status in ("queued", "submitted"))
@@ -1017,9 +1021,9 @@ class _Life:
         entry = self._protected_entry(spec.id)
         chat = ""
         if queued_goal:
+            cancelled_chat = "" if spec.id in self._cancelled_in_chat else f"Cancelled: {label}"
             if interrupt == "cancelled" or (interrupt == "bot" and self.queue.get(spec.id).status == "cancelled"):
-                # the queue already says cancelled
-                chat = "" if spec.id in self._cancelled_in_chat else f"Cancelled: {label}"
+                chat = cancelled_chat  # the queue already says cancelled
             elif interrupt == "preempted":
                 chat = self._pausing_line(label)
                 self.queue.mark(spec.id, "queued")
@@ -1036,12 +1040,16 @@ class _Life:
             elif interrupt is not None:  # wall_clock: --resume runs it again
                 self.queue.mark(spec.id, "queued")
             elif result.success:
-                self.queue.mark(spec.id, "done")
+                marked = self.queue.mark(spec.id, "done")
                 chat = f"Done: {label}"
+                if not marked and self.queue.get(spec.id).status == "cancelled":  # cancelled after its last step
+                    chat = cancelled_chat
             else:
                 reason = build.reason if build is not None else self._failure_reason(episode)
-                self.queue.mark(spec.id, "failed", reason=reason)
+                marked = self.queue.mark(spec.id, "failed", reason=reason)
                 chat = f"{couldnt} {label}: {reason}"
+                if not marked and self.queue.get(spec.id).status == "cancelled":
+                    chat = cancelled_chat
                 if spec.source == "system" and spec.text.startswith(("hunger:", "arm:")):
                     self._system_failed_at[spec.item] = time.monotonic()
         if build is not None:
