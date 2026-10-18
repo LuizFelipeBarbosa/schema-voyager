@@ -102,7 +102,7 @@ def run_schemavoyager(episode: Episode, store: SchemaStore, before_step: BeforeS
             if result.status == "mismatch":
                 awaiting_recovery = _revise(episode, store, step, result, transition_id)
                 break
-            if awaiting_recovery and step.rule.source == "revision" and episode.natural:
+            if awaiting_recovery and result.status == "match" and step.rule.source == "revision" and episode.natural:
                 _say(episode, [_recovery_line(step.action, result)])
                 awaiting_recovery = False
             completed.append((step.action, step.rule.id))

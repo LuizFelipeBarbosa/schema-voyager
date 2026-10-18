@@ -181,7 +181,7 @@ def test_shell_release_only_by_the_holder(home):
 
 def test_shell_releases_on_sigterm(home):
     child = subprocess.Popen(
-        ["bash", "-c", f'source {ROOT}/scripts/v2-env.sh; sv2_lock_acquire test; echo held; sleep 30 & wait'],
+        ["bash", "-c", f'source {ROOT}/scripts/v2-env.sh; sv2_lock_acquire test; echo held; while :; do sleep 0.1; done'],
         stdout=subprocess.PIPE, text=True, env={**os.environ, "SV2_HOME": str(home)},
     )
     assert child.stdout.readline().strip() == "held"

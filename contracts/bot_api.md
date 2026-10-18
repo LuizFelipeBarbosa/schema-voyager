@@ -289,7 +289,8 @@ of `k`, and nothing else changed; otherwise it answers `craft_failed` with
 output count against its own recipe data: a datapack may change it (stick2
 makes 2 sticks per run), and that is exactly what the exact check in Python
 must see as a mismatch. Nothing lost in a grid can turn into a false
-contradiction.
+contradiction. `/craft` and `/probe` responses add `held_outside_inventory`
+(what is still in window slots 0-4 or on the cursor; normally `{}`), for tests.
 
 ## POST /explore (v2 options)
 
