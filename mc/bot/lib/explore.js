@@ -145,6 +145,19 @@ function hasTimeForAttempt (elapsedMs) {
   return elapsedMs + STALL_MS <= FALLBACK_BUDGET_MS
 }
 
+// Runs the attempts in order until one moves the bot 1 block or more; resolves to
+// that attempt ({direction, distance}), or null when none did. `tryOne(attempt, index)`
+// resolves to the blocks the attempt moved the bot, or null when there is no time
+// left for it, which ends the run.
+async function firstAttemptThatMoved (attempts, tryOne) {
+  for (const [index, attempt] of attempts.entries()) {
+    const moved = await tryOne(attempt, index)
+    if (moved === null) return null
+    if (moved >= 1) return attempt
+  }
+  return null
+}
+
 // Cells next to `feet` the bot could stand in: a solid floor, and free feet and
 // head cells, `dyMin` to `dyMax` blocks from its own level.
 function standableNeighbours (bot, feet, dyMin, dyMax) {
@@ -198,21 +211,22 @@ async function exploreDirection (bot, { border, tracker }, { direction, distance
       if (leg.stoppedBy) return // reached the last safe cell before the obstacle
     }
   }
+  let took = null
   const tryAttempts = async () => {
-    const attempts = directionAttempts(direction, distance)
-    for (const [i, attempt] of attempts.entries()) {
-      if (i > 0 && !hasTimeForAttempt(Date.now() - startedAt)) return
+    took = await firstAttemptThatMoved(directionAttempts(direction, distance), async (attempt, index) => {
+      if (index > 0 && !hasTimeForAttempt(Date.now() - startedAt)) return null
       const attemptStart = bot.entity.position.clone()
       await walkLegs(directionVector(attempt.direction), attempt.distance)
-      if (horizontalDistance(attemptStart, bot.entity.position) >= 1) return
-      if (i === 0) await getOutOfEnclosure(bot, { digThrough, scaffold })
-    }
+      const moved = horizontalDistance(attemptStart, bot.entity.position)
+      if (moved < 1 && index === 0) await getOutOfEnclosure(bot, { digThrough, scaffold })
+      return moved
+    })
   }
   if (digThrough) await withDiggingMovements(bot, { scaffoldNames: scaffold }, tryAttempts)
   else await tryAttempts()
   const moved = horizontalDistance(start, bot.entity.position)
   const error = moved < 1 ? 'unreachable' : null
-  return { ok: !error, error, position: positionOf(bot) }
+  return { ok: !error, error, position: positionOf(bot), took }
 }
 
 // Back to open sky: path straight up to the level above the highest overhead
@@ -264,6 +278,6 @@ async function explore (bot, session, body = {}) {
 }
 
 module.exports = {
-  advanceLimit, directionAttempts, explore, hasTimeForAttempt, insideBorder, neighbourDirections,
+  advanceLimit, directionAttempts, explore, firstAttemptThatMoved, hasTimeForAttempt, insideBorder, neighbourDirections,
   newSpiral, standableNeighbours, trackWorldBorder
 }

@@ -264,7 +264,7 @@ class MineflayerBackend:
             error=body.get("error"),
             inventory=self.observe().inventory,
             blocks_walked=body.get("blocks_walked", 0.0),
-            detail=_detail(body, "position", "sky"),
+            detail=_detail(body, "position", "sky", "took"),
             travel=body.get("travel") or {},
             events=body.get("events") or [],
         )
