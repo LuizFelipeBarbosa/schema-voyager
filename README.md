@@ -66,6 +66,56 @@ prediction, observation, contradiction and revision), store snapshots
 (`store_D_0_prior.json`, `_1_after_first_episode`, `_2_after_training`,
 `_3_after_holdout`), the baseline's skill library, and `results.md`.
 
+## Play mode and goals (v3)
+
+v3 turns the life into something you can talk to. `schema-voyager life` (see
+[docs/v2-interfaces.md](docs/v2-interfaces.md) for its instance ports) takes
+`--mode learn` (the default: it picks goals from the curriculum after the queued
+ones) or `--mode play`: it runs only the goals you give it and stands by otherwise.
+
+```bash
+# A life on the v2 instance's ports (scripts/v2-up.sh), running only your goals
+.venv/bin/schema-voyager life --backend mc --llm live --mode play --minutes 60 --cap-usd 3
+
+# The panel on a free port (8765 is the v1 demo's)
+.venv/bin/schema-voyager panel --port 8768
+```
+
+**Goals box.** Open `http://127.0.0.1:8768/site/dist/trace.html`, type a goal ("get me 10
+torches") and the bot queues it. Each goal shows its status and a Cancel button.
+From a shell:
+
+```bash
+curl -X POST http://127.0.0.1:8768/goals -H 'Content-Type: application/json' \
+     -d '{"text": "get me 10 torches"}'
+```
+
+The panel talks to the life whose `runs/<life>/live.json` names a running process.
+With several lives running it answers 409 `ambiguous_run`; open the page with
+`?run=<name>` to pick one. It binds 127.0.0.1 only and needs no API key.
+
+**In-game chat.** Players named in `BOT_OWNERS` (comma-separated, default `Otopo`,
+read when the bot starts: `BOT_OWNERS=Alice,Bob scripts/v2-up.sh`) can type:
+`!goal <what>`, `!cancel [id]`, `!stop`, `!status`, `!yes [id]`, `!no [id]`.
+
+**Build goals.** Ask for "a small wooden house with a door". Claude designs a
+blueprint and the goal waits in `awaiting_approval` with a preview in the panel.
+Approve or discard it there (or `!yes` / `!no`); then the bot gathers the
+materials and builds it, checking every block. What it built is a protected box:
+later goals never mine it, dig through it or put scaffold inside it.
+
+**World settings.** `SV2_DIFFICULTY` (`peaceful` by default, or `easy`, `normal`, `hard`)
+and `SV2_DAYLIGHT` (`off` by default, which keeps it day; `on` runs the day cycle)
+are read by the v2 scripts (`scripts/v2-env.sh`), from the environment or `.env`.
+
+**A lost bot.** If the bot drops, the life waits up to 120 s for it and puts the
+goal back in the queue.
+
+**Clip.** Record the viewer with `node scripts/v3-clip.js <seconds> <out-dir> [viewer-url]`
+(headless Chrome; stitch the frames with ffmpeg, see the script's header).
+
+Details: [docs/v3-plan.md](docs/v3-plan.md), [docs/v3-interfaces.md](docs/v3-interfaces.md).
+
 ## How it works
 
 ```text
