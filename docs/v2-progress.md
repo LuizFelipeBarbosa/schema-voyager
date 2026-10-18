@@ -59,6 +59,11 @@ Re-read this first after a restart or context compaction. The session prompt is
   Live run with keep-going (18:03-, runs/demo-v2-live): first segment hit empty_frontier at 18:15; resumed
   with --keep-going at 138d574 (18:16); the repair call fixed smelt_iron_ingot live (iron_ore -> raw_iron).
 
+- 18:12-18:40: lanes `keepgoing` (--keep-going explores on an empty frontier), `repair` (v2.2 repair call;
+  fixed smelt_iron_ingot live), `panel` (trace panel reads v2 traces; `?run=` filter) merged.
+- 18:45: brief for the next session written to prompts/v2-demo-refine.md (gitignored like the original brief).
+- 18:50 hand-off: everything stopped at the user's request (both instances down); only the panel (:8766) is up.
+
 ## Commands that work
 
 - Tests: `PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m pytest -q` from sv2.
@@ -93,4 +98,4 @@ Re-read this first after a restart or context compaction. The session prompt is
 | M1 natural-terrain actions | GATE PASS live (logs/v2_iron-1.log, ~16:13): empty inventory -> wooden -> stone pickaxe, all exact checks MATCH; continued to iron_pickaxe (17/17 MATCH, 285 s) |
 | M2 life loop | live run done (runs/m2-live-1, 16:16-16:51, 35 min unattended, stop wall_clock): 29 goals, 22 success, 14 certified (all T1-T3 + furnace, iron_ore, smelt_iron_ingot, iron_pickaxe, bucket), 69 exact MATCH, 0 contradictions, 2 quarantined (interference), $0.127. Stuck: after iron the bot was ~60 blocks underground; log goals (chest, stone_sword, stone_axe) failed 2x each on not_found -> skipped. Fixes: `surface` (explore up, merged 3695a0a) and `nav` (go up when the seen resource is far above, no E<->W reversal, cheapest-tool travel digging, wall-clock interruption not a failure; in progress). Opus review: **M2 met with caveats** (all 14 certifications legitimate; stall = navigation; iron pickaxes worn by travel digs; stochastic path never exercised). Timeline: T1-T3 certified by 6.6 min, iron pickaxe 13.4 min, bucket 28.8 min; 27,109 tokens, 12 calls (9 prior, 3 expansion). Offline rerun at 2645df7 (runs/sim-m2-seed{1,2,3}): seeds 2, 3 certify all 9 T1-T3; seed 1 certifies mine_deepslate in place of mine_stone |
 | M3 mid-run rule change | not started |
-| M4 generalization | relaunched 18:17 at 138d574 on instance b only, sequential (2024, 31337, 22, 555; 20 min each; ETA ~19:45), while the demo life runs on instance a. Earlier attempts invalid (runs/invalid/). First launch 17:30 at d5329e6 (a: 2024, 22; b: 31337, 555; 20 min each); seeds chosen by spawn-biome survey only (logs/survey-b.log, survey-b2.log): 2024 forest (birch+oak), 31337 grove (spruce), 22 savanna_plateau, 555 snowy_plains (hard); M3 rerun on 2024. Runs wait for M2/M3 review |
+| M4 generalization | **stopped 18:50 at the user's request (hand-off)**: m4-2024 complete with 2 FALSE contradictions (smelt with stick fuel gives no ingot but ok:true; craft stick x2 lost planks in the grid), m4-31337 partial; to be rerun after fixes by the next session (prompts/v2-demo-refine.md). Was relaunched 18:17 at 138d574 on instance b only, sequential (2024, 31337, 22, 555; 20 min each; ETA ~19:45), while the demo life runs on instance a. Earlier attempts invalid (runs/invalid/). First launch 17:30 at d5329e6 (a: 2024, 22; b: 31337, 555; 20 min each); seeds chosen by spawn-biome survey only (logs/survey-b.log, survey-b2.log): 2024 forest (birch+oak), 31337 grove (spruce), 22 savanna_plateau, 555 snowy_plains (hard); M3 rerun on 2024. Runs wait for M2/M3 review |
