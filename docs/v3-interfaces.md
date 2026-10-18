@@ -446,6 +446,16 @@ Plan S0.9. Lanes: `backend-health`, `life-robust`, `panel-live`, `door-species`,
   a 1-cell `scan`; if it still holds the recorded block, `Action("clear", pos=cell, scaffold=False)`. A failed scan
   or clear leaves that cell. `build_done` gains `scaffold_cleared` and `scaffold_left`. The cleanup never changes
   the build's result.
+- Recording (after `runs/v3-polish-live`, where mineflayer's `blockPlaced` missed two tower blocks whose server
+  update came after the walk resolved): `recordTravel` wraps `bot.placeBlock`, notes each attempted cell, the block
+  there and the held item; `settle()` waits for placements in flight (at most 6 s), for the bot to land and 2 ticks;
+  `finish()` keeps an attempted cell that was `air`, `cave_air`, `void_air` or `water` and now holds the held item.
+  `placed` counts come from the same list. `/place`, `/clear` and `/goto` walks settle whether or not they arrived.
+- The ring, a safety net that doesn't depend on the bot's events: the site box grown 5 in x and z, from `oy - 1` to
+  `oy + sy`, scanned at the start of the build phase and again after the final match. A cell outside the site box and
+  every protected box that was air (or water) and now holds a `SCAFFOLD_BLOCKS` block is also cleared, with the same
+  1-cell check. So the cleanup can clear a scaffold block the walks didn't report. `build_done` gains
+  `scaffold_from: {"walks", "ring"}` (distinct candidate cells from each source).
 - Gaps: an earlier attempt's pillars (a build requeued or resumed) aren't known to a later attempt (memory only),
   and scaffold placed while gathering (trees, ore) is not cleared.
 
