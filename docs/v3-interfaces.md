@@ -890,4 +890,204 @@ S07 re-split two lanes (2026-10-18), after finding that no handler stops after `
 
 ## v3.4 Blueprints and building actions
 
+### v3.4a Blueprints, `place`, `clear` and `scan` (S09: S4.1, S4.2, S4.8)
+
+The parts every build needs. There is no build goal yet: that is S10's v3.4b. The bot side is
+`contracts/bot_api.md` v3.4 (`/place`, `/clear`, `/scan`).
+
+D1 holds: a placed or cleared block is checked exactly (is the cell what we asked for afterwards?) but is never
+evidence for a rule. No rule has the kind `place` or `clear`, the LLM's kind enums don't gain them, and S10's
+build runner keeps these steps out of `store.record_transition`.
+
+#### The blueprint format (`blueprint.py`, lane `blueprint`)
+
+A blueprint is a JSON object, kept as a plain `dict` in Python. The example house is 7 wide (x), 4 high (y) and
+5 deep (z), with log corners, a glass window in three walls, a torch on the inside of the west wall, a door in the
+south wall, and a roof whose corners are left as they are:
+
+```json
+{
+  "name": "small house",
+  "size": [7, 4, 5],
+  "palette": {"L": "#log", "P": "#planks", "G": "glass", "D": "oak_door", "T": "torch"},
+  "layers": [
+    ["LPPPPPL", "P.....P", "P.....P", "P.....P", "LPPDPPL"],
+    ["LPPGPPL", "PT....P", "G.....G", "P.....P", "LPPDPPL"],
+    ["LPPPPPL", "P.....P", "P.....P", "P.....P", "LPPPPPL"],
+    [" PPPPP ", "PPPPPPP", "PPPPPPP", "PPPPPPP", " PPPPP "]
+  ]
+}
+```
+
+Its `materials` are `{"#planks": 74, "#log": 12, "glass": 3, "torch": 1, "oak_door": 1}`.
+
+**Axes.** `layers[y][z][x]`: layers go bottom-up, rows go north to south, characters go west to east. The origin
+`(ox, oy, oz)` is the world position of `layers[0][0][0]`, the north-west bottom corner, and cell `layers[y][z][x]`
+is at `(ox + x, oy + y, oz + z)` (north is -z, east is +x). Layer 0 stands on the ground: S10 picks the origin's y
+as the first air layer above the site's surface, so the ground is directly below layer 0.
+
+**Keys.** Exactly these four; any other key is an error.
+
+- `name`: a string of 1 to 60 characters.
+- `size`: `[width, height, depth]`, the x, y and z extents: integers with `1 <= width <= 16`, `1 <= height <= 12`,
+  `1 <= depth <= 16` (`MAX_SIZE = (16, 12, 16)`).
+- `palette`: one-character keys to values. A value is a placeable block or group (below), `"air"` or `"any"`.
+  Two keys are built in: `.` is always air and a space is always any. They needn't be listed; if listed, only with
+  those values. `any` means "whatever is there": never placed, cleared or checked.
+- `layers`: `height` layers; each has `depth` rows; each row is a string of `width` characters, every one a palette
+  key or a built-in.
+
+**What the first version places** (`PLACEABLE` in `blueprint.py`, a frozenset; anything else is an error, such as
+stairs, slabs, fences, beds, chests, `iron_door`, leaves, and blocks that fall like sand and gravel):
+
+- full blocks (`FULL_BLOCKS`): the members of `#planks`, `#log` and `#cobblestone` (`normalize.members`: the
+  logs, woods and stripped ones; `blackstone`, `cobblestone`, `cobbled_deepslate`), `mossy_cobblestone`, `stone`,
+  `smooth_stone`, `stone_bricks`, `bricks`, `sandstone`, `polished_andesite`, `polished_diorite`, `polished_granite`.
+  Not `dirt`, which turns into `grass_block` and then fails the scan, and not the other scaffold blocks
+  (`andesite`, `diorite`, `granite`, `tuff`), which the walks spend. `cobbled_deepslate` is in `#cobblestone` and
+  is also scaffold, so S10 budgets the two together;
+- `glass` and `glass_pane`;
+- doors (`DOORS`): `<species>_door` for each of `normalize.SPECIES`;
+- `torch`;
+- groups (`GROUPS = ("#planks", "#log", "#cobblestone")`), which mean any member. S10's runner places whichever
+  member the bot holds. A group is a full block for the rules below.
+
+A log's axis comes from the face it is placed against; it isn't part of the blueprint and isn't checked.
+
+`REPLACEABLE` (public): the plants a placement replaces, `short_grass`, `tall_grass`, `fern`, `large_fern`,
+`dead_bush` and `snow` (the layer). A cell is free for a placement when it is one of `AIR_BLOCKS` or of these. The
+bot (`/place`) and the simulator use the same list.
+
+**Claude's form (S10).** Structured output can't describe a map with free keys, so `design_blueprint` asks for the
+palette as a list, `[{"key": "P", "block": "#planks"}, ...]`, with `block` an enum of `PLACEABLE`, the groups,
+`"air"` and `"any"`. It turns the list into the map before `validate`, and reports a key listed twice as
+`"palette: key 'P' is listed twice"`.
+
+**Doors, torches and support.** "A full block" below means a `FULL_BLOCKS` member or a group: not glass, a pane, a
+door or a torch.
+
+- A door takes two cells: the same door block in one cell and in the cell straight above it. A vertical run of the
+  same door block must be exactly 2 cells. Its lower cell is in layer 0 or has a full block below. The bot places
+  the lower cell and the door fills the upper one (`door_tops`).
+- A torch is in layer 0 (on the ground), or has a full block below it or beside it (north, south, east or west). It
+  never hangs from above. A torch placed against a side is a `wall_torch` in the world; `matches` accepts both.
+- Every other placed cell (a full block, glass or a pane) connects to layer 0, face to face, through other full
+  blocks, glass or panes. Doors and torches carry nothing. A floating block can't be built: the bot needs a face to
+  place against.
+
+**For the builder (S10).** Pathfinder never opens doors here (`canOpenDoors` stays off: it misbehaves on vanilla
+servers), and the walks never dig, so a placed door is a wall. Torches go before doors, every door goes last, and
+`/place` of a door with a `keep_out` box ends its walk outside that box. During a build the runner sets the
+backend's `keep_out` to the blueprint's box (`set_keep_out`, below), so scaffold never lands in a blueprint cell.
+
+**Functions.** All but `validate` assume a valid blueprint. `Pos = tuple[int, int, int]`.
+
+- `validate(bp: Any) -> list[str]`: every error, `[]` when valid. Each message starts with the JSON path it is
+  about, so that Claude can fix it (S10 sends them back). At most 20 messages: when there are more, the 20th is
+  `"... and N more"`.
+  - The shape comes first: the keys, `name`, `size`, the palette, and the layer, row and row-length counts. When
+    the shape is wrong, the support and connection checks are skipped, since they would only add noise. Unknown
+    characters are always checked, one message per character (naming its first cell).
+  - When the layers are a clean box (every layer has the same number of rows, every row the same length) but
+    `size` disagrees, there is one message giving the size the layers have, not one per layer or row.
+  - The messages:
+    - `"blueprint: must be a JSON object"`, `"blueprint: missing key 'size'"`, `"blueprint: unknown key 'notes'"`
+    - `"name: must be a string of 1 to 60 characters"`
+    - `"size: must be [width, height, depth], three integers"`,
+      `"size: [20, 5, 7] is over the limit 16 x 12 x 16"`
+    - `"size: says [7, 5, 7] but the layers are 7 wide, 4 high and 5 deep: [7, 4, 5]"`
+    - `"palette: key 'AB' must be one character"`, `"palette['.']: '.' always means air"`,
+      `"palette[' ']: ' ' always means any"`
+    - `"palette['X']: 'oak_stairs' is not a block this version can place"`
+    - `"layers: 4 layers, size says 5"`, `"layers[1]: 6 rows, size says 7"`
+    - `"layers[1][3]: 'P....P' has 6 characters, size says 7"` (the row quoted as written)
+    - `"layers[1][3][2]: 'X' is not in the palette"`
+    - `"layers[0][4][3]: the door 'D' needs the same door in the cell above"` (a one-cell door)
+    - `"layers[0][4][3]: the door 'D' is 3 cells tall, a door is 2"` (the run's lower cell)
+    - `"layers[1][4][3]: the door 'D' needs a full block below"`
+    - `"layers[1][1][1]: the torch 'T' needs a full block below or beside it"`
+    - `"layers[3][2][2]: 'P' and 4 other cells are not connected to the ground"` (one message per unconnected
+      group of cells, naming its first cell in layer, row, character order)
+    - `"layers: the blueprint places no blocks"`
+- `materials(bp) -> dict[str, int]`: palette value → count over the placed cells. Keys that share a value are
+  summed. Air and any are left out. A door counts once per two-cell door.
+- `cells(bp, origin: Pos) -> Iterator[tuple[Pos, str]]`: every cell whose value isn't `any`, in layer, row, then
+  character order. That includes air cells and both cells of a door. The value is the palette value: a raw id, a
+  group, or `"air"`.
+- `door_tops(bp, origin: Pos) -> set[Pos]`: the upper cell of each door. A builder never places these:
+  `/place` on the lower cell fills them.
+- `matches(expected: str, found: str | None) -> bool`: whether a scanned raw id satisfies a palette value. `any`
+  matches everything, `None` included (a cell the bot can't see). `air` matches `air`, `cave_air` and `void_air`
+  (`AIR_BLOCKS`). A group matches its members. `torch` matches `torch` and `wall_torch`. Anything else must be
+  equal.
+- `render(bp) -> list[list[str]]`: the layer slices for the panel, bottom-up, each a list of rows from north to
+  south. Air keys become `.`, any keys become a space, and other characters stay as written. The panel draws its
+  legend from the palette.
+- `is_full(value: str) -> bool`: a `FULL_BLOCKS` member or a group, the support a door or a torch needs.
+- `carries(value: str) -> bool`: whether a placed cell with this value carries its neighbours: a full block, glass
+  or a pane, not a door, a torch, air or any. S10's support search uses `carries` and `is_full`, so it agrees with
+  `validate`.
+
+Constants, public: `MAX_SIZE`, `GROUPS`, `FULL_BLOCKS`, `DOORS`, `PLACEABLE`, `AIR_BLOCKS`, `REPLACEABLE`. The
+stub on `main` has them, with the function signatures.
+
+#### The `place` and `clear` actions (`models.py`, stub on `main`)
+
+- `ActionKind` gains `"place"` and `"clear"`.
+- `Action.pos: tuple[int, int, int] | None = None`: the cell for `place` and `clear`, in world coordinates. A list
+  (an action read back from JSON) becomes a tuple, so the frozen `Action` stays hashable. `pos` is in
+  `_V2_ACTION_FIELDS`, so `to_dict()` leaves it out while it is unset, and every recorded LLM key stays the same.
+- `Action("place", target="oak_planks", pos=(10, 64, -3))`. `target` is a raw block id: the caller (S10's runner)
+  resolves a group from the inventory first. `describe()` gives `"place oak_planks at 10 64 -3"`.
+- `Action("clear", pos=(10, 64, -3))`, with `target` `None`. `describe()` gives `"clear 10 64 -3"`.
+
+#### Backends (`adapter.py` stub, lanes `build-backend` and `build-sim`)
+
+- `LifeBackend.scan(origin: Pos, size: tuple[int, int, int]) -> dict[Pos, str | None]`: the block in every cell
+  of the box, keyed by world position. `None` is a cell the bot can't see (an unloaded chunk; never in the
+  simulator).
+- `LifeBackend.set_keep_out(box: tuple[Pos, tuple[int, int, int]] | None) -> None`: an `(origin, size)` box the
+  walks of `place` and `clear` never put scaffold in, sent with every `/place` and `/clear` until it is set back to
+  `None`. The simulator only stores it (it has no scaffold).
+- `act(Action("place" | "clear"))` returns an `Outcome`, in both of `MineflayerBackend`'s modes:
+  - `ok`, `error`, `inventory`, `travel`, `events` as for the other kinds; `blocks_walked` is `travel.distance`;
+  - `inventory_delta` is the step's own: `inventory` minus `inventory_before_step`, without zeros;
+  - `block_removed`, `drops` and `picked_up` stay at their defaults;
+  - `detail` for `place`: `block`, `placed`, `found`, `target` (`{"x", "y", "z"}`), `inventory_before_step`;
+  - `detail` for `clear`: `cleared`, `removed`, `found`, `target`, `inventory_before_step`;
+  - on an error, `detail` keeps what the bot sent (`found` for `occupied`, `place_failed` and `unbreakable`), and
+    `interrupted` is flattened as for the other kinds.
+- `MineflayerBackend` posts `/place {"block", "x", "y", "z", "scaffold"}` and `/clear {"x", "y", "z", "scaffold"}`,
+  with `scaffold` set to `list(SCAFFOLD_BLOCKS)`, plus `"keep_out": {"origin": [x, y, z], "size": [w, h, d]}` while
+  one is set. `scan()` posts `/scan {"origin", "size"}` and turns
+  `layers[y][z][x]` into `{(ox + x, oy + y, oz + z): name}`. A 400 raises `BackendError`, as every HTTP error does.
+- `NaturalWorld` (the simulator) gives the same `Outcome` shapes:
+  - `place`, checked in this order:
+    - the cell already holds the target (or `wall_torch` for a torch): `ok`, `placed: false`, nothing spent;
+    - none of the target held: `missing_item`;
+    - the cell isn't free (free: `blueprint.AIR_BLOCKS` or `blueprint.REPLACEABLE`; a door needs the cell above
+      free too): `occupied`, with `found`;
+    - no support: `no_support`. Support is a neighbour that isn't free, a liquid, a door or a torch. A torch takes
+      one below or beside it, a door one below.
+    - Otherwise the cell gets the target and one is spent. A torch with nothing below becomes `wall_torch`; a door
+      fills both cells.
+  - `clear`:
+    - an air cell: `ok`, `cleared: false`, `found: "air"`;
+    - bedrock (at or below `TERRAIN_BOTTOM`) or a liquid: `unbreakable`, with `found`;
+    - otherwise the cell becomes air (a door: both cells), with no drops, since the real bot doesn't collect them.
+  - The simulator always reaches the cell, with travel as `_mine` has it (`_travel_to`).
+  - `place` and `clear` join `THREATENED_ACTIONS`, so the simulator's threats interrupt them as they do a mine.
+  - `scan()` reads `block_at` for each cell.
+
+#### Who owns what (S09)
+
+| File | Owner | Note |
+|---|---|---|
+| `models.py`, `adapter.py`, `blueprint.py` (stub) | S09 stubs on `main` | No lane edits `models.py` or `adapter.py`. S08 adds `kill` to the same `ActionKind` line: whoever merges second rebases |
+| `blueprint.py`, `tests/test_v3_blueprint.py` | `blueprint` | Fills in the stub; keeps its signatures and constants |
+| `mc/bot/lib/place.js`, `mc/bot/lib/scan.js`, `mc/bot/server.js` (three routes and validators), `mc/bot/test/unit/place.test.js`, `mc/bot/test/unit/scan.test.js` | `build-bot` | S08 adds `/attack` and its validator to `server.js` at the same time: small edits, rebase |
+| `environment.py`, `tests/test_v3_build_sim.py` | `build-sim` | Imports only the constants from the `blueprint.py` stub |
+| `mineflayer_backend.py`, `tests/test_v3_build_backend.py` | `build-backend` | Fake HTTP |
+| `mc/bot/test/v3_place_live.js` | `place-live` (live, instance a) | After `build-bot` is merged |
+
 ## v3.5 Places, chests, composite goals

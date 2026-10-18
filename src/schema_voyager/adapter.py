@@ -50,3 +50,12 @@ class LifeBackend(Backend, Protocol):
     def toss(self, items: dict[str, int]) -> dict[str, int]:
         """v3: drop up to these counts (raw ids) to make room; returns what left the inventory. See docs/v3-interfaces.md."""
         ...
+
+    def scan(self, origin: tuple[int, int, int], size: tuple[int, int, int]) -> dict[tuple[int, int, int], str | None]:
+        """v3.4: the block in every cell of the box, keyed by world position; None where the bot can't see.
+        size is [width, height, depth] (x, y, z). See docs/v3-interfaces.md, v3.4a."""
+        ...
+
+    def set_keep_out(self, box: tuple[tuple[int, int, int], tuple[int, int, int]] | None) -> None:
+        """v3.4: an (origin, size) box the walks of place and clear never put scaffold in; None clears it."""
+        ...

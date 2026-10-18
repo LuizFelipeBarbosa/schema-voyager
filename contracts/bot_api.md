@@ -660,3 +660,115 @@ for a check.
 v2 codes, plus `interrupted` (an action response, `detail: {"threat", "outcome"}`) and `busy` (HTTP 409, now also
 while the guard fights idle, with `detail: "guard"`, and while an aborted handler hasn't settled, with
 `detail: "orphan"`).
+
+## v3.4: building actions (S09, lane `build-bot`)
+
+Three endpoints for building: place one block, clear one cell, and read the block names in a box. Coordinates are
+integer block coordinates. The Python side and the blueprint axes are in `docs/v3-interfaces.md` v3.4a.
+
+- `/place` and `/clear` take the action lock, and the guard cuts into them as it does into `/mine` (v3.2,
+  `cutIn: true`). Both honour `session.signal`. `travel` is always present.
+- `/scan` takes the lock like `/look`, and the guard doesn't cut into it. It never walks.
+- **A free cell**, for `/place`: `air`, `cave_air`, `void_air`, or a plant the server replaces: `short_grass`,
+  `tall_grass`, `fern`, `large_fern`, `dead_bush`, `snow` (the layer; `blueprint.REPLACEABLE` in Python). For
+  `/clear`, only the three airs are free: grass in a cell that must be air gets dug.
+- **The walk** goes within reach (4.5 blocks from the eyes, with a line of sight to the face it will use). It never
+  ends with the bot inside the target cell (for a door, inside either cell), and for `/clear` never standing on it.
+  It never digs, and never opens doors (pathfinder's `canOpenDoors` stays off), so a placed door is a wall. It may
+  pillar and bridge with the request's `scaffold` blocks, which Python sets to `SCAFFOLD_BLOCKS`. For `/place`, the
+  requested `block` is never used as scaffold. Pathfinder's `GoalPlaceBlock` fits `/place`, and `GoalLookAtBlock`
+  fits `/clear`. 20 s at most.
+- **`keep_out`**, optional on both: `{"origin": [x, y, z], "size": [w, h, d]}`, the build's box. The walk never
+  places scaffold in it (pathfinder's `exclusionAreasPlace`, with a cost that rules the move out), and for a door the
+  walk ends with the bot outside it. The bot may still stand and walk inside the box. Without `keep_out`, scaffold
+  stays wherever the pathfinder put it, and shows in `travel.placed`.
+
+### POST /place  `{"block": "oak_planks", "x": 10, "y": 64, "z": -3, "scaffold": ["dirt", "cobbled_deepslate"]}`
+
+`scaffold` and `keep_out` are optional: by default the walk places nothing.
+
+1. **Checks**, in this order. They run before the walk when the cell's chunk is loaded, and again on arrival.
+   - The cell already holds `block` (or a `wall_torch` for a torch): `ok: true`, `placed: false`, no walk,
+     nothing spent. A retry after an interruption ends here.
+   - The bot holds no `block`: `missing_item`.
+   - The cell isn't free: `occupied`, with `found`. A door also needs the cell above free.
+   - Nothing to place against: `no_support`. A support is a neighbour with a full collision box
+     (`boundingBox === 'block'`) that does nothing on use: never a door, trapdoor or fence gate, nor a block that opens
+     a window (`chest`, `barrel`, `crafting_table`, `furnace` and the like). The faces are tried in this order: the
+     block below (its top face), then north, south, east and west, then the block above. A torch takes only the one
+     below or a side one, and a door only the one below.
+2. **Walk** within reach (travel phase). Can't get there: `unreachable`.
+3. **Place** (step phase, `inventory_before_step` on arrival). Equip `block`, place it against the first support,
+   and read the cell back once the server confirms it (a block update, or a few ticks). If the cell is still free,
+   the server refused: wait 5 ticks and try the next support face, 3 tries in all. Then: `place_failed`, with
+   `found`. (A mob standing in the cell is the usual reason.) Reuse `lib/station.js`'s face and overlap logic; the
+   read-back accepts `wall_torch` for a torch.
+4. **Response:**
+
+```jsonc
+{
+  "ok": true,
+  "placed": true,                   // this call put the block there
+  "block": "oak_planks",            // as requested
+  "found": "oak_planks",            // the cell, read back after the step ("wall_torch" for a torch on a side)
+  "inventory": {"oak_planks": 40},
+  "inventory_before_step": {"oak_planks": 41},
+  "travel": {"distance": 3.2, "dug": {}, "placed": {}, "picked_up": {}},
+  "events": [],
+  "position": {"x": 8.5, "y": 64, "z": -3.5}
+}
+```
+
+Errors (HTTP 200, `ok: false`): `missing_item`; `occupied` (`found`: the block in the cell, or above it for a door);
+`no_support`; `unreachable`; `place_failed` (`found`: the cell after the tries); and, as for any action,
+`interrupted`, `quarantined` (the bot died), `timeout` and `not_connected`. `busy` is HTTP 409. `bad_request` (HTTP
+400) unless `block` is a non-empty string, `x`, `y` and `z` are integers, `scaffold`, when given, is a list of
+strings, and `keep_out`, when given, has an `origin` of three integers and a `size` of three positive integers. The
+route's limit is 60 s.
+
+### POST /clear  `{"x": 10, "y": 64, "z": -3, "scaffold": ["dirt"], "keep_out": {"origin": [8, 64, -5], "size": [7, 4, 5]}}`
+
+Digs one cell, for site prep and for undoing a wrong block.
+
+1. **Checks**, before the walk when the chunk is loaded, and again on arrival:
+   - the cell is air: `ok: true`, `cleared: false`, `found: "air"`, no walk;
+   - the block can't be broken (no hardness, such as `bedrock` or `barrier`) or is a liquid: `unbreakable`, with
+     `found`;
+   - lava next to it: `hazard`, as for `/mine`.
+2. **Walk** within reach (travel phase): `unreachable` if it can't.
+3. **Dig** (step phase). Equip the fastest tool the bot holds for this block, else the bare hand. If the dig would
+   take more than 15 s with it, answer `missing_tool` without digging. Dig, and wait for the server to confirm. A
+   door goes as a whole. Drops are not collected on purpose: whatever the bot picks up shows in `inventory`.
+4. **Response:** `{"ok": true, "cleared": true, "removed": "dirt", "found": "air", "inventory", "inventory_before_step",
+   "travel", "events", "position"}`. `found` is the cell read back after the dig. Sand that fell in, or water that
+   flowed in, shows there, and Python checks it.
+
+Errors: `unbreakable` (`found`), `hazard`, `unreachable`, `missing_tool`, `dig_failed` (the dig didn't confirm), and
+the usual `interrupted`, `quarantined`, `timeout`, `not_connected`, `busy` (409) and `bad_request` (400, unless `x`,
+`y` and `z` are integers, and `scaffold` and `keep_out` are as for `/place` when given). 60 s.
+
+### POST /scan  `{"origin": [8, 64, -5], "size": [3, 2, 2]}`
+
+The block names in a box, with the blueprint's axes: `layers[y][z][x]` is the block at
+`(origin.x + x, origin.y + y, origin.z + z)`. Layers go bottom-up, rows north to south, names west to east.
+
+```jsonc
+{
+  "ok": true,
+  "origin": [8, 64, -5],
+  "size": [3, 2, 2],
+  "layers": [
+    [["dirt", "dirt", "air"], ["dirt", "oak_planks", "air"]],
+    [["air", "air", "air"], ["air", "torch", "air"]]
+  ],
+  "events": [],
+  "position": {"x": 8.5, "y": 65, "z": -3.5}
+}
+```
+
+A cell in a chunk the bot hasn't loaded is `null`. `bad_request` (400) unless `origin` is three integers and `size`
+is three integers from 1 to 32 with at most 8192 cells in all.
+
+### Error codes (v3.4)
+
+v3.2 codes, plus `missing_item`, `occupied`, `no_support`, `place_failed` and `unbreakable`.

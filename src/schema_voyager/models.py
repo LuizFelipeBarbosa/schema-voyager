@@ -4,7 +4,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any, Literal
 
 
-ActionKind = Literal["mine", "craft", "explore", "smelt"]
+ActionKind = Literal["mine", "craft", "explore", "smelt", "place", "clear"]
 RuleStatus = Literal["hypothesis", "certified", "demoted"]
 RuleCheck = Literal["exact", "stochastic"]
 # v3 goals (docs/v3-interfaces.md, v3.1)
@@ -26,6 +26,12 @@ class Action:
     fuel: str | None = None  # smelt only; may be a group
     ingredient: str | None = None  # smelt only: the input item; may be a group
     direction: str | None = None  # explore only: N, NE, E, SE, S, SW, W, NW; None is the v1 spiral
+    # v3.4: place and clear only, the cell in world coordinates. place's target is a raw block id.
+    pos: tuple[int, int, int] | None = None
+
+    def __post_init__(self) -> None:
+        if self.pos is not None:  # an action read back from JSON has a list, and Action must stay hashable
+            object.__setattr__(self, "pos", tuple(int(v) for v in self.pos))
 
     def describe(self) -> str:
         if self.kind == "mine":
@@ -35,6 +41,10 @@ class Action:
         if self.kind == "smelt":
             times = f" x{self.times}" if self.times > 1 else ""
             return f"smelt {self.ingredient} -> {self.target}{times} with {self.fuel}"
+        if self.kind == "place":
+            return f"place {self.target} at {_cell(self.pos)}"
+        if self.kind == "clear":
+            return f"clear {_cell(self.pos)}"
         return f"explore {self.direction}" if self.direction else "explore"
 
     def to_dict(self) -> dict[str, Any]:
@@ -47,7 +57,11 @@ class Action:
         return payload
 
 
-_V2_ACTION_FIELDS = ("fuel", "ingredient", "direction")
+_V2_ACTION_FIELDS = ("fuel", "ingredient", "direction", "pos")
+
+
+def _cell(pos: tuple[int, int, int] | None) -> str:
+    return " ".join(str(v) for v in pos or ())
 
 
 @dataclass
