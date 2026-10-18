@@ -147,3 +147,9 @@ Brief: `prompts/v2-demo-refine.md`. Orchestrator Opus 5.5.
   (no planned drops into water; rank ore by reach cost, buried penalty 12). First coal seed 42: 261/110 s -> 12.8,
   13.5, 12.9 s; seed 777 21.3 s; seed 7 still failing (unexplained). Not done: seeds 99/314, live craft/smelt rerun.
   Lane `explorefast` (offline: /explore fail-fast and fallback directions) started.
+- 20:35 break at the user's request: preview life stopped (runs/preview-2005, $0.166 total), instances a and b down,
+  no locks held; only the panel (:8766, run/panel.pid) is up. Unmerged: `v2/explorefast` c25e121 (worktree
+  sv2-wt/explorefast; /explore fail-fast 4 s, 10-block hop, neighbour directions, step out of a hole; 108 bot unit +
+  342 pytest pass; not live-tested). Open: how to run live tests (coal lane's were denied by the auto-mode check);
+  then rehearsals x3 (a) and M4 rerun (b) on the final code; runbook; Opus review. User questions still open: viewer
+  check, v1 demo processes (left untouched).
