@@ -9,6 +9,8 @@ const DUEL_TIMEOUT_S = 60
 const NO_OPPONENT_MS = 10000
 const KILL_GRACE_MS = 500 // after the opponent's death, a death of the bot's own still counts as a double KO
 const OPPONENT_POLL_MS = 250
+const START_POLL_MS = 20
+const MAX_START_AHEAD_MS = 10000
 const REENGAGE_PAUSE_MS = 100
 const SHIELD_BLOCK_STATUS = 29
 const PLAYER_HEALTH_METADATA = 9 // 'health' in registry.entitiesByName.player.metadataKeys (1.21.1)
@@ -20,12 +22,15 @@ function validateDuel (body) {
   if (typeof body.player !== 'string' || body.player === '') return '"player" must be a non-empty string'
   const tacticsProblem = tactics.validateTactics(body.tactics ?? [])
   if (tacticsProblem) return tacticsProblem
-  const { timeout_s: timeoutS, duel_id: duelId } = body
+  const { timeout_s: timeoutS, duel_id: duelId, start_at: startAt } = body
   if (timeoutS !== undefined && !(Number.isFinite(timeoutS) && timeoutS >= 5 && timeoutS <= 300)) {
     return '"timeout_s" must be a number from 5 to 300'
   }
   if (duelId !== undefined && (typeof duelId !== 'string' || duelId.length > 64)) {
     return '"duel_id" must be a string of at most 64 characters'
+  }
+  if (startAt !== undefined && !(Number.isFinite(startAt) && startAt <= Date.now() + MAX_START_AHEAD_MS)) {
+    return '"start_at" must be a time in ms since the epoch, at most 10 s ahead'
   }
   return null
 }
@@ -38,14 +43,15 @@ function metadataHealth (entity) {
 
 // Fights body.player until the duel ends. Never rejects; records `duel_end` exactly once and resolves
 // its fields. `signal` is the action lock's, `stopSignal` is /duel/stop's; either one ends it `stopped`.
+// Waits for body.start_at first; the timeout and `duration` count from the start instant.
 async function runDuel (bot, body, {
   eventLog, movements = null, signal = null, stopSignal = null,
   fight = guard.fight, createTactics = tactics.createTactics, noOpponentMs = NO_OPPONENT_MS,
-  killGraceMs = KILL_GRACE_MS
+  killGraceMs = KILL_GRACE_MS, now = Date.now
 } = {}) {
   const opponent = body.player
   const duelTactics = createTactics(bot, body.tactics ?? [])
-  const startedAt = Date.now()
+  const startedAt = Math.max(now(), body.start_at ?? 0)
   const deadline = startedAt + (body.timeout_s ?? DUEL_TIMEOUT_S) * 1000
   const opponentId = () => bot.players[opponent]?.entity?.id
   const isStopped = () => Boolean(stopSignal?.aborted || signal?.aborted)
@@ -57,19 +63,21 @@ async function runDuel (bot, body, {
   if (opponentHealth !== null) count.damageDealt = 0
   let result = null // set by the first ending, which also records duel_end
   let opponentDied = false // the opponent's death is pending: `killed` is recorded after killGraceMs
+  let opponentDiedAt = null
   let graceTimer = null
 
   // The first call fixes the result and records `duel_end` at once: a death ends the action on the
   // same emit, and the answer's events must already hold it.
   function end (reason) {
     if (result) return
+    const decidedAt = reason === 'killed' || reason === 'both_died' ? opponentDiedAt : now()
     result = {
       duel_id: body.duel_id ?? null,
       opponent,
       tactics: duelTactics.names,
       winner: reason === 'killed' ? bot.username : reason === 'died' ? opponent : null,
       reason,
-      duration: round((Date.now() - startedAt) / 1000, 1),
+      duration: round(Math.max(0, decidedAt - startedAt) / 1000, 1),
       swings: count.swings,
       hits: count.hits,
       crits: count.crits,
@@ -89,6 +97,7 @@ async function runDuel (bot, body, {
   const onEntityDead = (entity) => {
     if (result || opponentDied || entity.id !== opponentId()) return
     opponentDied = true
+    opponentDiedAt = now()
     graceTimer = setTimeout(() => end('killed'), killGraceMs)
   }
   const onAttackedTarget = () => { count.swings++ }
@@ -120,21 +129,23 @@ async function runDuel (bot, body, {
   bot._client.on('entity_status', onEntityStatus)
 
   try {
+    // A death or a stop ends the wait at once; the loop below then records the stop.
+    while (!result && !isStopped() && now() < startedAt) await sleep(Math.min(START_POLL_MS, startedAt - now()))
     let missingSince = null
     while (!result) {
       if (opponentDied) await sleep(REENGAGE_PAUSE_MS)
       else if (isStopped()) end('stopped')
-      else if (Date.now() >= deadline) end('timeout')
+      else if (now() >= deadline) end('timeout')
       else if (!bot.players[opponent]?.entity) {
-        missingSince ??= Date.now()
-        if (Date.now() - missingSince >= noOpponentMs) end('no_opponent')
+        missingSince ??= now()
+        if (now() - missingSince >= noOpponentMs) end('no_opponent')
         else await sleep(OPPONENT_POLL_MS)
       } else {
         missingSince = null
         engagements++
         // `disengage` (later lane) changes fleeBelow here and adds the eating.
         await fight(bot, bot.players[opponent].entity, {
-          timeoutMs: deadline - Date.now(), deadline, movements, eventLog, flee: false, sprint: true,
+          timeoutMs: deadline - now(), deadline, movements, eventLog, flee: false, sprint: true,
           tactics: duelTactics, fleeBelow: 0, shouldStop: () => Boolean(result) || opponentDied || isStopped()
         })
         if (!result) await sleep(REENGAGE_PAUSE_MS)
