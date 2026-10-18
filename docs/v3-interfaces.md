@@ -175,8 +175,10 @@ Store and models (`retest-store`):
   rule except a retest. A store saved before v3.0f loads with 0.
 - `SchemaStore.replay` also skips `transition.seq < rule.since_seq`. Nothing else in replay changes.
 - `SchemaStore.retest(rule_id: str, world_id: str) -> Rule` adds the retest rule and returns it:
-  - `id = f"{base}.retest@{world_id}"`, where `base` is `rule_id` without its `@world` suffix, like `.rev1@` and
-    `.fix1@`. For example, `smelt_iron_ingot.retest@life-2024-...`;
+  - `id = f"{rule_id}.retest@{world_id}"`, the full id, like `.rev1@` and `.fix1@`. For example,
+    `smelt_iron_ingot.retest@life-2024-...`. Cutting the id at `@` would give `x.rev1@w` and `x.rev1@w.rev1@w` the
+    same retest id: the second copy overwrote the first, and the trigger's passes never ended (found by the
+    advisor after the merge);
   - it deep-copies `action`, `preconditions`, `effects` and `check` from the original, so editing the copy never
     changes the original;
   - `source="retest"`, `revision_of=rule_id`, `status="hypothesis"`, `scope=world_id`, `rank=0`,
@@ -187,8 +189,8 @@ Store and models (`retest-store`):
   - `since_seq = len(self.transitions)`: the next transition recorded is the first one it sees;
   - it raises `ValueError` when the rule is not demoted in `world_id` (status `demoted`, or listed in
     `demoted_in[world_id]`), when the rule is itself a retest, or when the rule already has a retest (a rule with
-    `source == "retest"` and `revision_of == rule_id`). So each rule is retested at most once per life, and a
-    retest is never retested.
+    `source == "retest"` and `revision_of == rule_id`), or when a rule with the retest's id already exists. So each
+    rule is retested at most once per life, a retest is never retested, and a retest never overwrites a rule.
 - `add_rule` stamps only `source == "revision"`, so it leaves a retest's epoch alone.
 - The original rule stays demoted for the rest of the life: its status, its `demoted_in` entry and its evidence
   don't change. Only the copy can come back.
@@ -226,7 +228,8 @@ things:
      - are demoted in this world;
      - aren't retests and have no retest yet.
    - Take the producer with the most confirmations (`len(store.replay(rule)[0])`), with ties broken by store order.
-     Call `store.retest(rule.id, world_id)`. Start at most one retest per item per pass.
+     Call `store.retest(rule.id, world_id)`. Start at most one retest per item per pass. After each retest, its
+     yields count as produced, so a later item in the same pass that the new retest also yields isn't retested.
    - The passes handle chains. Say `smelt_iron_ingot` and `mine_iron_ore` are both demoted. The first pass
      retests the smelt, which makes `raw_iron` needed again, so the second pass retests the mine. The repairs run
      only after the last pass, so they never ask Claude about an item a retest could bring back. The passes end,
@@ -287,7 +290,7 @@ test overrides revise to return `[]`.
     unchanged. Editing the copy's preconditions leaves the original's unchanged.
   - It refuses a rule that isn't demoted, a retest, and a second retest of the same rule.
   - Ids: a retest of `smelt_iron_ingot` in world `w` is `smelt_iron_ingot.retest@w`, and one of `x.rev1@w` is
-    `x.rev1.retest@w`.
+    `x.rev1@w.retest@w`. Retests of `x.rev1@w` and `x.rev1@w.rev1@w` get different ids. An existing id raises.
   - The copy's replay ignores the contradicting transition and the confirmations before it.
   - One matching transition after the retest gives 1 confirmation and 0 contradictions. Two from two episodes
     certify it.
