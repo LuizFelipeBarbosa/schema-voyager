@@ -53,18 +53,29 @@ function findPlacedStation (bot, blockName, { episode = null } = {}) {
   return best
 }
 
+// A placed `name` station the bot can use: one within reach, or a remembered
+// one it walks back to. Returns {station, remembered} (`remembered`: it was
+// left standing by an earlier action, so digging it up adds one to the
+// inventory), or null if there is none or the walk back failed.
+async function reachStation (bot, name, { episode = null, signal = null } = {}) {
+  const found = findPlacedStation(bot, name, { episode })
+  if (!found) return null
+  const remembered = Boolean(episode?.standingStations?.some((entry) => entry.position.equals(found.position)))
+  const center = found.position.offset(0.5, 0.5, 0.5)
+  const walkedBack = bot.entity.position.distanceTo(center) <= SEARCH_RADIUS ||
+    await gotoGoal(bot, new goals.GoalNear(center.x, center.y, center.z, 2), WALK_BACK_TIMEOUT_MS, { signal })
+  return walkedBack ? { station: found, remembered } : null
+}
+
 // A crafting table to use: a placed one within reach (walking back to a
 // remembered one that is farther), else one placed from the inventory. Returns
 // {table, placedPos, remembered}: placedPos is set when the bot placed the
 // table or must dig up a remembered one (`remembered`); or {error, detail}.
 async function acquireTable (bot, { episode = null, signal = null } = {}) {
-  const found = findPlacedStation(bot, 'crafting_table', { episode })
-  if (found) {
-    const remembered = Boolean(episode?.standingStations?.some((entry) => entry.position.equals(found.position)))
-    const center = found.position.offset(0.5, 0.5, 0.5)
-    const walkedBack = bot.entity.position.distanceTo(center) <= SEARCH_RADIUS ||
-      await gotoGoal(bot, new goals.GoalNear(center.x, center.y, center.z, 2), WALK_BACK_TIMEOUT_MS, { signal })
-    if (walkedBack) return { table: found, placedPos: remembered ? found.position : null, remembered }
+  const reached = await reachStation(bot, 'crafting_table', { episode, signal })
+  if (reached) {
+    const { station: table, remembered } = reached
+    return { table, placedPos: remembered ? table.position : null, remembered }
   }
   if (!findInventoryItem(bot, 'crafting_table')) return { error: 'missing_crafting_table' }
   try {
@@ -177,5 +188,5 @@ async function retrieveStation (bot, pos, itemName, countBefore, { withBestTool 
 }
 
 module.exports = {
-  acquireTable, findPlacedStation, findSpots, forgetStanding, placeStation, rememberStanding, retrieveStation
+  acquireTable, findPlacedStation, findSpots, forgetStanding, placeStation, reachStation, rememberStanding, retrieveStation
 }
