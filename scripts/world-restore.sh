@@ -19,9 +19,11 @@ if seed=$(sv2_snapshot_seed "$snapshot"); then
   fi
   export SV2_SEED="$seed"
 else
-  level_name=$(sv2_level_name)
+  # Into the folder sv2_start_server will start: SV2_SEED's world, else the one the properties file names
+  # (after a seeded restore that is world-<seed>, not .env's world).
+  if [ -n "${SV2_SEED:-}" ]; then level_name="world-$SV2_SEED"; else level_name=$(sv2_level_name); fi
   [ -n "$level_name" ] || die "no level-name in $SERVER_DIR/server.properties"
-  echo "warning: snapshot '$name' has no sv2-seed; the server starts on the current settings (set SV2_SEED=<seed> if they are not its seed)" >&2
+  echo "warning: snapshot '$name' has no sv2-seed; restored into $level_name on the current settings (set SV2_SEED=<seed> if they are not its seed)" >&2
 fi
 
 started=$SECONDS

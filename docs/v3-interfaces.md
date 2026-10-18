@@ -595,7 +595,7 @@ Plan S0.10. Lanes: `station-dig`, `mobs-seen`, `panel-pid`, `explore-cap`; then 
 
 - `world-snapshot.sh` records the world's seed (RCON `seed`) in `<snapshot>/sv2-seed`. `world-restore.sh` restores
   a snapshot into `world-<seed>` and starts that seed, whatever `SV2_SEED` or `.env` say. A snapshot without the
-  file restores as before, with a warning.
+  file restores into the folder the server will start (`world-$SV2_SEED`, else the current one), with a warning.
 - `RUNBOOK.md` and `docs/v2-infra.md`: `screen -X quit` stops neither the node bot nor the Python life. Stop each by
   its pid, from `run/bot-<inst>.pid` and `run/lock-<inst>`.
 
