@@ -72,8 +72,16 @@ def _first_contradiction(events: list[Event]) -> int | None:
 
 
 def _caught_at_exact_step(events: list[Event], store: SchemaStore, change: Event) -> tuple[bool, str]:
+    """The first changed-action step that ran (ok) after the change must be the contradiction.
+    Attempts that failed before acting (pathing: unreachable, not_found) observed nothing."""
     first_step = next(
-        (i for i, e in enumerate(events) if e["kind"] == "step" and _is_changed_action(e["action_obj"], change)), None
+        (i for i, e in enumerate(events)
+         if e["kind"] == "step" and e["ok"] and _is_changed_action(e["action_obj"], change)),
+        None,
+    )
+    failed_before = sum(
+        1 for e in events[:first_step]
+        if e["kind"] == "step" and not e["ok"] and _is_changed_action(e["action_obj"], change)
     )
     index = _first_contradiction(events)
     if index is None:
@@ -84,7 +92,9 @@ def _caught_at_exact_step(events: list[Event], store: SchemaStore, change: Event
         return False, f"(a) caught at the exact step: first contradiction is {contradiction['rule']} on {transition.action.describe()}"
     steps_between = [e for e in events[first_step + 1:index] if e["kind"] == "step"]
     ok = not steps_between and events[first_step]["goal"] == contradiction["goal"]
-    return ok, f"(a) caught at the exact step: {transition.action.describe()} contradicted {contradiction['rule']} ({contradiction['transition']})"
+    earlier = f"; {failed_before} earlier attempt(s) failed before acting" if failed_before else ""
+    return ok, (f"(a) caught at the exact step: {transition.action.describe()} contradicted {contradiction['rule']} "
+                f"({contradiction['transition']}){earlier}")
 
 
 def _one_revision_call(events: list[Event]) -> tuple[bool, str]:
