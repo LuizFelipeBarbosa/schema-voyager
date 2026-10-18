@@ -597,6 +597,8 @@ can switch on a list of changes, one at a time, each hidden from the agent.
   breaks ties); at most one change fires per step. Each fired change writes
   one `changes.jsonl` line (same format as today) and one `world_change`
   event. Resume keeps which changes fired.
+  The trigger sees the store through `LifeHooks.bind_store: Callable[[SchemaStore], None] | None`
+  (optional, called once with the life's store before the first goal).
 - **Simulator:** `environment.py` implements `planks2` like `stick2` and `r2`,
   so `life --backend sim --llm fake --change scramble` exercises all three.
 - **`change_report`:** one block per `changes.jsonl` line, the same 5 checks
