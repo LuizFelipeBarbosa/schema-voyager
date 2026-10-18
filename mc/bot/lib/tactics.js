@@ -30,10 +30,99 @@ const SHIELD_DOWN_MS = 100
 const SHIELD_UP_DELAY_MS = 150
 const STRIKE_RUNNING = 1e9 // pvp.timeToNextAttack while a strike sequence runs, so update() doesn't re-enter
 const CONTROLS = ['forward', 'back', 'left', 'right', 'jump', 'sprint']
+const JUMP_VELOCITY = Math.fround(0.42) // prismarine-physics: a jump's initial vertical velocity
+const GRAVITY = 0.08
+const AIR_DRAG = Math.fround(1 - 0.02) // vertical velocity = (velocity - GRAVITY) * AIR_DRAG each tick
+const CRIT_REACH = 3.5 // horizontal distance within which crit jumps
+const CRIT_CLOSING_BLOCKS = 1 // what walking in gains over a jump's rise
+const CRIT_FALLBACK_TICKS = 10 // full cooldown and in reach this long without a crit strike: strike on the ground
+const CRIT_MARGIN_TICKS = 1 // aim the strike this many ticks after the first descending one
+const SHIELD_STRIKE_LEAD = 3 // gate open -> bot.attack: shield down (2 ticks) plus the lookAt
+const BARE_STRIKE_LEAD = 1 // the lookAt
 const HAZARDS = new Set(['lava', 'fire', 'soul_fire', 'magma_block', 'water', 'cactus', 'sweet_berry_bush', 'powder_snow'])
 
+// A flat-ground jump, in simulated ticks counted from the one that applies the jump (1): the first
+// tick that lowers the bot (the server then has fallDistance > 0) and the tick it lands.
+function jumpTimeline () {
+  let velocity = JUMP_VELOCITY
+  let height = 0
+  let descendsAt = null
+  for (let tick = 1; ; tick++) {
+    if (velocity < 0 && descendsAt === null) descendsAt = tick
+    height += velocity
+    if (height <= 0) return { descendsAt, landsAt: tick }
+    velocity = (velocity - GRAVITY) * AIR_DRAG
+  }
+}
+
+const JUMP = jumpTimeline()
+
 // One entry per tactic, added by its own lane: name -> (bot) => hooks.
-const REGISTRY = {}
+const REGISTRY = {
+  // Jump so that the strike lands while falling, with sprint released: a critical hit (1.5x damage).
+  // The server needs the descent in the position packets and the stop-sprinting before the jump.
+  // Ticks here are counted from the physicsTick that requested the jump (0); the jump is simulated in the next.
+  crit (bot) {
+    let jumpTick = null // the tick that requested the jump, until it strikes or ends
+    let missedJump = false // a jump ended without a strike: strike on the ground
+    let waitingSince = null // the first tick of the current run of open cooldown gates
+    let lastGateTick = null
+
+    const strikeLead = (ctx) => ctx.pvp.hasShield() ? SHIELD_STRIKE_LEAD : BARE_STRIKE_LEAD
+    const hasCeiling = () => {
+      const above = bot.blockAt(bot.entity.position.floored().offset(0, 2, 0))
+      return Boolean(above) && above.boundingBox !== 'empty'
+    }
+
+    return {
+      attach () {
+        jumpTick = null
+        missedJump = false
+        waitingSince = null
+        lastGateTick = null
+      },
+
+      steer (ctx, controls) {
+        if (jumpTick !== null) {
+          if (!bot.entity.onGround) {
+            controls.sprint = false
+            return
+          }
+          jumpTick = null // landed, or the jump was dropped, without striking
+          missedJump = true
+        }
+        if (missedJump || !bot.entity.onGround) return
+        const closing = controls.forward ? CRIT_CLOSING_BLOCKS : 0
+        if (ctx.horizontal - closing > CRIT_REACH) return
+        // jump early enough that the cooldown is full when the gate opens for a strike landing just after the fall starts
+        const jumpLead = JUMP.descendsAt + CRIT_MARGIN_TICKS - strikeLead(ctx)
+        if (ctx.ticksSinceStrike < ctx.cooldownTicks - jumpLead || hasCeiling()) return
+        controls.sprint = false
+        if (bot.controlState?.sprint) return // the server sees stop-sprinting a tick before the jump
+        controls.jump = true
+        jumpTick = ctx.tick
+      },
+
+      canStrike (ctx) {
+        if (lastGateTick === null || ctx.tick - lastGateTick > 1) waitingSince = ctx.tick
+        lastGateTick = ctx.tick
+
+        const { onGround, velocity } = bot.entity
+        if (!onGround && velocity.y < 0) return true
+        const risingIntoFall = jumpTick !== null && !onGround &&
+          ctx.tick - jumpTick + strikeLead(ctx) >= JUMP.descendsAt + CRIT_MARGIN_TICKS
+        if (risingIntoFall) return true
+        return missedJump || ctx.tick - waitingSince > CRIT_FALLBACK_TICKS
+      },
+
+      afterStrike () {
+        jumpTick = null
+        missedJump = false
+        lastGateTick = null
+      }
+    }
+  }
+}
 
 const TACTICS = Object.freeze(Object.keys(REGISTRY))
 const DEFAULT_TACTICS = Object.freeze([])
@@ -232,6 +321,7 @@ module.exports = {
   DEFAULT_TACTICS,
   MOVER_RANGE,
   MOVER_RELEASE,
+  jumpTimeline,
   validateTactics,
   createTactics,
   isSafeStep
