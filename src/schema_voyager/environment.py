@@ -370,6 +370,7 @@ class NaturalWorld:
         self.unreachable_cells: set[Pos] = set()  # test hook: a chest call or home-station walk to one is unreachable
         self._events: list[dict[str, Any]] = []
         self._seq = 0
+        self._mobs_seen: set[str] = set()
         self._spiral_leg = 0
         self.inventory: Counter[str] = Counter()
         self.blocks_walked = 0.0
@@ -404,6 +405,11 @@ class NaturalWorld:
 
     def observe(self) -> Observation:
         x, y, z = self._cell
+        entities = self._mobs_left()
+        for mob, info in entities.items():
+            if mob not in self._mobs_seen and info.get("kind") in ("animal", "hostile", "mob"):
+                self._mobs_seen.add(mob)  # once per type per life: the simulator has no clock for the 5 minute repeat
+                self._emit({"type": "mob_seen", "mob": mob, "kind": info["kind"], "distance": info["nearest"]})
         nearby: Counter[str] = Counter()
         for chunk in self._chunks_within(VIEW_RADIUS):
             for block, positions in chunk.by_id.items():
@@ -421,7 +427,7 @@ class NaturalWorld:
             free_slots=_free_slots(self.inventory),
             nearby={block: count for block, count in sorted(nearby.items()) if count > 0},
             blocks_walked=round(self.blocks_walked, 1),
-            entities=self._mobs_left(),
+            entities=entities,
         )
 
     def toss(self, items: dict[str, int]) -> dict[str, int]:
