@@ -32,6 +32,7 @@ from .models import Action, EpisodeResult, GoalSpec, Observation, Rule, Task, Un
 from .planner import PlanningError, PlanStep, make_plan
 from .schema_store import TRAIN_WORLD, SchemaStore
 from .trace import EpisodeLog
+from .verifier import kind_of
 
 MIN_GOAL_BUDGET = 30
 GOAL_SECONDS_PER_PLAN_STEP = 30  # a user goal's clock: at least this per planned step
@@ -55,6 +56,7 @@ HUNGER_BELOW = 8  # a food level under this, with nothing edible held, queues a 
 HUNGER_FOOD_COUNT = 4
 HUNGRY_LOG_EVERY_S = 300.0
 HUNGER_RETRY_S = 900.0  # a food whose hunger goal failed isn't chosen again for this long
+UNSEEN_MOB_S = 600.0  # a mob not seen for this long makes a hunger plan that kills it rank later (v3.3h)
 ARM_SWORDS = ("iron_sword", "stone_sword", "wooden_sword")  # the arming goal's choices, best first (v3.2e)
 ARM_RETRY_S = 900.0  # a sword whose arming goal failed isn't chosen again for this long
 # Foods the bot's auto-eat never eats (v3.2g), so they don't count as edible.
@@ -271,6 +273,8 @@ class _Life:
             self.curriculum = Curriculum.from_dict(state["curriculum"])
             self.asked: set[str] = set(state["asked"])
             self.observed_blocks: set[str] = set(state["observed_blocks"])
+            self.observed_mobs: dict[str, float] = dict(state.get("observed_mobs", {}))  # mob -> time.time() last seen
+            self.asked_mobs: set[str] = set(state.get("asked_mobs", []))
             self.goals_done: int = state["goal_index"]
             self.explores_done: int = state.get("explores_done", 0)
             self.repaired: set[str] = set(state.get("repaired", []))
@@ -285,6 +289,7 @@ class _Life:
             self.store = SchemaStore()
             self.curriculum = Curriculum()
             self.asked, self.observed_blocks = set(), set()
+            self.observed_mobs, self.asked_mobs = {}, set()
             self.goals_done, self.earlier_tokens, self.explores_done = 0, 0, 0
             self.repaired = set()
             self.blocked = {}
@@ -390,15 +395,28 @@ class _Life:
         observation = self.backend.observe()
         self._inventory_seen = observation.inventory
         self.observed_blocks |= {normalize.family(block) for block in observation.nearby}
+        self._observe_mobs(observation)
         while True:
             families = self._unasked_families()
-            if not families:
+            mobs = sorted(set(self.observed_mobs) - self.asked_mobs)
+            if not families and not mobs:
                 return observation
-            rules = self.llm.propose_prior_rules_v2(families, sorted(self.observed_blocks), self.world_id)
+            rules = self.llm.propose_prior_rules_v2(families, sorted(self.observed_blocks), self.world_id, mobs=mobs)
             self.asked.update(families)
+            self.asked_mobs.update(mobs)
             for rule in rules:
                 if rule.id not in self.store.rules:
                     self.store.add_rule(rule)
+
+    def _observe_mobs(self, observation: Observation) -> None:
+        """Remember the mobs in view, and the targets of the kill goals in the queue, as seen now (v3.3h)."""
+        now = time.time()
+        in_view = [name for name, info in observation.entities.items() if info.get("kind") in ("animal", "hostile", "mob")]
+        targets = [
+            g.spec.target for g in self.queue.goals()
+            if g.status in ("queued", "running") and g.spec is not None and g.spec.kind == "kill" and g.spec.target
+        ]
+        self.observed_mobs.update({mob: now for mob in in_view + targets})
 
     def _unasked_families(self) -> list[str]:
         """Observed blocks, plus every frontier item, rule ingredient and (the first listed)
@@ -408,6 +426,8 @@ class _Life:
         needed = set() if self.config.mode == "play" else set(self.curriculum.frontier)
         needed |= self._obtain_items("queued", "running") | self._build_families("awaiting_approval", "queued", "running")
         for rule in rules:
+            if rule.kind == "kill":  # the meat a kill drops gets smelted: ask for the cooked item
+                needed.update(f"cooked_{item}" for item in rule.effects.get("allowed", {}) if f"cooked_{item}" in vanilla_items())
             needed.update(rule.preconditions.get("consumes", {}))
             if rule.preconditions.get("station"):
                 needed.add(rule.preconditions["station"])
@@ -607,12 +627,25 @@ class _Life:
         inventory = self._inventory_seen  # an idle pass never observes: that takes the bot's lock
         if any(inventory.get(food, 0) > 0 for food in foods):
             return
-        for food in sorted(foods, key=lambda food: (-foods[food], food)):
-            if self._queue_system_goal("hunger", food, HUNGER_FOOD_COUNT, HUNGER_RETRY_S):
-                return
+        plans = {food: self._reachable_plan(food, HUNGER_FOOD_COUNT, HUNGER_RETRY_S) for food in foods}
+        reachable = [food for food, plan in plans.items() if plan is not None]
+        if reachable:
+            best = min(reachable, key=lambda food: self._hunger_rank(food, plans[food], foods[food]))
+            self._queue_goal("hunger", best, HUNGER_FOOD_COUNT)
+            return
         if self._last_hungry_log is None or time.monotonic() - self._last_hungry_log >= HUNGRY_LOG_EVERY_S:
             self._last_hungry_log = time.monotonic()
             self._log_event("hungry", food=self._food)
+
+    def _hunger_rank(self, food: str, plan: list[PlanStep], points: int) -> tuple[int, int, int, str]:
+        """Lowest first: no stochastic mining, then no kill of a mob not seen in the last 600 s, then the most points (v3.3h)."""
+        stochastic_mine = any(step.rule.kind == "mine" and kind_of(step.rule, step.action) == "stochastic" for step in plan)
+        now = time.time()
+        unseen_kill = any(
+            step.action.kind == "kill" and now - self.observed_mobs.get(step.action.target, -UNSEEN_MOB_S) >= UNSEEN_MOB_S
+            for step in plan
+        )
+        return (int(stochastic_mine), int(unseen_kill), -points, food)
 
     def _queue_arming_goal(self) -> None:
         """When a threat finds the bot with no sword or axe and no system goal open, queue a goal for the best
@@ -631,20 +664,29 @@ class _Life:
     def _queue_system_goal(self, prefix: str, item: str, count: int, retry_s: float) -> bool:
         """Queue `<prefix>: <count> <item>` unless its last goal failed under `retry_s` ago or the usable rules
         can't reach it. Returns whether it was queued."""
+        if self._reachable_plan(item, count, retry_s) is None:
+            return False
+        self._queue_goal(prefix, item, count)
+        return True
+
+    def _reachable_plan(self, item: str, count: int, retry_s: float) -> list[PlanStep] | None:
+        """The plan for `count` more of `item`, or None when its last system goal failed under `retry_s` ago or the
+        usable rules can't reach it."""
         failed_at = self._system_failed_at.get(item)
         if failed_at is not None and time.monotonic() - failed_at < retry_s:
-            return False
+            return None
         excluded = self._excluded_rules()
         rules = [rule for rule in self.store.usable_rules(self.world_id) if rule.id not in excluded]
         held = normalize.counts(self._inventory_seen)
         try:
-            make_plan(item, held.get(item, 0) + count, held, rules, self.store.skill_for)
+            return make_plan(item, held.get(item, 0) + count, held, rules, self.store.skill_for)
         except PlanningError:
-            return False
+            return None
+
+    def _queue_goal(self, prefix: str, item: str, count: int) -> None:
         text = f"{prefix}: {count} {item}"
         goal_id = self.queue.submit(text, "system")
         self.queue.accept(GoalSpec(id=goal_id, kind="obtain", source="system", text=text, item=item, count=count))
-        return True
 
     @staticmethod
     def _edible_foods() -> dict[str, int]:
@@ -1265,6 +1307,7 @@ class _Life:
         state = {
             "world_id": self.world_id, "goal_index": self.goals_done, "explores_done": self.explores_done, "curriculum": self.curriculum.to_dict(),
             "asked": sorted(self.asked), "repaired": sorted(self.repaired), "blocked": self.blocked, "retests": self.retests, "deaths": self.deaths, "protected": self.protected, "observed_blocks": sorted(self.observed_blocks),
+            "observed_mobs": self.observed_mobs, "asked_mobs": sorted(self.asked_mobs),
             "tokens": self.earlier_tokens + self.llm.total_tokens, "spend_usd": self.llm.spent_usd,
         }
         self.state_path.write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")

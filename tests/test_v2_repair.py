@@ -21,8 +21,8 @@ class WrongIronLLM(LLM):
         super().__init__(mode="fake", cache_path=cache_path, **kwargs)
         self.wrong, self.repairs = wrong, []
 
-    def propose_prior_rules_v2(self, families, known_blocks, world_id):
-        rules = super().propose_prior_rules_v2(families, known_blocks, world_id)
+    def propose_prior_rules_v2(self, families, known_blocks, world_id, mobs=()):
+        rules = super().propose_prior_rules_v2(families, known_blocks, world_id, mobs=mobs)
         for rule in rules:
             if self.wrong and rule.id == "smelt_iron_ingot":
                 rule.preconditions["consumes"] = {"iron_ore": 1}

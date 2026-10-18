@@ -23,6 +23,7 @@ WHITELIST: tuple[str, ...] = (
     "stone_pickaxe", "stone_axe", "stone_shovel", "stone_sword",
     "furnace", "torch", "chest", "ladder",
     "iron_ingot", "iron_pickaxe", "iron_axe", "iron_shovel", "iron_sword", "bucket", "shears",
+    "cooked_beef", "cooked_porkchop", "cooked_chicken", "cooked_mutton",
     # Leather armor joins in M3, when leather can be obtained.
     "iron_helmet", "iron_chestplate", "iron_leggings", "iron_boots", "shield",
 )
