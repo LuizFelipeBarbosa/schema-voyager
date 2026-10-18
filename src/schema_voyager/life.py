@@ -10,6 +10,7 @@ same world. Design: docs/v2-interfaces.md, "The life loop".
 from __future__ import annotations
 
 import json
+import math
 import os
 import time
 from dataclasses import dataclass, replace
@@ -26,10 +27,11 @@ from .curriculum import Curriculum, Goal
 from .episode import EXPLORE_GOAL, Episode
 from .goal_runners import ARM_SWORDS, KILL_SECONDS_PER_KILL, RunnerOutcome, run_guard, run_kill
 from .goals import GoalEntry, GoalInterrupted, GoalQueue, goal_label
-from .inventory import SCAFFOLD_BLOCKS, junk_to_toss
+from .inventory import SCAFFOLD_BLOCKS, junk_to_store, junk_to_toss
 from .llm import LLM, LLMError, SpendCapReached, vanilla_foods, vanilla_items
 from .mineflayer_backend import BackendError
-from .models import Action, EpisodeResult, GoalSpec, Observation, Rule, Task, Unsupported
+from .models import HOME_RANGE, Action, EpisodeResult, GoalSpec, HomeStock, Observation, Rule, Task, Unsupported
+from .places import HOME_STATION_KINDS, Home, Places, home_box, home_from_build, home_from_protected, yard_scan_box, yard_slots
 from .planner import PlanningError, PlanStep, make_plan
 from .schema_store import TRAIN_WORLD, SchemaStore
 from .trace import EpisodeLog
@@ -40,6 +42,7 @@ GOAL_SECONDS_PER_PLAN_STEP = 30  # a user goal's clock: at least this per planne
 BUDGET_PER_PLAN_STEP = 4
 MAX_CHAT_CHARS = 240
 EXPLORES_PER_ROUND = 3
+SLOTS_TRIED_PER_STATION = 3  # yard cells furnishing tries for one station before giving up on it (v3.5c)
 MIN_FREE_SLOTS = 4  # a goal starts with at least this many free slots, if junk can make them
 BLOCKED_GOALS_TO_EXCLUDE = 2  # goals that block a rule with missing_ingredients before the life leaves it out
 # A goal that fails with one of these is followed by an exploration round, to start the next one elsewhere.
@@ -284,6 +287,7 @@ class _Life:
             self.retests: dict[str, str] = dict(state.get("retests", {}))  # retest id -> "match" | "mismatch"
             self.deaths: list[float] = list(state.get("deaths", []))  # time.time() of each death
             self.protected: list[dict[str, Any]] = list(state.get("protected", []))  # what the life built (v3.4b)
+            self.places = Places.from_json(state.get("places"))  # the home, its stations and chest (v3.5b)
             self.earlier_tokens: int = state["tokens"]
             llm.carried_usd = state["spend_usd"]
         else:
@@ -298,6 +302,7 @@ class _Life:
             self.retests = {}
             self.deaths = []
             self.protected = []
+            self.places = Places()
             for path in (self.log_path, self.events_path, self.queue.path):
                 path.write_text("", encoding="utf-8")
         if resume:
@@ -322,7 +327,16 @@ class _Life:
         self._bot_losses: dict[str, int] = {}  # goal id -> times it lost the bot (v3.0h)
         if hooks.bind_store is not None:
             hooks.bind_store(self.store)
-        self._send_protected()
+        if resume and "places" not in state:  # a life saved before v3.5: its first house is home
+            def blueprint_of(goal_id: str) -> dict | None:
+                goal = self.queue.get(goal_id)
+                return goal.spec.blueprint if goal is not None and goal.spec is not None else None
+
+            home = home_from_protected(self.protected, blueprint_of)
+            if home is not None:
+                self._set_home(home)
+                self._save_state()
+        self._send_places()
         if hasattr(backend, "stop_follow"):  # v2's scripted test backends have none
             try:
                 backend.stop_follow()  # a bot left following by an earlier life
@@ -367,8 +381,10 @@ class _Life:
             if self._repair_dead_ingredients(observation):
                 observation = self._learn_priors()  # the repairs may name families nobody asked about
             if spec is None:
+                held = normalize.counts(observation.inventory)
+                held |= {kind: max(held.get(kind, 0), 1) for kind in self.places.stations}  # a home station counts as held
                 goal = self.curriculum.next_goal(
-                    normalize.counts(observation.inventory), self.store, self.world_id, normalize.counts(observation.nearby),
+                    held, self.store, self.world_id, normalize.counts(observation.nearby),
                     excluded=self._excluded_rules(),
                 )
                 if goal is None:
@@ -799,7 +815,9 @@ class _Life:
             if entry.source != "user":
                 continue
             try:
-                parsed = self.llm.parse_goal(entry.text, self._inventory_seen, vanilla_items(), goal_id=entry.id)
+                parsed = self.llm.parse_goal(
+                    entry.text, self._inventory_seen, vanilla_items(), goal_id=entry.id, home=self.places.home is not None
+                )
             except LLMError as error:
                 print(f"[goal] could not parse {entry.id}: {error}")
                 return  # it stays submitted; the next pass tries again
@@ -864,7 +882,8 @@ class _Life:
         remaining = [c.spec for c in children if c.status in ("queued", "awaiting_approval") and c.spec is not None]
         try:
             replanned = self.llm.replan_children(
-                parent.text, done, failed.spec, failed.reason, remaining, self._inventory_seen, vanilla_items()
+                parent.text, done, failed.spec, failed.reason, remaining, self._inventory_seen, vanilla_items(),
+                home=self.places.home is not None,
             )
         except LLMError as error:
             print(f"[goal] could not replan {parent.id}: {error}")
@@ -927,7 +946,7 @@ class _Life:
             time.sleep(self.config.bot_poll_s)
         self._log_event("bot_back", goal_id=goal_id, down_s=round(time.monotonic() - went_down, 1))
         try:
-            self._send_protected()  # a restarted bot has forgotten the boxes
+            self._send_places()  # a restarted bot has forgotten the boxes and the stations
         except BackendError:
             pass  # lost again: the next call finds out
         return True
@@ -982,13 +1001,14 @@ class _Life:
         name = f"g{index:03d}"
         observation = self.backend.begin_episode()
         self._inventory_seen = observation.inventory
+        observation = self._furnish_home(observation)
         free_slots_before = observation.free_slots
-        observation, tossed = self._make_room(spec.item, observation)
+        observation, tossed, stored = self._make_room(spec.item, observation)
         if spec.kind == "build":
-            self._run_build_goal(spec, index, started_at, observation, tossed)
+            self._run_build_goal(spec, index, started_at, observation, tossed, stored)
             return False
         if spec.kind in ("kill", "guard"):
-            self._run_kill_or_guard_goal(spec, index, started_at, observation, tossed)
+            self._run_kill_or_guard_goal(spec, index, started_at, observation, tossed, stored)
             return False
         if goal is None:
             goal = self._start_queued_goal(spec, observation)
@@ -1011,9 +1031,9 @@ class _Life:
         episode = Episode(
             episode_id=f"D/life/{name}-{goal.item}", system="D", task=task, layout_seed=0, world_id=self.world_id,
             backend=self.backend, llm=self.llm, log=log, inventory=dict(observation.inventory), natural=True,
-            deadline=time.monotonic() + min(goal_clock_s, max(self._remaining_s(), 0.0)),
+            deadline=time.monotonic() + min(goal_clock_s, max(self._remaining_s(), 0.0)), home=self._home_stock(),
         )
-        self._log_goal_start(log, spec, goal, task, index, observation, free_slots_before, tossed)
+        self._log_goal_start(log, spec, goal, task, index, observation, free_slots_before, tossed, stored)
 
         # `goal` is left out for a curriculum goal (its default None): v2's tests stub run_schemavoyager without it.
         goal_arg = {} if spec.source == "curriculum" else {"goal": spec}
@@ -1022,12 +1042,13 @@ class _Life:
             lambda: run_schemavoyager(episode, self.store, self._before_step, excluded=self._excluded_rules(), **goal_arg),
             life_clock_limits_goal,
         )
-        self._end_goal(spec, goal, index, budget, started_at, episode, result, tossed, interrupt)
+        self._end_goal(spec, goal, index, budget, started_at, episode, result, tossed, interrupt, stored=stored)
         steps = [event for event in log.events if event["kind"] == "step"]
         return not result.success and interrupt is None and bool(steps) and steps[-1]["error"] in MISSING_RESOURCE_ERRORS
 
     def _run_build_goal(
-        self, spec: GoalSpec, index: int, started_at: float, observation: Observation, tossed: dict[str, int]
+        self, spec: GoalSpec, index: int, started_at: float, observation: Observation, tossed: dict[str, int],
+        stored: dict[str, Any],
     ) -> None:
         """Run an approved build goal in one episode: pick and protect its site, then the build runner (v3.4b).
         A site that can't be had still gets an episode, so the trace shows `build_failed`."""
@@ -1059,9 +1080,9 @@ class _Life:
         episode = Episode(
             episode_id=f"D/life/{name}-{BUILD_GOAL}", system="D", task=task, layout_seed=0, world_id=self.world_id,
             backend=self.backend, llm=self.llm, log=log, inventory=dict(observation.inventory), natural=True,
-            deadline=time.monotonic() + min(goal_clock_s, max(self._remaining_s(), 0.0)),
+            deadline=time.monotonic() + min(goal_clock_s, max(self._remaining_s(), 0.0)), home=self._home_stock(),
         )
-        self._log_goal_start(log, spec, goal, task, index, observation, free_slots_before, tossed)
+        self._log_goal_start(log, spec, goal, task, index, observation, free_slots_before, tossed, stored)
 
         if isinstance(plan, str):
             log.event("build_failed", reason=plan)
@@ -1084,10 +1105,11 @@ class _Life:
 
             result, interrupt = self._run_until_interrupted(spec, episode, run, self._remaining_s() <= goal_clock_s)
             outcome = BuildOutcome(result, reason, plan.placed, total)
-        self._end_goal(spec, goal, index, budget, started_at, episode, outcome.result, tossed, interrupt, build=outcome)
+        self._end_goal(spec, goal, index, budget, started_at, episode, outcome.result, tossed, interrupt, build=outcome, stored=stored)
 
     def _run_kill_or_guard_goal(
-        self, spec: GoalSpec, index: int, started_at: float, observation: Observation, tossed: dict[str, int]
+        self, spec: GoalSpec, index: int, started_at: float, observation: Observation, tossed: dict[str, int],
+        stored: dict[str, Any],
     ) -> None:
         """Run a kill or guard goal in one episode (v3.3i): arm if need be, then the kill or guard runner."""
         if not self.queue.mark(spec.id, "running"):
@@ -1108,9 +1130,9 @@ class _Life:
         episode = Episode(
             episode_id=f"D/life/{name}-{item}", system="D", task=task, layout_seed=0, world_id=self.world_id,
             backend=self.backend, llm=self.llm, log=log, inventory=dict(observation.inventory), natural=True,
-            deadline=time.monotonic() + min(goal_clock_s, max(self._remaining_s(), 0.0)),
+            deadline=time.monotonic() + min(goal_clock_s, max(self._remaining_s(), 0.0)), home=self._home_stock(),
         )
-        self._log_goal_start(log, spec, goal, task, index, observation, free_slots_before, tossed)
+        self._log_goal_start(log, spec, goal, task, index, observation, free_slots_before, tossed, stored)
 
         def check_interrupts() -> None:
             self._inventory_seen = dict(episode.inventory)  # what a death in this poll may have cost
@@ -1126,7 +1148,7 @@ class _Life:
             ),
             self._remaining_s() <= goal_clock_s,
         )
-        self._end_goal(spec, goal, index, budget, started_at, episode, result, tossed, interrupt, runner=outcome)
+        self._end_goal(spec, goal, index, budget, started_at, episode, result, tossed, interrupt, runner=outcome, stored=stored)
 
     def _run_until_interrupted(
         self, spec: GoalSpec, episode: Episode, run: Callable[[], EpisodeResult], life_clock_limits_goal: bool
@@ -1161,14 +1183,19 @@ class _Life:
 
     def _log_goal_start(
         self, log: EpisodeLog, spec: GoalSpec, goal: Goal, task: Task, index: int, observation: Observation,
-        free_slots_before: int | None, tossed: dict[str, int],
+        free_slots_before: int | None, tossed: dict[str, int], stored: dict[str, Any] | None = None,
     ) -> None:
-        """The `goal` event, what was tossed to make room (also said in chat), and the repairs and retests so far."""
+        """The `goal` event, what was stored in the home chest and what was tossed to make room (also said in chat),
+        and the repairs and retests so far."""
         asked = {} if spec.source == "curriculum" else {"asked": spec.count}
         log.event(
             "goal", index=index, item=goal.item, count=task.goal_count, reason=goal.reason, budget=task.budget,
             goal_id=spec.id, source=spec.source, text=spec.text, goal_kind=spec.kind, **asked,
         )
+        if stored:
+            log.event("stored", **stored)
+            listed = ", ".join(f"{item.lstrip('#')} x{count}" for item, count in stored["items"].items())
+            self.backend.say(f"Putting {listed} in my chest."[:MAX_CHAT_CHARS])
         if tossed:
             log.event("tossed", items=tossed, free_slots_before=free_slots_before, free_slots_after=observation.free_slots)
             names = [f"{count} {item.lstrip('#')}" for item, count in tossed.items()]
@@ -1200,7 +1227,7 @@ class _Life:
     def _end_goal(
         self, spec: GoalSpec, goal: Goal, index: int, budget: int, started_at: float, episode: Episode,
         result: EpisodeResult, tossed: dict[str, int], interrupt: str | None, build: BuildOutcome | None = None,
-        runner: RunnerOutcome | None = None,
+        runner: RunnerOutcome | None = None, stored: dict[str, Any] | None = None,
     ) -> None:
         """The one ending of a goal (v3.1d): done, failed, cancelled, preempted or cut short by the life's clock.
         A build goal also settles its protected entry (v3.4b)."""
@@ -1241,8 +1268,13 @@ class _Life:
                     chat = cancelled_chat
                 if spec.source == "system" and spec.text.startswith(("hunger:", "arm:")):
                     self._system_failed_at[spec.item] = time.monotonic()
+        if self.places.home is not None:
+            self._write_back_home(episode.home)
         if build is not None:
             self._settle_protected_entry(spec.id, build.placed)
+            if entry is not None and entry["status"] == "built" and self.places.home is None:
+                self._set_home(home_from_build(entry, spec.blueprint))
+                self._update_protected()  # the home's box grows by the yard
         if interrupt is None:
             for rule, error in episode.blocked_rules.items():
                 if error == "missing_ingredients":
@@ -1254,6 +1286,7 @@ class _Life:
         self.goals_done = index
         record = self._goal_record(index, goal, budget, result, started_at, interrupted=interrupt is not None)
         record |= {"goal_id": spec.id, "source": spec.source, "text": spec.text, "goal_kind": spec.kind, "tossed": tossed}
+        record["stored"] = stored["items"] if stored else {}
         if interrupt is not None:
             record["interrupt"] = interrupt
         parent = self.queue.parent_of(spec.id) if queued_goal else None
@@ -1271,6 +1304,7 @@ class _Life:
             self._say(chat)
         if parent is not None:
             self._advance_parent(spec.id)
+        self._queue_chest_goal()
         self._save(record)
         if self.hooks.after_goal is not None:
             self.hooks.after_goal(record)
@@ -1332,25 +1366,56 @@ class _Life:
         failed = [step for step in steps if step["error"]]
         return in_words(failed[-1]) if failed else "failed"
 
-    def _make_room(self, goal_item: str | None, observation: Observation) -> tuple[Observation, dict[str, int]]:
-        """Toss junk when the bot is nearly full. Returns the observation to start the goal from
-        (a new one after a toss) and what was tossed. The goal's item and what the user asked for are never junk;
-        a build goal has no item (None), and keeps its materials and the scaffold blocks."""
+    def _make_room(
+        self, goal_item: str | None, observation: Observation
+    ) -> tuple[Observation, dict[str, int], dict[str, Any]]:
+        """Make room when the bot is nearly full: store junk and spare materials in the home chest if it is within
+        range, then toss junk if still short (v3.5c). Returns the observation to start the goal from (a new one after a
+        store or toss), what was tossed, and the `stored` event's fields (empty when nothing was stored). The goal's
+        item and what the user asked for are never junk; a build goal has no item (None), and keeps its materials
+        and the scaffold blocks."""
         if observation.free_slots is None or observation.free_slots >= MIN_FREE_SLOTS:
-            return observation, {}
+            return observation, {}, {}
         wanted = (
             self._obtain_items("queued") | self._obtain_items("done", source="user") | self._build_families("queued", "running")
             | set(self._edible_foods())
         )
         wanted |= {goal_item} if goal_item else set(SCAFFOLD_BLOCKS)
+        rules = self.store.usable_rules(self.world_id)
+
+        stored: dict[str, Any] = {}
+        chest = self.places.stations.get("chest")
+        if chest is not None and math.dist(observation.position, _cell_centre(chest)) <= HOME_RANGE:
+            items = junk_to_store(
+                observation.inventory, rules, wanted, observation.free_slots, min_free=MIN_FREE_SLOTS
+            )
+            if items:
+                observation, stored = self._store_in_chest(chest, items, observation)
         junk = junk_to_toss(
-            observation.inventory, self.store.usable_rules(self.world_id), wanted, observation.free_slots,
-            min_free=MIN_FREE_SLOTS,
+            observation.inventory, rules, wanted, observation.free_slots, min_free=MIN_FREE_SLOTS
         )
         if not junk:
-            return observation, {}
+            return observation, {}, stored
         tossed = self.backend.toss(junk)
-        return self.backend.observe(), tossed
+        return self.backend.observe(), tossed, stored
+
+    def _store_in_chest(
+        self, chest: tuple[int, int, int], items: dict[str, int], observation: Observation
+    ) -> tuple[Observation, dict[str, Any]]:
+        """Deposit items in the home chest. Returns a fresh observation and the `stored` event's fields (empty when
+        nothing went in). A chest that is not there any more is dropped from the home's stations."""
+        result = self.backend.deposit(chest, items)
+        if result.error == "not_found":
+            self._drop_station("chest")
+        elif result.error is None:
+            self.places.stored = dict(result.contents)
+            self._save_state()
+        after = self.backend.observe()
+        if result.error is not None or not result.moved:
+            return after, {}
+        return after, {
+            "items": result.moved, "free_slots_before": observation.free_slots, "free_slots_after": after.free_slots
+        }
 
     def _run_exploration_round(self, reason: str = "nothing left to learn here", reset_skips: bool = True) -> None:
         """Walk a few compass directions (cycling on across rounds) so the next goal starts
@@ -1371,7 +1436,7 @@ class _Life:
         episode = Episode(
             episode_id=f"D/life/{name}-explore", system="D", task=task, layout_seed=0, world_id=self.world_id,
             backend=self.backend, llm=self.llm, log=log, inventory=dict(observation.inventory), natural=True,
-            deadline=time.monotonic() + min(self.config.goal_wall_clock_s, max(self._remaining_s(), 0.0)),
+            deadline=time.monotonic() + min(self.config.goal_wall_clock_s, max(self._remaining_s(), 0.0)), home=self._home_stock(),
         )
         goal = Goal(EXPLORE_GOAL, 1, 0, (), reason)
         log.event("goal", index=index, item=goal.item, count=goal.count, reason=goal.reason, budget=task.budget)
@@ -1421,11 +1486,15 @@ class _Life:
         return next((entry for entry in self.protected if entry["goal_id"] == goal_id), None)
 
     def _protected_boxes(self, except_goal: str | None = None) -> list[blueprints.Box]:
-        """The site box of every protected entry (v3.4b), but the one of `except_goal`."""
-        return [
-            blueprints.site_box({"size": entry["size"]}, tuple(entry["origin"]))
+        """The site box of every protected entry (v3.4b), but the one of `except_goal`; the home's is its box with the
+        yard (v3.5e). At most 32 boxes: the closest ones are merged."""
+        home = self.places.home
+        boxes = [
+            home_box(home) if home is not None and entry["goal_id"] == home.goal_id
+            else blueprints.site_box({"size": entry["size"]}, tuple(entry["origin"]))
             for entry in self.protected if entry["goal_id"] != except_goal
         ]
+        return blueprints.merge_boxes(boxes)
 
     def _add_protected_entry(self, spec: GoalSpec, origin: tuple[int, int, int]) -> None:
         self.protected.append(
@@ -1448,19 +1517,97 @@ class _Life:
             self.protected.remove(entry)
         self._update_protected()
 
+    # -- the home (v3.5) ---------------------------------------------------
+
+    def _home_stock(self) -> HomeStock | None:
+        return self.places.stock() if self.places.home is not None else None
+
+    def _set_home(self, home: Home) -> None:
+        """The first house built is home. The caller saves and re-sends the protected boxes."""
+        self.places.home = home
+        self._log_event("home_set", home=self.places.to_json()["home"])
+        x, y, z = home.origin
+        self._say(f"This is my home now: {home.name} at {x} {y} {z}.")
+
+    def _furnish_home(self, observation: Observation) -> Observation:
+        """At the start of a goal, put the chest, crafting table and furnace the bot holds in the home's yard (v3.5c).
+        Returns the observation to go on from (a new one if anything was scanned or placed)."""
+        home = self.places.home
+        stations = self.places.stations
+        unplaced = [kind for kind in HOME_STATION_KINDS if observation.inventory.get(kind, 0) >= 1 and kind not in stations]
+        if home is None or not unplaced or math.dist(observation.position, home.origin) > HOME_RANGE:
+            return observation
+
+        scan = self.backend.scan(*yard_scan_box(home))
+        for kind in unplaced:
+            failure = None
+            for cell in yard_slots(home, scan, stations.values())[:SLOTS_TRIED_PER_STATION]:
+                outcome = self.backend.act(Action("place", target=kind, pos=cell, scaffold=False))
+                if outcome.ok:
+                    stations[kind] = cell
+                    if kind == "chest":
+                        self.places.stored = {}
+                    self._save_state()
+                    self._send_places()
+                    self._log_event("home_placed", station=kind, pos=list(cell))
+                    self._say(f"I put a {kind.replace('_', ' ')} by my house at {cell[0]} {cell[1]} {cell[2]}.")
+                    failure = None
+                    break
+                failure = {"station": kind, "pos": list(cell), "error": outcome.error}
+                if outcome.error not in ("occupied", "no_support"):
+                    break
+            if failure is not None:
+                self._log_event("home_place_failed", **failure)
+        observation = self.backend.observe()
+        self._inventory_seen = observation.inventory
+        return observation
+
+    def _write_back_home(self, home: HomeStock | None) -> None:
+        """After a goal: the chest's contents as the agent last saw them, and the stations it found gone dropped."""
+        if home is None:
+            return
+        if "chest" in self.places.stations:
+            self.places.stored = dict(home.stored)
+        for kind in HOME_STATION_KINDS:
+            if kind in home.lost and kind in self.places.stations:
+                self._drop_station(kind)
+
+    def _drop_station(self, kind: str) -> None:
+        """A station or chest found gone is forgotten (a lost chest empties `stored`)."""
+        pos = self.places.stations.pop(kind)
+        if kind == "chest":
+            self.places.stored = {}
+        self._save_state()
+        self._send_places()
+        self._log_event("home_lost", station=kind, pos=list(pos))
+
+    def _queue_chest_goal(self) -> None:
+        """When a goal ends and the home has no chest, none is held and none was ever asked for, queue one system
+        goal to get one, once per home (v3.5c)."""
+        places = self.places
+        if places.home is None or "chest" in places.stations or self._inventory_seen.get("chest", 0) > 0 or places.chest_goal:
+            return
+        text = "a chest for my home"
+        goal_id = self.queue.submit(text, "system")
+        self.queue.accept(GoalSpec(id=goal_id, kind="obtain", source="system", text=text, item="chest", count=1))
+        places.chest_goal = goal_id
+
     def _update_protected(self) -> None:
         """Save the list and send its boxes to the backend, after every change."""
         self._save_state()
-        self._send_protected()
+        self._send_places()
 
-    def _send_protected(self) -> None:
+    def _send_places(self) -> None:
+        """Send the protected boxes and the home stations to the backend."""
         if hasattr(self.backend, "set_protected") and not self._bot_gone:  # v2's scripted test backends have none
             self.backend.set_protected(self._protected_boxes())
+        if hasattr(self.backend, "set_stations") and not self._bot_gone:
+            self.backend.set_stations({kind: pos for kind, pos in self.places.stations.items() if kind != "chest"})
 
     def _save_state(self) -> None:
         state = {
             "world_id": self.world_id, "goal_index": self.goals_done, "explores_done": self.explores_done, "curriculum": self.curriculum.to_dict(),
-            "asked": sorted(self.asked), "repaired": sorted(self.repaired), "blocked": self.blocked, "retests": self.retests, "deaths": self.deaths, "protected": self.protected, "observed_blocks": sorted(self.observed_blocks),
+            "asked": sorted(self.asked), "repaired": sorted(self.repaired), "blocked": self.blocked, "retests": self.retests, "deaths": self.deaths, "protected": self.protected, "places": self.places.to_json(), "observed_blocks": sorted(self.observed_blocks),
             "observed_mobs": self.observed_mobs, "asked_mobs": sorted(self.asked_mobs),
             "tokens": self.earlier_tokens + self.llm.total_tokens, "spend_usd": self.llm.spent_usd,
         }
@@ -1474,3 +1621,7 @@ class _Life:
 
     def _remaining_s(self) -> float:
         return self.config.wall_clock_s - (time.monotonic() - self.started)
+
+
+def _cell_centre(cell: tuple[int, int, int]) -> tuple[float, float, float]:
+    return cell[0] + 0.5, cell[1] + 0.5, cell[2] + 0.5

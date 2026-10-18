@@ -95,6 +95,12 @@ def logs_held(world):
     return sum(count for item, count in world.observe().inventory.items() if item.endswith("_log"))
 
 
+def home_box_of(saved):
+    """The first house built is home (v3.5): its protected box is the site box grown by the yard."""
+    (ox, oy, oz), (width, height, depth) = saved["origin"], saved["size"]
+    return (ox - 2, oy - 1, oz - 2), (width + 4, height + 1, depth + 4)
+
+
 def site_box_of(saved):
     return blueprint.site_box(FAKE_HUT, tuple(saved["origin"]))
 
@@ -111,7 +117,7 @@ def test_a_build_goal_runs_from_submission_to_done(tmp_path):
     origin = tuple(saved["origin"])
     scan = world.scan(*blueprint.site_box(FAKE_HUT, origin))
     assert builder.mismatches(FAKE_HUT, origin, scan) == []
-    assert world.protected_calls[-1] == [site_box_of(saved)]
+    assert world.protected_calls[-1] == [home_box_of(saved)]
     assert any(line.startswith("Plan for u001: small hut") for line in world.said)
     assert "Approved u001: small hut." in world.said and "Done: small hut" in world.said
     transitions = json.loads((tmp_path / "store.json").read_text())["transitions"]
@@ -143,7 +149,7 @@ def test_a_later_log_goal_never_takes_a_block_of_the_house(tmp_path):
     logs_before = logs_held(world)
     world.events = {world.status_calls + 2: chat("goal", "10 logs")}
 
-    run(tmp_path, world, resume=True, max_goals=2)
+    run(tmp_path, world, resume=True, max_goals=3)  # the chest goal for the new home goes first
 
     assert entry(tmp_path, "u002").status == "done"
     assert logs_held(world) > logs_before
@@ -157,7 +163,7 @@ def test_resume_sends_the_saved_boxes_before_any_goal(tmp_path):
 
     run(tmp_path, resumed, resume=True, max_goals=2, wall_clock_s=0.2)
 
-    assert resumed.protected_calls[0] == [site_box_of(saved)]
+    assert resumed.protected_calls[0] == [home_box_of(saved)]
     assert resumed.first_episode_after_protected is not False
 
 
