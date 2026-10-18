@@ -286,6 +286,7 @@ class _Life:
             self.config.run_dir / "episodes" / f"D_life_{name}_{goal.item.replace('#', '')}.jsonl",
             label=f"{name} {goal.item}", say=self.backend.say,
         )
+        life_clock_limits_goal = self._remaining_s() <= self.config.goal_wall_clock_s
         episode = Episode(
             episode_id=f"D/life/{name}-{goal.item}", system="D", task=task, layout_seed=0, world_id=self.world_id,
             backend=self.backend, llm=self.llm, log=log, inventory=dict(observation.inventory), natural=True,
@@ -295,22 +296,25 @@ class _Life:
         self.backend.say(f"Next goal: {goal.item} ({goal.reason})"[:MAX_CHAT_CHARS])
 
         result = run_schemavoyager(episode, self.store, self.hooks.before_step)
-        self.curriculum.record(goal, result.success)
+        # Cut short by the life's own clock (not the goal's deadline or budget): no attempt to count.
+        interrupted = not result.success and life_clock_limits_goal and episode.out_of_time and episode.budget_left > 0
+        if not interrupted:
+            self.curriculum.record(goal, result.success)
         self.goals_done = index
-        record = self._goal_record(index, goal, budget, result, started_at)
+        record = self._goal_record(index, goal, budget, result, started_at, interrupted)
         self._save(record)
         if self.hooks.after_goal is not None:
             self.hooks.after_goal(record)
 
     def _goal_record(
-        self, index: int, goal: Goal, budget: int, result: EpisodeResult, started_at: float
+        self, index: int, goal: Goal, budget: int, result: EpisodeResult, started_at: float, interrupted: bool
     ) -> dict[str, Any]:
         certified = self._certified_ids()
         calls = self.llm.calls[self._calls_marked:]
         record = {
             "index": index, "goal": goal.item, "count": goal.count, "reason": goal.reason,
             "plan_length": goal.plan_length, "budget": budget,
-            "outcome": "success" if result.success else "failed", "actions": result.actions,
+            "outcome": "success" if result.success else "interrupted" if interrupted else "failed", "actions": result.actions,
             "certified_now": sorted(certified - self._certified_marked), "certified_total": len(certified),
             "llm_calls": len(calls), "tokens": sum(call.tokens for call in calls),
             "spend_usd": round(self.llm.spent_usd, 4), "started": started_at, "ended": time.time(),

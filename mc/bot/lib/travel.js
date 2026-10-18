@@ -2,7 +2,7 @@
 // and walked on the way into position, before the step's own dig / craft /
 // smelt. Everything here is tolerant; it never counts as evidence for a rule.
 
-const { DiggingMovements } = require('./movements')
+const { DiggingMovements, cheapestHarvestTool } = require('./movements')
 const {
   TICK_MS, addCount, countGains, emptyHand, findInventoryItem, inventoryCounts, round, sleepTicks
 } = require('./world')
@@ -75,15 +75,19 @@ async function reequip (bot, toolName) {
   else await emptyHand(bot)
 }
 
-// Runs `fn` with a fresh digging Movements object and restores the movements
-// that were set before (the v1 world-preserving ones), even on failure.
+// Runs `fn` with a fresh digging Movements object and the cheapest-tool dig
+// choice, and restores the movements that were set before (the v1
+// world-preserving ones) and the pathfinder's own tool choice, even on failure.
 async function withDiggingMovements (bot, options, fn) {
   const previous = bot.pathfinder.movements
+  const previousTool = bot.pathfinder.bestHarvestTool
   bot.pathfinder.setMovements(new DiggingMovements(bot, options))
+  bot.pathfinder.bestHarvestTool = cheapestHarvestTool(bot)
   try {
     return await fn()
   } finally {
     bot.pathfinder.setMovements(previous)
+    bot.pathfinder.bestHarvestTool = previousTool
   }
 }
 
