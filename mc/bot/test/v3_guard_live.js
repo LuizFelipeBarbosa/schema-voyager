@@ -19,7 +19,10 @@ const { RconClient, health, loadEnv, post, sleep } = require('./v2_helpers')
 const POLL_INTERVAL_MS = 250
 const FIGHT_START_TIMEOUT_MS = 8000
 const CREEPER_FLEE_TIMEOUT_MS = 5000
+const BUSY_FIRST_RETRY_MS = 250
 const BUSY_RETRY_INTERVAL_MS = 500
+const CREEPER_MIN_MOVE_BLOCKS = 3
+const NO_REFIGHT_WINDOW_MS = 3000
 const BUSY_RETRY_TIMEOUT_MS = 60000
 const NO_FIGHT_WINDOW_MS = 3000
 const BLOCK_UPDATE_DELAY_MS = 1000
@@ -60,6 +63,17 @@ function distance (a, b) {
   return Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z)
 }
 
+// POSTs, and retries a 409 busy the way the Python client does: after 0.25 s, then every 0.5 s, up to 60 s.
+async function postRetryingBusy (path, body) {
+  const deadline = Date.now() + BUSY_RETRY_TIMEOUT_MS
+  let response = await post(path, body)
+  for (let wait = BUSY_FIRST_RETRY_MS; response.status === 409 && Date.now() < deadline; wait = BUSY_RETRY_INTERVAL_MS) {
+    await sleep(wait)
+    response = await post(path, body)
+  }
+  return response
+}
+
 async function main () {
   loadEnv()
   const username = process.env.BOT_USERNAME || 'VoyagerBot'
@@ -88,8 +102,9 @@ async function main () {
     // A flat arena, a glass box with a stone floor: the bot's surroundings may
     // be rock, water or ice, where a mob is out of sight, a target out of reach
     // and a dug-out space floods.
-    await rcon.exec(`${atBot} fill ~-6 ~-1 ~-6 ~14 ~5 ~6 minecraft:glass hollow`)
-    await rcon.exec(`${atBot} fill ~-6 ~-1 ~-6 ~14 ~-1 ~6 minecraft:stone`)
+    // 31 x 31 and 6 high: 6000 blocks, well under the 32768 of one fill. Big enough to back off in.
+    await rcon.exec(`${atBot} fill ~-15 ~-1 ~-15 ~15 ~5 ~15 minecraft:glass hollow`)
+    await rcon.exec(`${atBot} fill ~-15 ~-1 ~-15 ~15 ~-1 ~15 minecraft:stone`)
     await resetBetweenChecks()
 
     await check('1: a husk cuts into a /mine, and the retried /mine finishes', async () => {
@@ -110,7 +125,7 @@ async function main () {
       if (interrupted.detail.outcome === 'fled') assert.ok(types.includes('fled'), `no fled: ${seen}`)
 
       await resetBetweenChecks()
-      const { status: httpStatus, body: retried } = await post('/mine', { block: 'oak_log' })
+      const { status: httpStatus, body: retried } = await postRetryingBusy('/mine', { block: 'oak_log' })
       const retriedSeen = `retry ${httpStatus} ${short({ ok: retried.ok, error: retried.error, detail: retried.detail, block_removed: retried.block_removed, drops: retried.drops, picked_up: retried.picked_up })}`
       assert.equal(retried.ok, true, retriedSeen)
       assert.equal(retried.block_removed, true, retriedSeen)
@@ -120,23 +135,22 @@ async function main () {
     })
 
     await resetBetweenChecks()
-    await check('2: the bot backs off from a creeper', async () => {
+    await check('2: the bot backs off from a creeper and never fights it', async () => {
       const before = (await getStatus()).position
       const since = (await getStatus()).last_seq
       await rcon.exec(`${atBot} summon minecraft:creeper ~4 ~ ~`)
 
-      const fledStatus = await pollStatus(since, CREEPER_FLEE_TIMEOUT_MS, (s) => s.events.some((event) => event.type === 'fled'))
-      await sleep(2000) // backing off
+      // The glass may corner the bot, so the creeper's distance proves nothing: the bot must have moved.
+      const backedOff = await pollStatus(since, CREEPER_FLEE_TIMEOUT_MS, (s) =>
+        s.events.some((event) => event.type === 'fled' && event.reason === 'creeper') &&
+        distance(before, s.position) >= CREEPER_MIN_MOVE_BLOCKS)
       const later = await getStatus(since)
       await killMobs() // before it explodes
-      assert.ok(fledStatus, `no fled event within ${CREEPER_FLEE_TIMEOUT_MS} ms; events ${short(later.events)}`)
-      const fled = fledStatus.events.find((event) => event.type === 'fled')
-      const threat = later.events.find((event) => event.type === 'threat')
-      assert.equal(fled.reason, 'creeper', `fled ${short(fled)}`)
-      assert.equal(threat.mob, 'creeper', `threat ${short(threat)}`)
-      const laterDistance = later.nearby_entities.creeper?.nearest
-      assert.ok(laterDistance > threat.distance, `creeper at ${laterDistance} after ${threat.distance}; events ${short(later.events)}`)
-      return `threat distance ${threat.distance}, fled ${short(fled)}, creeper ${laterDistance} blocks away 2 s later, bot moved ${distance(before, later.position).toFixed(1)}`
+      const seen = `bot moved ${distance(before, later.position).toFixed(1)}; events ${short(later.events)}`
+      assert.ok(backedOff, `no fled (creeper) and ${CREEPER_MIN_MOVE_BLOCKS} blocks moved within ${CREEPER_FLEE_TIMEOUT_MS} ms; ${seen}`)
+      const fought = later.events.find((event) => event.type === 'fight_start' && event.target === 'creeper')
+      assert.equal(fought, undefined, `fought a creeper; ${seen}`)
+      return seen
     })
 
     await resetBetweenChecks()
@@ -151,21 +165,14 @@ async function main () {
       assert.equal(first.status, 409, firstSeen)
       assert.deepEqual({ error: first.body.error, detail: first.body.detail }, { error: 'busy', detail: 'guard' }, firstSeen)
 
-      const deadline = Date.now() + BUSY_RETRY_TIMEOUT_MS
-      let retries = 0
-      let observed
-      do {
-        await sleep(BUSY_RETRY_INTERVAL_MS)
-        observed = await post('/observe', {})
-        retries++
-      } while (observed.status === 409 && Date.now() < deadline)
-      assert.equal(observed.status, 200, `${firstSeen}; still ${observed.status} ${short(observed.body)} after ${retries} retries`)
+      const observed = await postRetryingBusy('/observe', {})
+      assert.equal(observed.status, 200, `${firstSeen}; still ${observed.status} ${short(observed.body)} after retrying`)
       assert.equal(observed.body.ok, true, short(observed.body))
 
       const events = (await getStatus(since)).events
       const fightEnd = events.find((event) => event.type === 'fight_end')
       assert.ok(fightEnd, `no fight_end; events ${short(events)}`)
-      return `${firstSeen}; /observe ok after ${retries} retries; fight_end ${short(fightEnd)}`
+      return `${firstSeen}; /observe ok after retrying; fight_end ${short(fightEnd)}`
     })
 
     await resetBetweenChecks()
@@ -187,6 +194,23 @@ async function main () {
       assert.deepEqual(on.body, { ok: true, mode: 'defend' })
       assert.equal((await getStatus()).guard.mode, 'defend')
       return `bogus ${bogus.status}, off ${short(off.body)}, no fight_start in ${NO_FIGHT_WINDOW_MS} ms, back to ${short(on.body)}`
+    })
+
+    await resetBetweenChecks()
+    await check('5: a killed husk is not fought again', async () => {
+      const since = (await getStatus()).last_seq
+      await rcon.exec(`${atBot} summon minecraft:husk ~3 ~ ~`)
+      const ended = await pollStatus(since, FIGHT_START_TIMEOUT_MS + BUSY_RETRY_TIMEOUT_MS, (s) => s.events.some((event) => event.type === 'fight_end'))
+      assert.ok(ended, 'no fight_end')
+      const killed = ended.events.find((event) => event.type === 'fight_end' && event.outcome === 'killed')
+      assert.ok(killed, `the husk was not killed; events ${short(ended.events)}`)
+      const first = ended.events.find((event) => event.type === 'fight_start')
+
+      await sleep(NO_REFIGHT_WINDOW_MS)
+      const events = (await getStatus(since)).events
+      const refights = events.filter((event) => event.type === 'fight_start' && event.id === first.id && event.seq > killed.seq)
+      assert.equal(refights.length, 0, `fought husk ${first.id} again: ${short(refights)}`)
+      return `husk ${first.id} killed at seq ${killed.seq}, no new fight_start with it in ${NO_REFIGHT_WINDOW_MS} ms`
     })
   } catch (err) {
     failures++
