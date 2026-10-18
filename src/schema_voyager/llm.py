@@ -327,6 +327,35 @@ class LLM:
             revisions.append(revision)
         return revisions
 
+    def repair_rule_v2(self, rule: Rule, dead_items: list[str], obtainable: list[str], world_id: str) -> list[Rule]:
+        """Up to 3 ranked alternatives for a rule that needs items nothing the agent knows
+        produces (so it can never be executed, and never contradicted)."""
+        if self.mode == "fake":
+            payload = {"rules": _fake_repairs_v2(rule)}
+            self._meter_fake("repair_rule", json.dumps(payload))
+        else:
+            user = (
+                f"This rule needs items the agent cannot obtain by any rule it knows:\n"
+                f"{json.dumps(_from_rule_v2(rule), indent=2)}\n\n"
+                f"Items it cannot obtain: {', '.join(dead_items)}.\n"
+                f"Items the agent can obtain: {', '.join(obtainable) or 'none yet'}.\n\n"
+                f"Write up to 3 alternative rules for the same action ({rule.kind}) and the same subject ({rule.subject}), "
+                "best first. Each must be a complete rule that only uses obtainable items, or items obtainable by "
+                "mining, crafting or smelting from them, and gets a one-sentence rationale."
+            )
+            payload = self._json_call("repair_rule", WORLD_MODEL_SYSTEM_V2, user, RULES_SCHEMA_V2)
+
+        repairs = []
+        for rank, raw in enumerate(payload["rules"][:3]):
+            if raw["action_type"] != rule.kind or normalize.family(raw["subject"].removeprefix("minecraft:")) != rule.subject:
+                continue
+            repair = _to_rule_v2(raw, source="revision", scope=world_id)
+            repair.id = f"{rule.id}.fix{rank + 1}@{world_id}"
+            repair.rank = rank
+            repair.revision_of = rule.id
+            repairs.append(repair)
+        return repairs
+
     def expand_frontier(self, frontier: list[str], candidates: list[str], certified: list[str]) -> list[str]:
         """Up to 3 items to add to the curriculum's frontier. `candidates` is the part
         of the whitelist not yet in it, and nothing outside `candidates` is returned."""
@@ -581,6 +610,15 @@ def _fake_revisions_v2(rule: Rule, counterexample: dict[str, Any]) -> list[dict[
         {**base, "tool_any": above, "rationale": "needs a higher-tier pickaxe than the one used"},
         {**base, "tool_any": tiers[2:], "rationale": "needs an iron-tier pickaxe"},
         {**base, "tool_any": [], "yields": [], "rationale": "drops nothing in this world"},
+    ]
+
+
+def _fake_repairs_v2(rule: Rule) -> list[dict[str, Any]]:
+    """Offline stand-in: the whitelist's vanilla rule for the same action and subject."""
+    vanilla = json.loads((DATA_DIR / "prior_rules_v2.json").read_text(encoding="utf-8"))["rules"]
+    return [
+        raw for raw in vanilla
+        if raw["action_type"] == rule.kind and normalize.family(raw["subject"]) == rule.subject
     ]
 
 
