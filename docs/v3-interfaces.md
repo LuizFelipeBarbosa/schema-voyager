@@ -501,6 +501,12 @@ Plan S0.10. Lanes: `station-dig`, `mobs-seen`, `panel-pid`, `explore-cap`; then 
   `_observe_mobs` does for an observation. `_poll_bot` runs before every step of every runner and on idle passes,
   so a mob seen during a goal is asked about (`propose_prior_rules_v2(..., mobs=...)`) at the next `_learn_priors`,
   before the next goal.
+- Live (`runs/v3-polish2-hunger`), polls between steps miss a mob seen during one long action (a 30-60 s `/mine`
+  walk). So the bot samples `nearbyEntities` (16 blocks) every second and logs an event
+  `mob_seen {mob, kind, distance}` the first time a type is in view, and again while it stays in view once its last
+  `mob_seen` is over 5 minutes old (under the hunger goal's 600 s "unseen"). Every reader keeps its own `since`, so
+  the panel's polls take nothing from the life's. `_poll_bot` records each `mob_seen` (same kind filter) at the
+  event's `t`. The simulator logs the same events for its nearby mobs. `mob_seen` is not a quarantine event.
 
 **A stuck bot** (`bot-stuck`)
 

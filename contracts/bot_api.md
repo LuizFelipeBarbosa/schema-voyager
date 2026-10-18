@@ -567,6 +567,9 @@ See `docs/v3-interfaces.md`, v3.0i.
 - Where an `unreachable` walk ended is the answer's `position` (`{x, y, z}`), which every action answer already
   carries (`server.js`).
 - `/explore` `direction: "up"` gives up after 60 s (was 100 s).
+- Event `mob_seen {mob, kind, distance}`: a 1 s sampler over `nearby_entities` (16 blocks) logs a mob type the first
+  time it is in view, then again while it stays in view once its last `mob_seen` is over 5 minutes old. Kinds as in
+  `nearby_entities`; only `animal`, `hostile` and `mob` are logged.
 
 ## v3.1: chat commands (S06, lane `chat-bot`)
 
