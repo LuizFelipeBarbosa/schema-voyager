@@ -2,19 +2,35 @@
 system goals, in an append-only `runs/<life>/goals.jsonl` that the panel and the
 life share. Each line is one goal's full state after a change; the latest valid
 line per id wins. The contract is `docs/v3-interfaces.md`, v3.1b and v3.1c.
-
-Stubs only: S06's `goal-queue` lane writes the behavior.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import fcntl
+import json
+import time
+from collections.abc import Callable
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Literal
 
 from .models import GoalSource, GoalSpec, GoalStatus
 
 InterruptReason = Literal["cancelled", "preempted", "death"]
+
+_ALLOWED_TRANSITIONS: dict[str, set[str]] = {
+    "submitted": {"queued", "unsupported", "cancelled"},
+    "queued": {"running", "cancelled", "awaiting_approval"},
+    "awaiting_approval": {"queued", "cancelled"},
+    "running": {"done", "failed", "cancelled", "queued"},
+    "done": set(),
+    "failed": set(),
+    "cancelled": set(),
+    "unsupported": set(),
+}
+_MARK_FIELDS = {"reason", "target_count", "deaths"}
+_ID_PREFIX = {"user": "u", "system": "s"}
+_UNCOUNTABLE = {"coal", "charcoal", "redstone", "glass", "sand", "gravel", "dirt", "cobblestone", "stone", "flint"}
 
 
 class GoalInterrupted(Exception):
@@ -42,7 +58,64 @@ class GoalEntry:
 
     def to_json(self) -> dict[str, Any]:
         """The goals.jsonl line, also served by the panel's GET /goals.json."""
-        raise NotImplementedError
+        spec = self.spec
+        return {
+            "id": self.id,
+            "t": self.t,
+            "status": self.status,
+            "source": self.source,
+            "text": self.text,
+            "kind": spec.kind if spec else None,
+            "item": spec.item if spec else None,
+            "count": spec.count if spec else None,
+            "target": spec.target if spec else None,
+            "blueprint": spec.blueprint if spec else None,
+            "reason": self.reason,
+            "target_count": self.target_count,
+            "deaths": self.deaths,
+        }
+
+
+def _entry_from_json(record: dict[str, Any]) -> GoalEntry:
+    source = record.get("source", "user")
+    text = record.get("text", "")
+    spec = None
+    if record.get("kind") is not None:
+        spec = GoalSpec(
+            record["id"],
+            record["kind"],
+            source,
+            text,
+            item=record.get("item"),
+            count=record.get("count", 1),
+            target=record.get("target"),
+            blueprint=record.get("blueprint"),
+        )
+    return GoalEntry(
+        id=record["id"],
+        status=record["status"],
+        source=source,
+        text=text,
+        t=record.get("t", 0.0),
+        spec=spec,
+        reason=record.get("reason", ""),
+        target_count=record.get("target_count"),
+        deaths=record.get("deaths", 0),
+    )
+
+
+def _rebuild(data: bytes) -> dict[str, GoalEntry]:
+    """The latest valid line per id, in the order of each id's first line. Corrupt lines are skipped."""
+    goals: dict[str, GoalEntry] = {}
+    for line in data.splitlines():
+        try:
+            record = json.loads(line)
+            if not isinstance(record, dict) or "id" not in record or "status" not in record:
+                continue
+            goals[record["id"]] = _entry_from_json(record)
+        except (ValueError, TypeError):
+            continue
+    return goals
 
 
 class GoalQueue:
@@ -51,41 +124,111 @@ class GoalQueue:
 
     def submit(self, text: str, source: GoalSource = "user") -> str:
         """Append a new goal as `submitted` and return its id ("u003", "s001")."""
-        raise NotImplementedError
+        prefix = _ID_PREFIX.get(source)
+        if prefix is None:
+            raise ValueError(f"{source} goals never go in the queue file")
+
+        def build(goals: dict[str, GoalEntry]) -> GoalEntry:
+            numbers = [int(g[1:]) for g in goals if g[0] == prefix and g[1:].isdigit()]
+            goal_id = f"{prefix}{max(numbers, default=0) + 1:03d}"
+            return GoalEntry(goal_id, "submitted", source, text, time.time())
+
+        return self._append(build).id
 
     def accept(self, spec: GoalSpec) -> bool:
         """submitted -> queued, with the parsed fields; spec.id is the goal's id."""
-        raise NotImplementedError
+
+        def build(goals: dict[str, GoalEntry]) -> GoalEntry | None:
+            entry = goals.get(spec.id)
+            if entry is None or entry.status != "submitted":
+                return None
+            parsed = replace(spec, source=entry.source, text=entry.text)
+            return replace(entry, status="queued", t=time.time(), spec=parsed)
+
+        return self._append(build) is not None
 
     def pending(self) -> list[GoalEntry]:
         """The `submitted` goals, oldest first: what the life must parse."""
-        raise NotImplementedError
+        return [g for g in self.goals() if g.status == "submitted"]
 
     def next(self) -> GoalSpec | None:
         """The queued goal to run: system before user, then oldest first. Writes nothing."""
-        raise NotImplementedError
+        queued = [g for g in self.goals() if g.status == "queued" and g.spec is not None]
+        for source in ("system", "user"):
+            for goal in queued:
+                if goal.source == source:
+                    return goal.spec
+        return None
 
     def mark(self, goal_id: str, status: GoalStatus, **fields: Any) -> bool:
         """Move a goal to `status`; False (and nothing written) for an unknown id or a refused transition."""
-        raise NotImplementedError
+        unknown = fields.keys() - _MARK_FIELDS
+        if unknown:
+            raise ValueError(f"mark cannot set {sorted(unknown)}; only {sorted(_MARK_FIELDS)}")
+
+        def build(goals: dict[str, GoalEntry]) -> GoalEntry | None:
+            entry = goals.get(goal_id)
+            if entry is None or status not in _ALLOWED_TRANSITIONS[entry.status]:
+                return None
+            return replace(entry, status=status, t=time.time(), **fields)
+
+        return self._append(build) is not None
 
     def cancel(self, goal_id: str) -> bool:
         """Cancel a goal that isn't final; False otherwise."""
-        raise NotImplementedError
+        return self.mark(goal_id, "cancelled")
 
     def get(self, goal_id: str) -> GoalEntry | None:
-        raise NotImplementedError
+        return self._read().get(goal_id)
 
     def goals(self) -> list[GoalEntry]:
         """Every goal, in submission order."""
-        raise NotImplementedError
+        return list(self._read().values())
 
     def requeue_running(self) -> list[str]:
         """On --resume: every running goal goes back to queued. Returns their ids."""
-        raise NotImplementedError
+        running = [g.id for g in self.goals() if g.status == "running"]
+        return [goal_id for goal_id in running if self.mark(goal_id, "queued")]
+
+    def _read(self) -> dict[str, GoalEntry]:
+        try:
+            return _rebuild(self.path.read_bytes())
+        except FileNotFoundError:
+            return {}
+
+    def _append(self, build: Callable[[dict[str, GoalEntry]], GoalEntry | None]) -> GoalEntry | None:
+        """Under the file lock, rebuild the state and append the line `build` makes from it (None: write nothing)."""
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with self.path.open("a+b") as f:
+            fcntl.flock(f, fcntl.LOCK_EX)
+            try:
+                f.seek(0)
+                data = f.read()
+                entry = build(_rebuild(data))
+                if entry is None:
+                    return None
+                separator = b"\n" if data and not data.endswith(b"\n") else b""
+                f.write(separator + (json.dumps(entry.to_json()) + "\n").encode())
+                f.flush()
+                return entry
+            finally:
+                fcntl.flock(f, fcntl.LOCK_UN)
+
+
+def _display_name(item: str, count: int) -> str:
+    """"#planks" -> "plank" or "planks"; "iron_ingot" -> "iron ingot" or "iron ingots"."""
+    name = item.lstrip("#").replace("_", " ")
+    if count == 1:
+        return name[:-1] if item.startswith("#") and name.endswith("s") else name
+    last_word = name.rsplit(" ", 1)[-1]
+    if last_word in _UNCOUNTABLE or name.endswith("s"):
+        return name
+    return name + ("es" if name.endswith(("ch", "sh", "x")) else "s")
 
 
 def goal_label(spec: GoalSpec | None, fallback: str = "") -> str:
     """What chat calls a goal: "10 torches", "1 plank", "3 coal" for an obtain goal; else `fallback` or the
     spec's text (v3.1c)."""
-    raise NotImplementedError
+    if spec is not None and spec.kind == "obtain" and spec.item:
+        return f"{spec.count} {_display_name(spec.item, spec.count)}"
+    return fallback or (spec.text if spec else "")
