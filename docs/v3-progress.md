@@ -38,7 +38,7 @@ pushed to `origin` until the user says so.
 | S01 setup and baseline | done | b | Baseline 342/103/panel; explorefast merged (bot 108); live tests via pre-approved forms; not pushed |
 | S02 fix the stuck loops | in progress | b | v3.0a/b/d contract 7524cfc; tag `v2-final` (local) at 661422f |
 | S03 retest demoted rules | not started | none | |
-| S04 full inventory | not started | a | |
+| S04 full inventory | running | a | Contract v3.0c and `/toss`; lanes toss-bot, toss-backend, junk-policy, then toss-sim, then junk-life |
 | S05 contracts for M1 and M2 | running | none | Contracts v3.1 and v3.2, stubs on main |
 | S06 goals you give it | not started | a | |
 | S07 survival | not started | b | |
@@ -64,6 +64,8 @@ pushed to `origin` until the user says so.
 - 23:26 S02 74732e8 merge `v3/keep-items`: `next_goal` skips a held station or tool; the v1-constants test reads `v2-final`. A 15-goal fake-LLM sim life crafted 2 tables before, 1 after. pytest 360, bot 108, panel pass.
 - 23:28 S02 7e1b7b2 merge `v3/repair-dedupe`: a repair equal to a known rule or still consuming a dead item is skipped (`skipped` in the record), repairs go into `repaired`. Two `test_v2_repair.py` assertions updated for that. pytest 364, bot 108, panel pass.
 - 23:29 S02 ae754d2 merge `v3/retry-block`: the second identical failure blocks the rule for the goal (`rule_blocked`), `run_schemavoyager(excluded=...)`. pytest 369, bot 108, panel pass.
+- 23:33 S02 7c28fa9 merge `v3/blocked-memory`: a rule blocked with `missing_ingredients` in 2 goals is excluded from planning and `next_goal` for the rest of the life (`"blocked"` in `life_state.json`). The `test_v2_nav.py` stub takes `excluded`. pytest 374, bot 108, panel pass.
+- 23:35 S02 31218b2 merge `v3/explore-took`: a directional `/explore` answers `took`, the attempt that moved; `_remember_explore` kills a requested direction a neighbour covered. pytest 380, bot 110, panel pass.
 
 ## S01 setup and baseline (done 2026-10-17)
 
