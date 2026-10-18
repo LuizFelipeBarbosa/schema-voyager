@@ -43,7 +43,7 @@ pushed to `origin` until the user says so.
 | S06 goals you give it | done | a | M1: 9 lanes merged (pytest 715, bot 212, panel and goals pass); live `runs/v3-m1-live` 4 of 4 checks plus the panel box; not pushed |
 | S07 survival | running | b | Lanes: entities-bot, guard-core, survival-plugins, handler-abort, then guard-wire, smelt-abort, python-survival, sim-threats, then difficulty-env, whitelist, death-handling (after S06 life-queue), live |
 | S08 combat and hunting | not started | b | |
-| S09 building foundations | not started | a | |
+| S09 building foundations | running | a | Contract v3.4a and bot API v3.4 (0d14636); lanes blueprint, build-bot, build-sim, build-backend, then place-live |
 | S10 build goals | not started | a | |
 | S11 duels | not started | b | |
 | S12 home, storage, composite goals | not started | a | |
@@ -102,6 +102,7 @@ pushed to `origin` until the user says so.
 - 01:54-02:00 S06 live `--resume --minutes 6` of `runs/v3-m1-live`: the panel's own `site/dist/goals.js` (driven by node with real fetch and the page's Origin against the live panel; no browser in this headless session; same src as ad4d699) sent "get me 10 torches" -> u005 queued, running, done in 30 s. Total spend $0.076.
 - 01:56 S06 dcba09f merge `v3/goal-endings` (advisor): sim tests for the wall-clock requeue, the per-goal clock and the failure-reason order; no code change needed. pytest 715, bot 212, panel and goals pass.
 - 02:04 S07 30c20c4 merge `v3/difficulty-env`; eceb359 merge `v3/whitelist` (iron armor + shield; leather armor kept but whitelisted only in M3: nothing makes leather yet, so its rules drew repair calls); 45b83ee merge `v3/death-handling` (deaths, `stop_reason` deaths, hunger goal, idle passes never observe); 0b290c8 merge `v3/guard-live`; fb068c2 merge `v3/guard-dead` (live finding: the guard re-fought a husk's body for 0.9 s after killing it, and fought a creeper in melee at 6.6 blocks; now dead mobs are skipped and any creeper means back_off). pytest 731, bot 215, panel pass. Live `node mc/bot/test/v3_guard_live.js` on instance b (bot and Python from `sv2` at fb068c2, `fresh-2024`, easy): ALL PASS twice (cut-in during `/mine` → `interrupted` husk `killed`, the retry digs `oak_log: 1`; creeper → `fled` creeper, moved 4.1/3.1 blocks, no fight; idle fight → 409 `guard` then `/observe` ok; `/guard` modes; a dead husk not re-fought).
+- 02:26 S09 0d14636 contract v3.4a (blueprint format, `place`/`clear`, `scan`, `set_keep_out`, simulator) and bot API v3.4 (`/place`, `/clear`, `/scan`, `keep_out`), after the advisor's review; stubs: `place`/`clear` in `ActionKind`, `Action.pos` (in `_V2_ACTION_FIELDS`), `LifeBackend.scan`/`set_keep_out`, `blueprint.py` constants and signatures. pytest 731, bot 215, panel and goals pass.
 
 ## S01 setup and baseline (done 2026-10-17)
 
