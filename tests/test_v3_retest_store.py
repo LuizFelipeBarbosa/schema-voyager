@@ -72,12 +72,37 @@ def test_retest_builds_the_copy_and_leaves_the_original_alone():
     assert original.preconditions["fuel_any"] == ["coal", "#planks"]
 
 
-def test_retest_ids_replace_the_world_suffix():
+def test_retest_ids_append_to_the_full_rule_id():
     store, _ = demoted_store()
     assert store.retest("smelt_iron_ingot", WORLD).id == "smelt_iron_ingot.retest@w"
 
     store, _ = demoted_store(rule_id="x.rev1@w")
-    assert store.retest("x.rev1@w", WORLD).id == "x.rev1.retest@w"
+    assert store.retest("x.rev1@w", WORLD).id == "x.rev1@w.retest@w"
+
+
+def test_retests_of_nested_revisions_get_different_ids_and_both_stay():
+    store, _ = demoted_store(rule_id="x.rev1@w")
+    nested = smelt_rule("x.rev1@w.rev1@w")
+    store.add_rule(nested)
+    store.demote(nested.id, "w/bad", WORLD)
+
+    first = store.retest("x.rev1@w", WORLD)
+    second = store.retest("x.rev1@w.rev1@w", WORLD)
+
+    assert first.id != second.id
+    assert store.rules[first.id] is first and store.rules[second.id] is second
+
+
+def test_retest_refuses_an_id_that_already_exists():
+    store, _ = demoted_store(rule_id="y")
+    existing = smelt_rule("y.retest@w")
+    store.add_rule(existing)
+    existing_before = copy.deepcopy(existing)
+
+    with pytest.raises(ValueError, match="y.retest@w"):
+        store.retest("y", WORLD)
+
+    assert store.rules["y.retest@w"] == existing_before
 
 
 def test_retest_refuses_a_rule_that_is_not_demoted():
