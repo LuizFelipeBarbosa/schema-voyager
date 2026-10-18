@@ -734,7 +734,7 @@ Digs one cell, for site prep and for undoing a wrong block.
    - the cell is air: `ok: true`, `cleared: false`, `found: "air"`, no walk;
    - the block can't be broken (no hardness, such as `bedrock` or `barrier`) or is a liquid: `unbreakable`, with
      `found`;
-   - lava next to it: `hazard`, as for `/mine`.
+   - lava or flowing water next to it: `hazard`, the check `/mine` uses (`hazardNear` in `lib/targets.js`).
 2. **Walk** within reach (travel phase): `unreachable` if it can't.
 3. **Dig** (step phase). Equip the fastest tool the bot holds for this block, else the bare hand. If the dig would
    take more than 15 s with it, answer `missing_tool` without digging. Dig, and wait for the server to confirm. A

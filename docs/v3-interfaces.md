@@ -1078,7 +1078,8 @@ stub on `main` has them, with the function signatures.
     - an air cell: `ok`, `cleared: false`, `found: "air"`;
     - bedrock (at or below `TERRAIN_BOTTOM`) or a liquid: `unbreakable`, with `found`;
     - otherwise the cell becomes air (a door: both cells), with no drops, since the real bot doesn't collect them.
-  - The simulator always reaches the cell, with travel as `_mine` has it (`_travel_to`).
+  - The simulator reaches any cell with an open neighbour (`_exposed`), with travel as `_mine` has it
+    (`_travel_to`). A cell with none is `unreachable` for both: the walks never dig.
   - `place` and `clear` join `THREATENED_ACTIONS`, so the simulator's threats interrupt them as they do a mine.
   - `scan()` reads `block_at` for each cell.
 
