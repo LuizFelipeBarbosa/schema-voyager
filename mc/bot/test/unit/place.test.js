@@ -180,7 +180,7 @@ test('/place already there: ok, placed false, no walk, nothing spent', async () 
   assert.equal(walks, 0)
   assert.equal(bot.placeCalls.length, 0)
   assert.deepEqual({ ok: result.ok, placed: result.placed, found: result.found, inventory: result.inventory }, { ok: true, placed: false, found: 'oak_planks', inventory: { oak_planks: 5 } })
-  assert.deepEqual(result.travel, { distance: 0, dug: {}, placed: {}, picked_up: {} })
+  assert.deepEqual(result.travel, { distance: 0, dug: {}, placed: {}, picked_up: {}, placed_cells: [] })
 })
 
 test('/place errors before the walk: missing_item, occupied with found, no_support', async () => {
@@ -462,7 +462,7 @@ test('/clear on air: ok, cleared false, found air, no walk', async () => {
   bot.pathfinder.goto = async () => { walks++ }
   const result = await clear(bot, clearRequest(), newSession())
   assert.deepEqual([result.ok, result.cleared, result.found, walks], [true, false, 'air', 0])
-  assert.deepEqual(result.travel, { distance: 0, dug: {}, placed: {}, picked_up: {} })
+  assert.deepEqual(result.travel, { distance: 0, dug: {}, placed: {}, picked_up: {}, placed_cells: [] })
 })
 
 test('/clear answers unbreakable and hazard without walking', async () => {

@@ -10,16 +10,17 @@ const {
 const SETTLE_TICKS = 5 // quiet time after the last travel dig, before the step
 
 function emptyTravel () {
-  return { distance: 0, dug: {}, placed: {}, picked_up: {} }
+  return { distance: 0, dug: {}, placed: {}, picked_up: {}, placed_cells: [] }
 }
 
 // Pure: the `travel` response object.
-function travelSummary ({ walkedBefore, walkedAfter, dug, placed, inventoryBefore, inventoryAfter }) {
+function travelSummary ({ walkedBefore, walkedAfter, dug, placed, placedCells = [], inventoryBefore, inventoryAfter }) {
   return {
     distance: round(walkedAfter - walkedBefore, 1),
     dug,
     placed,
-    picked_up: countGains(inventoryBefore, inventoryAfter)
+    picked_up: countGains(inventoryBefore, inventoryAfter),
+    placed_cells: placedCells
   }
 }
 
@@ -32,6 +33,7 @@ function recordTravel (bot, episode) {
   const inventoryBefore = inventoryCounts(bot)
   const dug = {}
   const placed = {}
+  const placedCells = [] // [x, y, z, name] of each block placed, in order
   let lastDigAt = null
 
   const originalDig = bot.dig
@@ -42,7 +44,11 @@ function recordTravel (bot, episode) {
     lastDigAt = Date.now()
     return result
   }
-  const onPlaced = (oldBlock, newBlock) => addCount(placed, newBlock.name)
+  const onPlaced = (oldBlock, newBlock) => {
+    addCount(placed, newBlock.name)
+    const { x, y, z } = newBlock.position
+    placedCells.push([x, y, z, newBlock.name])
+  }
   bot.on('blockPlaced', onPlaced)
 
   return {
@@ -60,6 +66,7 @@ function recordTravel (bot, episode) {
         walkedAfter: episode.walked,
         dug,
         placed,
+        placedCells,
         inventoryBefore,
         inventoryAfter: inventoryCounts(bot)
       })

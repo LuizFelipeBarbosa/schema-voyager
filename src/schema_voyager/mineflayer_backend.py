@@ -167,7 +167,8 @@ class MineflayerBackend:
         if action.pos is None:
             raise ValueError(f"a {action.kind} action needs a pos")
         x, y, z = action.pos
-        payload: dict[str, Any] = {"x": x, "y": y, "z": z, "scaffold": list(SCAFFOLD_BLOCKS)}
+        scaffold = [] if action.scaffold is False else list(SCAFFOLD_BLOCKS)
+        payload: dict[str, Any] = {"x": x, "y": y, "z": z, "scaffold": scaffold}
         if self._keep_out is not None:
             origin, size = self._keep_out
             payload["keep_out"] = {"origin": list(origin), "size": list(size)}
@@ -504,6 +505,8 @@ def _merge_travel(travels: list[dict[str, Any]]) -> dict[str, Any]:
         merged["distance"] += travel.get("distance", 0.0)
         for key in ("dug", "placed", "picked_up"):
             merged[key].update(travel.get(key) or {})
+    if any("placed_cells" in travel for travel in travels):  # older bots omit it
+        merged["placed_cells"] = [cell for travel in travels for cell in travel.get("placed_cells") or []]
     return {key: dict(value) if isinstance(value, Counter) else value for key, value in merged.items()}
 
 
