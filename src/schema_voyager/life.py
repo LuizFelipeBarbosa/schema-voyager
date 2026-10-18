@@ -21,6 +21,7 @@ from .adapter import DIRECTIONS, LifeBackend
 from .agent import run_schemavoyager
 from .curriculum import Curriculum, Goal
 from .episode import EXPLORE_GOAL, Episode
+from .inventory import junk_to_toss
 from .llm import LLM, SpendCapReached
 from .models import Action, EpisodeResult, Observation, Rule, Task
 from .planner import PlanStep
@@ -31,6 +32,7 @@ MIN_GOAL_BUDGET = 30
 BUDGET_PER_PLAN_STEP = 4
 MAX_CHAT_CHARS = 240
 EXPLORES_PER_ROUND = 3
+MIN_FREE_SLOTS = 4  # a goal starts with at least this many free slots, if junk can make them
 BLOCKED_GOALS_TO_EXCLUDE = 2  # goals that block a rule with missing_ingredients before the life leaves it out
 # A goal that fails with one of these is followed by an exploration round, to start the next one elsewhere.
 MISSING_RESOURCE_ERRORS = frozenset({"not_found", "unreachable"})
@@ -382,6 +384,8 @@ class _Life:
         started_at = time.time()
         name = f"g{index:03d}"
         observation = self.backend.begin_episode()
+        free_slots_before = observation.free_slots
+        observation, tossed = self._make_room(goal, observation)
         budget = max(MIN_GOAL_BUDGET, BUDGET_PER_PLAN_STEP * goal.plan_length)
         task = Task(
             task_id=name, split="train", goal_item=goal.item, goal_count=goal.count,
@@ -399,6 +403,11 @@ class _Life:
             deadline=time.monotonic() + min(self.config.goal_wall_clock_s, max(self._remaining_s(), 0.0)),
         )
         log.event("goal", index=index, item=goal.item, count=goal.count, reason=goal.reason, budget=budget)
+        if tossed:
+            log.event("tossed", items=tossed, free_slots_before=free_slots_before, free_slots_after=observation.free_slots)
+            names = [f"{count} {item.lstrip('#')}" for item, count in tossed.items()]
+            listed = names[0] if len(names) == 1 else f"{', '.join(names[:-1])} and {names[-1]}"
+            self.backend.say(f"Dropping {listed} to make room."[:MAX_CHAT_CHARS])
         for repair in self._repairs_unreported:
             log.event("repair", **repair)
 
@@ -414,6 +423,7 @@ class _Life:
             self.curriculum.record(goal, result.success)
         self.goals_done = index
         record = self._goal_record(index, goal, budget, result, started_at, interrupted)
+        record["tossed"] = tossed
         if self._repairs_unreported:
             record["repairs"], self._repairs_unreported = self._repairs_unreported, []
         self._save(record)
@@ -421,6 +431,20 @@ class _Life:
             self.hooks.after_goal(record)
         steps = [event for event in log.events if event["kind"] == "step"]
         return not result.success and not interrupted and bool(steps) and steps[-1]["error"] in MISSING_RESOURCE_ERRORS
+
+    def _make_room(self, goal: Goal, observation: Observation) -> tuple[Observation, dict[str, int]]:
+        """Toss junk when the bot is nearly full. Returns the observation to start the goal from
+        (a new one after a toss) and what was tossed."""
+        if observation.free_slots is None or observation.free_slots >= MIN_FREE_SLOTS:
+            return observation, {}
+        junk = junk_to_toss(
+            observation.inventory, self.store.usable_rules(self.world_id), {goal.item}, observation.free_slots,
+            min_free=MIN_FREE_SLOTS,
+        )
+        if not junk:
+            return observation, {}
+        tossed = self.backend.toss(junk)
+        return self.backend.observe(), tossed
 
     def _run_exploration_round(self, reason: str = "nothing left to learn here", reset_skips: bool = True) -> None:
         """Walk a few compass directions (cycling on across rounds) so the next goal starts
