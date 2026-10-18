@@ -676,8 +676,10 @@ integer block coordinates. The Python side and the blueprint axes are in `docs/v
   ends with the bot inside the target cell (for a door, inside either cell), and for `/clear` never standing on it.
   It never digs, and never opens doors (pathfinder's `canOpenDoors` stays off), so a placed door is a wall. It may
   pillar and bridge with the request's `scaffold` blocks, which Python sets to `SCAFFOLD_BLOCKS`. For `/place`, the
-  requested `block` is never used as scaffold. Pathfinder's `GoalPlaceBlock` fits `/place`, and `GoalLookAtBlock`
-  fits `/clear`. 20 s at most.
+  requested `block` is never used as scaffold. `/place` walks to pathfinder's `GoalPlaceBlock` and `/clear` to
+  `GoalLookAtBlock`, both wrapped in `StanceGoal` (`lib/place.js`). A `/clear` target without a collision shape (a
+  torch, grass, a flower) can't be hit by `GoalLookAtBlock`'s raycast, so it uses a reach-only goal: the eyes within
+  4 blocks of the cell's centre. 20 s at most.
 - **`keep_out`**, optional on both: `{"origin": [x, y, z], "size": [w, h, d]}`, the build's box. The walk never
   places scaffold in it (pathfinder's `exclusionAreasPlace`, with a cost that rules the move out), and for a door the
   walk ends with the bot outside it. The bot may still stand and walk inside the box. Without `keep_out`, scaffold
@@ -698,11 +700,13 @@ integer block coordinates. The Python side and the blueprint axes are in `docs/v
      block below (its top face), then north, south, east and west, then the block above. A torch takes only the one
      below or a side one, and a door only the one below.
 2. **Walk** within reach (travel phase). Can't get there: `unreachable`.
-3. **Place** (step phase, `inventory_before_step` on arrival). Equip `block`, place it against the first support,
+3. **Place** (step phase, `inventory_before_step` on arrival). If the bot's real hitbox (half-width 0.3) still reaches
+   into the cell, it steps to the centre of its own cell first (sneaking, at most 20 ticks), else `unreachable`
+   (`detail: "standing in the target cell"`). Equip `block`, place it against the first support,
    and read the cell back once the server confirms it (a block update, or a few ticks). If the cell is still free,
    the server refused: wait 5 ticks and try the next support face, 3 tries in all. Then: `place_failed`, with
-   `found`. (A mob standing in the cell is the usual reason.) Reuse `lib/station.js`'s face and overlap logic; the
-   read-back accepts `wall_torch` for a torch.
+   `found`. (A mob standing in the cell is the usual reason.) The read-back accepts `wall_torch` for a torch. A door's
+   upper half reaches the bot a few ticks after the lower one, so `/place` of a door waits up to 1 s for it.
 4. **Response:**
 
 ```jsonc
