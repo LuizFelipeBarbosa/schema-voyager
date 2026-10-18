@@ -2,9 +2,10 @@
 
     python -m schema_voyager.change_report runs/<run>
 
-One line per criterion, PASS or FAIL with the evidence. The change comes from
-changes.jsonl; its marker in the episode trace is the `world_change` event the
-trigger wrote. Exits 1 when any criterion fails.
+One block per line of changes.jsonl, with one line per criterion, PASS or FAIL
+with the evidence, scoped to that change's rule; then `changes: <passed>/<fired>
+PASS`. A change's marker in the episode trace is the `world_change` event the
+trigger wrote. Exits 1 when any criterion fails or nothing fired.
 """
 
 from __future__ import annotations
@@ -28,22 +29,25 @@ def main(argv: list[str]) -> int:
     if not changes:
         print("FAIL no change was switched on (changes.jsonl is empty or missing)")
         return 1
-    change = changes[0]
     store = SchemaStore.load(run_dir / "store.json")
-    events = _events_from_change(run_dir, change)
     life = {record["index"]: record for record in _read_jsonl(run_dir / "life.jsonl")}
 
-    print(f"change {change['change']}: {change['action']} {change['subject']}, switched on before goal {change['goal']}")
-    checks = [
-        _caught_at_exact_step(events, store, change),
-        _one_revision_call(events),
-        _revision_certified_in_epoch(store, change),
-        _next_use_costs_no_calls(events, store, change, life),
-        _no_mistake_repeated(events, store, change),
-    ]
-    for passed, text in checks:
-        print(f"{'PASS' if passed else 'FAIL'} {text}")
-    return 0 if all(passed for passed, _ in checks) else 1
+    passed = 0
+    for change in changes:
+        events = _events_from_change(run_dir, change)
+        print(f"change {change['change']}: {change['action']} {change['subject']}, switched on before goal {change['goal']}")
+        checks = [
+            _caught_at_exact_step(events, store, change),
+            _one_revision_call(events, store, change),
+            _revision_certified_in_epoch(store, change),
+            _next_use_costs_no_calls(events, store, change, life),
+            _no_mistake_repeated(events, store, change),
+        ]
+        for ok, text in checks:
+            print(f"{'PASS' if ok else 'FAIL'} {text}")
+        passed += all(ok for ok, _ in checks)
+    print(f"changes: {passed}/{len(changes)} PASS")
+    return 0 if passed == len(changes) else 1
 
 
 def _read_jsonl(path: Path) -> list[Event]:
@@ -53,13 +57,15 @@ def _read_jsonl(path: Path) -> list[Event]:
 
 
 def _events_from_change(run_dir: Path, change: Event) -> list[Event]:
-    """Every episode event from the trigger on, in order, each tagged with its goal name."""
+    """Every episode event from this change's trigger on, in order, each tagged with its goal name."""
     events: list[Event] = []
     for path in sorted((run_dir / "episodes").glob("D_life_g*.jsonl")):
         goal = path.name.split("_")[2]
         if goal >= change["goal"]:
             events += [{**event, "goal": goal} for event in _read_jsonl(path)]
-    marker = next((i for i, e in enumerate(events) if e["kind"] == "world_change"), len(events))
+    marker = next(
+        (i for i, e in enumerate(events) if e["kind"] == "world_change" and e.get("change") == change["change"]), len(events)
+    )
     return events[marker:]
 
 
@@ -67,8 +73,16 @@ def _is_changed_action(action: dict[str, Any], change: Event) -> bool:
     return action["kind"] == change["action"] and normalize.family(action.get("target") or "") == change["subject"]
 
 
-def _first_contradiction(events: list[Event]) -> int | None:
-    return next((i for i, e in enumerate(events) if e["kind"] == "contradiction"), None)
+def _first_contradiction(events: list[Event], store: SchemaStore, change: Event) -> int | None:
+    """The first contradiction of a rule for this change's (action, subject); other changes' are not ours."""
+    return next(
+        (i for i, e in enumerate(events) if e["kind"] == "contradiction" and _is_changed_rule(store.rules.get(e["rule"]), change)),
+        None,
+    )
+
+
+def _is_changed_rule(rule: Any, change: Event) -> bool:
+    return rule is not None and (rule.kind, rule.subject) == (change["action"], change["subject"])
 
 
 def _caught_at_exact_step(events: list[Event], store: SchemaStore, change: Event) -> tuple[bool, str]:
@@ -83,7 +97,7 @@ def _caught_at_exact_step(events: list[Event], store: SchemaStore, change: Event
         1 for e in events[:first_step]
         if e["kind"] == "step" and not e["ok"] and _is_changed_action(e["action_obj"], change)
     )
-    index = _first_contradiction(events)
+    index = _first_contradiction(events, store, change)
     if index is None:
         return False, "(a) caught at the exact step: no contradiction after the change"
     contradiction = events[index]
@@ -97,9 +111,9 @@ def _caught_at_exact_step(events: list[Event], store: SchemaStore, change: Event
                 f"({contradiction['transition']}){earlier}")
 
 
-def _one_revision_call(events: list[Event]) -> tuple[bool, str]:
-    index = _first_contradiction(events)
-    revisions = [e for e in events[index:] if e["kind"] == "revision"] if index is not None else []
+def _one_revision_call(events: list[Event], store: SchemaStore, change: Event) -> tuple[bool, str]:
+    index = _first_contradiction(events, store, change)
+    revisions = [e for e in events[index:] if e["kind"] == "revision" and e["rule"] == events[index]["rule"]] if index is not None else []
     # One revision event is one LLM call; later ones are other rules' contradictions.
     first = revisions[:1]
     calls = len(first)
@@ -125,7 +139,7 @@ def _revision_certified_in_epoch(store: SchemaStore, change: Event) -> tuple[boo
 
 def _next_use_costs_no_calls(events: list[Event], store: SchemaStore, change: Event, life: dict[int, Event]) -> tuple[bool, str]:
     revised = {rule.id for rule in _revisions_of(store, change)}
-    index = _first_contradiction(events)
+    index = _first_contradiction(events, store, change)
     contradiction_goal = events[index]["goal"] if index is not None else change["goal"]
     use = next(
         (e for e in events if e["kind"] == "step" and e["goal"] > contradiction_goal and e.get("rule") in revised), None
@@ -139,7 +153,7 @@ def _next_use_costs_no_calls(events: list[Event], store: SchemaStore, change: Ev
 
 
 def _no_mistake_repeated(events: list[Event], store: SchemaStore, change: Event) -> tuple[bool, str]:
-    index = _first_contradiction(events)
+    index = _first_contradiction(events, store, change)
     if index is None:
         return False, "(e) no contradiction to check"
     contradiction = events[index]
