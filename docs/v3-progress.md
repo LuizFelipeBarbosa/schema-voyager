@@ -38,7 +38,7 @@ pushed to `origin` until the user says so.
 | S01 setup and baseline | done | b | Baseline 342/103/panel; explorefast merged (bot 108); live tests via pre-approved forms; not pushed |
 | S02 fix the stuck loops | in progress | b | v3.0a/b/d contract 7524cfc; tag `v2-final` (local) at 661422f |
 | S03 retest demoted rules | not started | none | |
-| S04 full inventory | running | a | Contract v3.0c and `/toss`; lanes toss-bot, toss-backend, junk-policy, then toss-sim, then junk-life |
+| S04 full inventory | done | a | `/toss`, `free_slots`, `inventory.py`, 36-slot sim, junk tossed before a goal; live `runs/s04-junk`; pytest 445, bot 120; not pushed |
 | S05 contracts for M1 and M2 | done | none | Contracts v3.1/v3.2 and stubs merged 1b80640; plugin pins in v3.2g; prompt changes for S06/S07 in v3.2h |
 | S06 goals you give it | not started | a | |
 | S07 survival | not started | b | |
@@ -131,3 +131,29 @@ pushed to `origin` until the user says so.
   of "window or dig"; S07 `difficulty-env` works in `sv2_apply_gamerules` only, `SV2_DAYLIGHT` default `off`; S07
   `death-handling` cancels a system goal on a death, keeps a user goal's `target_count`, and adds edible foods to
   the junk toss's `wanted`; S07 `guard-wire` adds a 45 s reconnect backstop for a handler that never settles.
+
+## S04 full inventory (done 2026-10-18)
+
+- Commits on `main`: 7ebbd68 contracts and stubs; 959c7b1 `v3/junk-policy`; c2479be `v3/toss-backend`; 1569837
+  `v3/toss-bot`; a967275 `v3/toss-sim`; 515456b `v3/junk-life`; a225fbc `v3/toss-live`. Suite on ee9edbc: pytest 445,
+  bot unit 120, panel all passed.
+- Contracts: `contracts/bot_api.md` "v3.0: `/toss` and `free_slots`"; `docs/v3-interfaces.md` v3.0c "Inventory space".
+  Changes from the S04 prompt, on the advisor's verdict: once triggered, `junk_to_toss` drops all the junk (not just
+  enough for 4 free slots), keeps `curriculum.is_kept_item` items, and keeps one stack per raw id of a rule item (the
+  rest is dropped only while still under 4 free slots). The simulator fails a craft or smelt whose output can't fit
+  (`craft_failed`, inventory unchanged), as the bot does. `SCAFFOLD_BLOCKS` moved to `inventory.py`
+  (`mineflayer_backend` imports it), because importing `mineflayer_backend` pulls in `rcon`.
+- Live evidence: `node mc/bot/test/v3_toss_live.js` ALL PASS, and `runs/s04-junk` (see Log, 23:49). Bot and Python both
+  ran from `sv2` at f820661. Instance a is down with no lock; no S04 worktrees or branches are left; not pushed.
+- Open:
+  - Deferred: a goal that fills the inventory halfway through (nothing tosses between steps).
+  - Only one live toss (g001). Rule-item surplus, a blocked walk away, and many tosses over a long life are unit-tested
+    only. A later goal walking back over a pile would pick it up again in travel; not seen in `runs/s04-junk`. Watch for
+    it in S0.7.
+  - `lib/toss.js` drops a partial stack with `bot.toss`, which takes the first matching stack rather than the
+    smallest. Only the leftover count is affected.
+  - Step-phase `stray_pickup` on mine steps from the travel's own digs exists without any toss (about the same
+    rate in `runs/s01-explorefast`). It quarantines nothing by itself on a mine.
+  - The held-tool check is unit-tested only: the API can't select a hotbar slot.
+  - Seen by the `toss-sim` lane, not fixed: in the simulator, `_candidates` raises `KeyError` when mining `grass_block`
+    or `dirt` in a column without that span (seeds 0-7).
