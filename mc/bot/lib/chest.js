@@ -11,7 +11,8 @@ const { recordTravel } = require('./travel')
 const { freeSlots, gotoGoal, inventoryCounts, settleInventory } = require('./world')
 
 const WALK_MS = 45000
-const WALK_RANGE = 2
+const WALK_RANGE = 3 // a chest opens from 4.5 blocks; 3 spares a step that a canopy or ledge can block
+const WALK_STALL_MS = 8000 // no progress this long answers unreachable instead of waiting out WALK_MS
 const OPEN_CHEST_TIMEOUT_MS = 5000
 
 function validatePos (pos) {
@@ -36,7 +37,7 @@ async function withChest (bot, body, { episode, signal = null }, useChest) {
   const recording = recordTravel(bot, episode)
   let arrived
   try {
-    arrived = await withWalkingMovements(bot, () => gotoGoal(bot, new goals.GoalNear(x, y, z, WALK_RANGE), WALK_MS, { signal }))
+    arrived = await withWalkingMovements(bot, () => gotoGoal(bot, new goals.GoalNear(x, y, z, WALK_RANGE), WALK_MS, { signal, failFast: { stallMs: WALK_STALL_MS } }))
   } catch (err) {
     recording.finish()
     throw err

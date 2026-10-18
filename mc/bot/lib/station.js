@@ -18,6 +18,8 @@ const RETRY_TICKS = 5
 const STANDING_RADIUS = 24 // a remembered station this close is walked back to
 const WALK_BACK_TIMEOUT_MS = 15000
 const HOME_WALK_TIMEOUT_MS = 45000
+const HOME_WALK_RANGE = 3 // a station is used from 4.5 blocks; 3 spares a step that a canopy or ledge can block
+const HOME_WALK_STALL_MS = 8000 // no progress this long answers station_unreachable instead of waiting out the timeout
 
 // A station this handler placed and won't dig back up because of an abort:
 // remember it (name and position) in the episode for later actions.
@@ -121,7 +123,7 @@ async function placeHeldOrUseHome (bot, name, { station = null, protect = [], ep
   const recording = recordTravel(bot, episode ?? { walked: 0 })
   let arrived
   try {
-    arrived = await withWalkingMovements(bot, () => gotoGoal(bot, new goals.GoalNear(x, y, z, 2), HOME_WALK_TIMEOUT_MS, { signal }))
+    arrived = await withWalkingMovements(bot, () => gotoGoal(bot, new goals.GoalNear(x, y, z, HOME_WALK_RANGE), HOME_WALK_TIMEOUT_MS, { signal, failFast: { stallMs: HOME_WALK_STALL_MS } }))
   } catch (err) {
     recording.finish()
     throw err

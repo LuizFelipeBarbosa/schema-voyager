@@ -218,6 +218,23 @@ test('unreachable when the walk ends out of range, with travel and no window', a
   assert.equal(bot.pathfinder.movements, 'previous')
 })
 
+test('a walk that makes no progress for 8 s answers unreachable long before the 45 s timeout', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'] })
+  const { bot, log } = chestBot()
+  bot.pathfinder.goto = () => new Promise(() => {}) // the bot stands still and the pathfinder never answers
+
+  const pending = withdraw(bot, { pos: CHEST_POS, items: { coal: 1 } }, session())
+  for (let elapsed = 0; elapsed < 8500; elapsed += 500) {
+    t.mock.timers.tick(500)
+    await new Promise((resolve) => setImmediate(resolve))
+  }
+  const result = await pending
+
+  assert.deepEqual([result.ok, result.error], [false, 'unreachable'])
+  assert.ok(result.travel)
+  assert.equal(log.opens, 0)
+})
+
 test('the window is closed when a move fails', async (t) => {
   useFastTimers(t)
   const { bot, log } = chestBot({ inventory: [['coal', 5]], failOn: 'deposit' })
