@@ -553,6 +553,21 @@ Why: in eight lives about 75% of `unreachable` ore mines were walks cut off whil
 - Python also treats a `200 {"ok": false, "error": "not_connected"}` answer as a lost bot (`BackendError`), and reads
   `GET /health`'s `connected` for `connected()`.
 
+## v3.0i: a niche for a held station, `/attack` and `protect`, `/goto` `stall_ms`, `position` (S15)
+
+See `docs/v3-interfaces.md`, v3.0i.
+
+- `/craft` and `/smelt`: with no free cell for a held station, the bot recentres in its cell, then digs one niche
+  cell beside it (hazard-checked, never protected). The answer gains `niche: [x, y, z]` when it dug one; the dig is in
+  `travel.dug`, and its drop is never one of the step's own drops.
+- `/attack`: `protect` is honoured. No candidate inside a protected box; a target that enters one is let go, that
+  candidate ending `escaped` with `protected: true`.
+- `/goto  {"x", "y", "z", "range", "stall_ms": 8000, "protect"}`: `stall_ms` (optional, an integer from 1000 to
+  55000): no progress this long ends the walk `unreachable`. Without it, the walk is as before.
+- Every `unreachable` walk answer of `/goto`, `/deposit`, `/withdraw` and `/chest`, and `/craft` and `/smelt`'s
+  `station_unreachable`, gains `position: [x, y, z]`: the bot's position (floats) when the walk ended.
+- `/explore` `direction: "up"` gives up after 60 s (was 100 s).
+
 ## v3.1: chat commands (S06, lane `chat-bot`)
 
 - **`BOT_OWNERS`** (env): comma-separated Minecraft usernames, trimmed and compared case-insensitively. Unset or

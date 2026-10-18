@@ -47,6 +47,11 @@ class LifeBackend(Backend, Protocol):
         bot is False. See docs/v3-interfaces.md, v3.0h."""
         ...
 
+    def reach(self, pos: tuple[int, int, int]) -> Outcome:
+        """v3.0i: walk to within 3 of a cell, never digging or placing, giving up after 8 s without progress.
+        A failed walk is `unreachable` with `detail["position"]`, where it ended. See docs/v3-interfaces.md, v3.0i."""
+        ...
+
     def look(self, blocks: list[str], radius: int = 64, mobs: Sequence[str] = ()) -> LookResult:
         """Nearest hits per direction. v3.3: mobs (entity names) come back in the same map, keyed by mob name."""
         ...

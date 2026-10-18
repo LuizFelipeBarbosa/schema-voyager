@@ -468,6 +468,113 @@ Plan S0.9. Lanes: `backend-health`, `life-robust`, `panel-live`, `door-species`,
   door is pursued as before and fails with its own reason if it still can't be made.
 - Not covered: an `obtain` goal for a door (outside a build).
 
+### v3.0i Polish, round 2: a station underground, mobs seen, a stuck bot, reaching home (S15)
+
+Plan S0.10. Lanes: `station-dig`, `mobs-seen`, `panel-pid`, `explore-cap`; then `bot-stuck`, `hunt-bounds`,
+`yard-goto`, `ops`; then `yard-reach`, `build-ring`. Reviewed by S15's advisor before the lanes started.
+
+**A held station underground** (`station-dig`; bot API v3.0i)
+
+- Cause (S12 `runs/v3-m5-live-fix`, S08 `runs/v3-m3-soak`, both at the same cell at y 57 on seed 2024): at the bottom
+  of a 1 x 1 shaft dug straight down, the only air beside the bot is its own column and the ore cell it just mined,
+  which it stands pressed against. `findSpots`'s 0.35 margin rules that cell out, so `placeStation` threw "no free
+  spot next to the bot" and `/smelt` failed `craft_failed` with `used_furnace: false`.
+- `placeStation`, when `findSpots` finds nothing: recentre the bot in its cell (place.js's `recentre`) and look
+  again; then dig one niche cell and look again. `placeHeldOrUseHome` counts a possible niche as a place for the held
+  station, so with a home station set a bot in a shaft places its own instead of walking home.
+- A niche cell is one of the 4 horizontal neighbours of the bot's feet or head cell that: doesn't overlap the bot;
+  is outside every protected box; passes `checkClear` (breakable, not a liquid); has no water or lava (source or
+  flowing) next to it; has no falling block above it; isn't `infested_*`, a container or a station; is never the
+  floor under the bot. The quickest dig with the held tools wins, capped by `MAX_DIG_MS`; the server's block change
+  is waited for.
+- The dig belongs to the travel phase: its drop is waited for, `travel.dug` counts it, and the step's
+  `inventory_before_step` is read after it. A niche drop is never one of the step's own drops, so a late pickup
+  quarantines the step instead of mismatching a rule.
+- The `/craft` and `/smelt` answer gains `niche: [x, y, z]`, the cell dug, when there was one. The Python backend
+  copies it into `Outcome.detail["niche"]` (lane `yard-goto`).
+
+**Mobs seen** (`mobs-seen`)
+
+- `Status.entities` (stub on `main`): `/status`'s `nearby_entities`, parsed as `Observation.entities` is. The
+  simulator's status has its nearby mobs.
+- `_poll_bot` records the mobs in every status (kind `animal`, `hostile` or `mob`) in `observed_mobs`, as
+  `_observe_mobs` does for an observation. `_poll_bot` runs before every step of every runner and on idle passes,
+  so a mob seen during a goal is asked about (`propose_prior_rules_v2(..., mobs=...)`) at the next `_learn_priors`,
+  before the next goal.
+
+**A stuck bot** (`bot-stuck`)
+
+- A bot that answers `409` for over 60 s while `/health` says connected was waited for, came back at once, failed the
+  goal again, forever (`runs/v3-polish-live`'s known limit).
+- `BOT_STUCK_LOSSES = 3`, `BOT_STUCK_WINDOW_S = 300.0` (`life.py`). Each `_wait_for_bot` is a loss. An action the bot
+  answered (any outcome) since the last loss clears the count: the life checks the episode's step records in
+  `_before_step` and when a goal ends. The third loss within 300 s with no answered action in between: life event
+  `bot_stuck {goal_id, losses, window_s, error}`, no wait, and the life stops with `stop_reason` `"bot_stuck"` (its
+  own flag, not `_bot_gone`'s `"bot_down"`; chat stays silent). The panel's trace shows the event.
+- `MineflayerBackend._post` (`mobs-seen`): `error.read()` in the HTTP-error branch is wrapped; an unreadable body is
+  `""`.
+
+**Which life is live** (`panel-pid`)
+
+- `_live_runs`: a `live.json` is alive only if its pid's command line (`ps -o command= -p <pid>`) is a python
+  running `schema_voyager`. Anything else (a reused pid, a failing `ps`) is a stale file.
+
+**Kill goals** (`hunt-bounds`; bot API v3.0i)
+
+- `/attack` honours `protect`: a mob inside a protected box is never a candidate, and a target that enters one
+  during the walk or the fight is let go (that candidate ends `escaped` with `protected: true`).
+- `KILL_SEARCH_RADIUS = 64` blocks, horizontal, from where the bot stood when the kill goal started. `run_kill` gives
+  the episode that bound; `Episode._explore_toward` doesn't explore while the bot is outside it (the search is
+  exhausted). The goal then fails with the reason `"not found nearby"`. Guard goals and a hunger goal's kill steps
+  are unchanged.
+
+**Explore up** (`explore-cap`)
+
+- `exploreUp` gives up after 60 s (`CLIMB_TIMEOUT_MS`, was 100 s: one climb in S13 took a third of a goal's clock).
+
+**Reaching home** (`yard-goto`, then `yard-reach`; bot API v3.0i)
+
+- `/goto` takes `stall_ms`. Every `unreachable` walk answer of `/goto`, `/deposit`, `/withdraw`, `/chest`, and
+  `/craft` and `/smelt`'s `station_unreachable`, gains `position`, where the walk ended. Python:
+  `Outcome.detail["position"]` (and the chest calls' `ChestResult` detail).
+- `LifeBackend.reach(pos) -> Outcome` (stub on `main`): `/goto` with range 3 and `stall_ms` 8000. The simulator
+  answers ok.
+- A walk blames the slot only when it ended within `places.SLOT_BLAME_BLOCKS = 6.0` of the cell's centre. A walk that
+  stalled farther away blames where the bot is (a hole, a cave), so the slot is kept.
+- `Places` gains `bad_slots: list[Pos]`, `moved: set[str]` and `retired: set[str]`, saved in `life_state.json`; an
+  older state loads them empty. `yard_slots` skips the bad slots.
+- Furnishing: before placing at a slot, `reach(slot)`. A failed walk that blames the slot puts it in `bad_slots`
+  (event `home_slot_bad {station, pos}`) and the next slot is tried. A failed walk that doesn't blame it logs
+  `home_place_failed {station, pos, error: "unreachable"}` and ends furnishing for this goal. A retired kind is never
+  furnished.
+- In a goal, an `unreachable` walk to a home station (`/craft` or `/smelt` with `station_unreachable`) or to the chest
+  (`/withdraw`, and the life's own `/deposit` when it stores) that blames the slot puts the kind in
+  `HomeStock.unreachable` (stub on `main`). `near()` treats it as unusable, like `skipped`. A walk that doesn't blame
+  the slot stays `skipped`, as before. `interrupted` and `timeout` don't count.
+- After the goal (at once for the life's own deposit), for each unreachable kind: event
+  `home_unreachable {station, pos, action, stored}`, and the cell goes to `bad_slots`.
+  - The first time for that kind, `action` is `"moved"`: the kind joins `moved` and is forgotten from `stations`, so
+    furnishing puts one in another slot the next time the bot holds one. For the chest, `stored` is abandoned (the
+    event carries it) and one more chest goal is allowed.
+  - The second time, `action` is `"dropped"`: the `home_lost` path, and the kind joins `retired`.
+  So an unreachable slot costs one stall, not one per goal. The panel's trace shows both events.
+- The chest goal waits while a composite parent is open: `_queue_chest_goal` returns without queuing, and is also
+  called from `_end_parent`. Hunger and arming still preempt.
+
+**Scaffold over a goal's attempts** (`build-ring`)
+
+- The ring is scanned when the goal's first attempt starts, before gathering. The life keeps that scan in memory by
+  goal id, and later attempts (requeued after `preempted`, `bot` or `wall_clock`) compare against it. The walks'
+  cells count from the attempt's start, gathering included. Gap: a resumed life scans again.
+
+**World snapshots and stopping things** (`ops`)
+
+- `world-snapshot.sh` records the world's seed (RCON `seed`) in `<snapshot>/sv2-seed`. `world-restore.sh` restores
+  a snapshot into `world-<seed>` and starts that seed, whatever `SV2_SEED` or `.env` say. A snapshot without the
+  file restores as before, with a warning.
+- `RUNBOOK.md` and `docs/v2-infra.md`: `screen -X quit` stops neither the node bot nor the Python life. Stop each by
+  its pid, from `run/bot-<inst>.pid` and `run/lock-<inst>`.
+
 ## v3.1 Goals
 
 Written by S05 for S06 (M1: plan steps S1.2–S1.7 and play mode). The bot side is in `contracts/bot_api.md`, v3.1.

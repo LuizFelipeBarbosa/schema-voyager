@@ -173,6 +173,18 @@ scaffold cleared beside a finished house, door planks of one species; and the RE
 a play-mode life survives its bot being stopped and restarted mid-goal (the goal `interrupted` with `bot`, requeued,
 then `done`), and a built house leaves no scaffold outside its box (`runs/v3-polish-live`).
 
+### S0.10 Polish, round 2 (S, added by the orchestrator after S08, S12, S13 and S14; session S15)
+
+Fix what the M1-M5 sessions found but didn't own. Musts: a held station can be placed underground (recentre, then
+dig a niche), learn mode records every mob the bot sees (from `/status`) so it learns to hunt, a stuck bot (3 losses
+in 5 minutes with no action answered) stops the life with `bot_stuck`, and an unreachable home slot costs one stall,
+not one per goal (`home_unreachable`: moved once, then dropped). Then: `_post`'s unreadable error body, a stale
+`live.json` with a reused pid, scaffold over a build goal's attempts, a kill goal's search radius, `/attack` honours
+`protect`, `explore up` capped at 60 s, snapshots restore their own seed, the chest goal waits for a composite, and
+how to stop the bot and the life. Contract v3.0i. Done when: a 30-minute learn-mode life on easy places its furnace
+underground with no `used_furnace: false` smelt and records mob types, a hunger goal runs as kill then smelt, and a
+home with an unreachable yard slot logs `home_unreachable` and doesn't stall every goal (`runs/v3-polish2-*`).
+
 ---
 
 ## M1: goals you give it

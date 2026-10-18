@@ -119,6 +119,8 @@ class Status:
     events: list[dict[str, Any]] = field(default_factory=list)
     last_seq: int = 0
     follow: dict[str, Any] | None = None  # v3.3: {"player", "distance"} while following a player
+    # v3.0i: /status's nearby_entities, as Observation.entities: {type: {"count", "nearest", "kind"}} within 16 blocks
+    entities: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -147,6 +149,8 @@ class HomeStock:
     stored: dict[str, int] = field(default_factory=dict)  # the chest's contents, raw ids
     lost: frozenset[str] = frozenset()  # kinds ("chest" too) found gone this goal: the life drops them from places
     skipped: frozenset[str] = frozenset()  # kinds the bot couldn't reach this goal: not planned again in it
+    # v3.0i: kinds whose walk stalled near their own cell this goal (the slot is to blame): the life moves or drops them
+    unreachable: frozenset[str] = frozenset()
 
     def near(
         self, position: tuple[float, float, float], reach: float = HOME_RANGE
