@@ -462,6 +462,11 @@ def run_life(backend: LifeBackend, llm: LLM, config: LifeConfig, hooks: LifeHook
   species: write consumes #log 1, yields #planks 4") and variants, and never
   say "wood is oak". The v2 rule parser normalizes every subject and count with
   `normalize.family` / `normalize.counts`, and sets `scope=world_id`.
+- **Repair calls (v2.2, approved by the user 18:12):** when a usable rule consumes an
+  item that no usable rule produces although its family was already asked about (a
+  "dead ingredient", e.g. a prior that smelts `iron_ore` instead of `raw_iron`), the
+  life asks Claude once per rule to re-propose it using obtainable items
+  (`LLM.repair_rule_v2`). The alternatives are hypotheses like any other.
 - LLM calls: prior rules once per new family, batched into one call (life
   start: the seed frontier's items plus the observed block families; later, any
   item no usable rule produces, and newly observed blocks); revisions on

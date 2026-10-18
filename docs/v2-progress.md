@@ -50,6 +50,14 @@ Re-read this first after a restart or context compaction. The session prompt is
 - Interface added by the orchestrator for M3/M4 wiring: `runs/<run>/changes.jsonl` lines
   `{t, change, action, subject, goal}`; `SV2_M3_CHANGE=r2` env (or `life --change r2`) arms the trigger.
 
+- User (18:12): approved a fourth LLM call type, `repair` (re-propose a rule whose ingredient nothing
+  produces). Cause: Claude's smelt prior named `iron_ore`, so iron was unplannable, untestable, never revised.
+- User (17:40): keeps instances a and b for M4 (another session's demo-rec script had used instance a;
+  its `v2-change.sh install` leaked the M3 datapacks into M4's world-2024; that M4 attempt is in
+  runs/invalid/). Otopo (human) set to spectator during runs, with approval.
+- Demo run at the user's request (17:44, runs/demo-v2): M3 5/5 again; stopped at empty_frontier after 12 min.
+  Live run with keep-going (18:03-, runs/demo-v2-live, auto-resume screen `sv2-a-resume`).
+
 ## Commands that work
 
 - Tests: `PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m pytest -q` from sv2.
