@@ -118,6 +118,25 @@ Deferred:
   `took.direction` differs from the request, the requested direction is marked dead. Without `took` (an older bot),
   the behavior is unchanged.
 
+### v3.0e A tool that wears out on a station dig (S0.7 follow-up, lanes `wear-bot` and `wear-verify`)
+
+Found in `runs/v3-baseline-1` g018: the bot dug its furnace back up with its last pickaxe, a wooden one on its last
+durability point. The pickaxe broke, the smelt's delta showed `wooden_pickaxe: -1`, and `smelt_iron_ingot` was
+falsely demoted.
+
+- Bot, `retrieveStation` (`lib/station.js`): it picks the tool as `cheapestHarvestTool` (`lib/movements.js`) does:
+  the lowest tier that harvests the block, never a tool the dig would break, and the bare hand when the hand harvests
+  it. A furnace only drops to a pickaxe, so when no pickaxe has 2 durability left, it digs with the best pickaxe
+  anyway (today's behavior). This applies to all three callers: the table in `/craft` and `/probe`, the furnace in
+  `/smelt`.
+- It measures the break rather than inferring it. When the held tool's count drops across the dig, the tool's name
+  goes into the action's `tools_broken: [item, ...]` (`[]` when none). `/craft`, `/smelt` and `/probe` send it.
+- Python, `mineflayer_backend.py`: `_smelt_natural` copies `tools_broken` into `outcome.detail["tools_broken"]`, and
+  `_craft_natural` concatenates it across its calls. Both skip it when it's empty.
+- `verifier.check`, for craft and smelt: each entry in `detail["tools_broken"]` adds back exactly 1 of that item to the
+  observed delta, the same way an unretrieved station or burned fuel is added back. The check detail says
+  `"<item> wore out (tolerant)"`. Mine checks read drops, not the inventory, so they need nothing.
+
 ## v3.1 Goals
 
 Written by S05 for S06 (M1: plan steps S1.2–S1.7 and play mode). The bot side is in `contracts/bot_api.md`, v3.1.

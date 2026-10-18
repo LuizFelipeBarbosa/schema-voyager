@@ -490,6 +490,14 @@ name to positive integer; `busy` (HTTP 409) and `not_connected` as for any
 action. A walk that falls short is not an error: `ok: true`,
 `walked_away: false`.
 
+## v3.0: `tools_broken` on `/craft`, `/smelt` and `/probe` (lane `wear-bot`)
+
+- Digging the placed crafting table or furnace back up uses the cheapest tool that harvests it and that the dig
+  won't break, or the bare hand when the hand harvests it. For a furnace, when no pickaxe has 2 durability left, the
+  best pickaxe is used anyway.
+- `tools_broken: [item, ...]`: tools whose count dropped across that dig, because they wore out. `[]` when none.
+  Python adds them back to the step's delta (`docs/v3-interfaces.md` v3.0e).
+
 ## v3.1: chat commands (S06, lane `chat-bot`)
 
 - **`BOT_OWNERS`** (env): comma-separated Minecraft usernames, trimmed and compared case-insensitively. Unset or
