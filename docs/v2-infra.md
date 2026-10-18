@@ -33,6 +33,13 @@ centres a 512-wide border on the bot's join position (the world spawn, thanks to
 `spawnRadius 0`). Without `SV2_SEED` it keeps the level named in the existing
 properties file; `world-restore.sh` relies on that.
 
+`SV2_DIFFICULTY` (`peaceful` default, `easy`, `normal`, `hard`) and `SV2_DAYLIGHT`
+(`off` default, `on`) set the server difficulty and the day/night cycle. Both
+can also come from `.env`, any other value stops `v2-env.sh` when it is sourced,
+and both are applied on every up and restore through `sv2_apply_gamerules`
+(`difficulty <value>` over RCON, plus `doDaylightCycle`; `off` also sets day).
+S07's survival checks use `SV2_DIFFICULTY=easy SV2_DAYLIGHT=on`.
+
 Safety: refuses demo ports (25565, 25575, 3000, 3007); stops when a port is held
 by anything but this instance's pid file; only touches `sv2-<inst>-*` screens
 and pids from `run/`.
