@@ -518,8 +518,11 @@ Plan S0.10. Lanes: `station-dig`, `mobs-seen`, `panel-pid`, `explore-cap`; then 
   or less) the kept items are eaten anyway. A restarted bot keeps nothing.
 - `LifeBackend.keep_food(items)` (stub on `main`): `MineflayerBackend` posts it; the simulator does nothing; v2's
   scripted backends lack it (`hasattr`).
-- The life, when an `obtain` goal starts whose item is a vanilla food: the ingredients of every usable smelt rule
-  that yields that item (so a replan from cow to sheep stays covered), sent before the goal's first action, if any.
+- The life, when an `obtain` goal starts whose item is a vanilla food: that item itself and the ingredients of every
+  usable smelt rule that yields it (so a replan from cow to sheep stays covered), sent before the goal's first action.
+  Keeping the item too (`runs/v3-polish2-hunger4`: at food 0 the bot ate 2 of the 4 cooked beef it had just made, the
+  goal replanned for more cows and failed) means a hunger goal, a curriculum food goal or a user's order ends with
+  what it made; the bot eats on its next idle tick once the goal's `[]` arrives.
   Cleared with `[]` in a `finally` around the goal's run (every ending); not after a lost bot (`_bot_gone`), and a
   failed clear is only printed. After `bot_back` nothing is resent: the requeued goal sends it when it starts.
 
