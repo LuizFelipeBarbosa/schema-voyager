@@ -137,6 +137,201 @@ falsely demoted.
   observed delta, the same way an unretrieved station or burned fuel is added back. The check detail says
   `"<item> wore out (tolerant)"`. Mine checks read drops, not the inventory, so they need nothing.
 
+### v3.0f Retesting a demoted rule (S0.4, lanes `retest-store` and `retest-life`)
+
+A demotion lasts for the rest of the life. Twice a false one cost the life its iron:
+
+- `runs/m4-2024` g014: a fuel bug. `smelt_iron_ingot` had 0 confirmations, so no epoch opened.
+- `runs/v3-baseline-1` g018: a pickaxe wore out (v3.0e). The rule had 3 confirmations, so epoch 1 of
+  `smelt:iron_ingot` opened at the contradicting transition.
+
+Both times every revision was rejected (`kept: false`), so nothing produced `iron_ingot` afterwards. m4-2024 spent 27
+repair calls on its consumers. A false demotion can have causes nobody has found yet, so a demoted rule gets one
+experiment: when nothing else produces an item it needs, the agent runs the rule again.
+
+**Evidence: a retest is a new rule with its own evidence window.**
+
+The options:
+
+- **B, rejected:** when a retest matches, mark the contradicting transition suspect, leave it out of replay and
+  restore the original rule. A retest can match for a reason other than a false contradiction. `r2` changes coal
+  only for a wooden pickaxe, so a retest with a stone pickaxe matches. B would then:
+  - erase a real contradiction;
+  - change the replay of every rule that transition confirmed or contradicted;
+  - leave the epoch the transition opened with nothing behind it.
+- **A with a store epoch opened at the retest, rejected.** Epochs mean "the world changed here", and the change
+  trigger and `change_report` read them. A retest epoch would cause three problems:
+  - it would stamp later revisions;
+  - it could swallow a real change's epoch opened at the same seq (`_open_epoch` dedupes by `start_seq`);
+  - it would move a certified revision's later confirmations out of that revision's epoch, so `change_report`
+    (c), "all in that epoch", would fail.
+- **Chosen: A, with a per-rule window.** The retest is a new rule (`source = "retest"`, `revision_of` the
+  original), and its replay starts at the retest. Starting a retest never changes `store.epochs`.
+
+Store and models (`retest-store`):
+
+- `Rule.source: Literal["prior", "revision", "retest"]`.
+- `Rule.since_seq: int = 0` (`models.py`): replay ignores transitions with `seq < since_seq`. It is 0 for every
+  rule except a retest. A store saved before v3.0f loads with 0.
+- `SchemaStore.replay` also skips `transition.seq < rule.since_seq`. Nothing else in replay changes.
+- `SchemaStore.retest(rule_id: str, world_id: str) -> Rule` adds the retest rule and returns it:
+  - `id = f"{base}.retest@{world_id}"`, where `base` is `rule_id` without its `@world` suffix, like `.rev1@` and
+    `.fix1@`. For example, `smelt_iron_ingot.retest@life-2024-...`;
+  - it deep-copies `action`, `preconditions`, `effects` and `check` from the original, so editing the copy never
+    changes the original;
+  - `source="retest"`, `revision_of=rule_id`, `status="hypothesis"`, `scope=world_id`, `rank=0`,
+    `rationale=f"retest of {rule_id}, demoted by {transition id}"`;
+  - `evidence` starts empty (`{"confirmed": [], "contradicted": [], "counterexamples": []}`), never copied from the
+    original: `ChangeTrigger._bites` reads `evidence["confirmed"]` for `r2`;
+  - `epoch = current_epoch(epoch_key(world_id, kind, subject))`;
+  - `since_seq = len(self.transitions)`: the next transition recorded is the first one it sees;
+  - it raises `ValueError` when the rule is not demoted in `world_id` (status `demoted`, or listed in
+    `demoted_in[world_id]`), when the rule is itself a retest, or when the rule already has a retest (a rule with
+    `source == "retest"` and `revision_of == rule_id`). So each rule is retested at most once per life, and a
+    retest is never retested.
+- `add_rule` stamps only `source == "revision"`, so it leaves a retest's epoch alone.
+- The original rule stays demoted for the rest of the life: its status, its `demoted_in` entry and its evidence
+  don't change. Only the copy can come back.
+- After that, the retest is an ordinary hypothesis:
+  - it is usable and planned;
+  - `certify` certifies it with 2 confirmations from 2 episodes inside its window;
+  - `demote` treats it like any rule, so its contradiction opens an epoch only if it had a confirmation in its window.
+    A mismatch on the first step opens none. A restored rule that later meets a real change opens one, which
+    the change needs in order to be caught.
+
+**The trigger (`retest-life`: `_repair_dead_ingredients` and its helper `_retest_demoted`).**
+
+`_repair_dead_ingredients` first calls `_retest_demoted()`, then goes on as today from a fresh `usable_rules`. A
+retested item is no longer dead, so its consumers aren't sent to Claude. It returns `True` when it added a retest or
+a repair. The life never reads `changes.jsonl` or the change trigger to decide a retest. `_retest_demoted` does two
+things:
+
+1. **Report the outcome of each retest that is still pending**, the ones not in `self.retests`. Check mismatch
+   first:
+   - **mismatch**: the retest is demoted in this world. `transition` is `store.demoted_in[world][retest id]`.
+   - **match**: otherwise, its replay has a confirmation. `transition` is the first confirmation.
+   - Otherwise it is still pending, because no step has used it yet.
+   - The outcome is reported once. A retest that matched and is contradicted in a later goal is an ordinary
+     demotion from then on.
+2. **Start retests**, in passes, until a pass starts none.
+   - A candidate is an item that no usable rule produces and that is in `self.asked`. It must also be needed, which
+     means one of these:
+     - a usable rule consumes it (today's dead items);
+     - a usable rule names it as its `station`;
+     - it is first in a usable rule's `tool_any` and no tool in that list is produced (as in `_unasked_families`);
+     - it is on the curriculum's frontier.
+   - Its demoted producers are the rules that:
+     - yield it;
+     - are in scope (`train` or this world);
+     - are demoted in this world;
+     - aren't retests and have no retest yet.
+   - Take the producer with the most confirmations (`len(store.replay(rule)[0])`), with ties broken by store order.
+     Call `store.retest(rule.id, world_id)`. Start at most one retest per item per pass.
+   - The passes handle chains. Say `smelt_iron_ingot` and `mine_iron_ore` are both demoted. The first pass
+     retests the smelt, which makes `raw_iron` needed again, so the second pass retests the mine. The repairs run
+     only after the last pass, so they never ask Claude about an item a retest could bring back. The passes end,
+     because each retest uses up one demoted rule.
+
+Life state and events:
+
+- `self.retests: dict[str, str]` maps a retest id to `"match"` or `"mismatch"`. It is saved in `life_state.json` as
+  `"retests"` and read with `state.get("retests", {})`. Whether a rule was retested is read from the store, so a
+  resumed life neither retests a rule again nor reports an outcome twice.
+- Event `retest {"rule": original id, "retest": retest id, "outcome": "started" | "match" | "mismatch",
+  "transition": id, "item": item}`. On `started`, `transition` is the demoting one and `item` is the
+  candidate; on the other outcomes `item` is `null`.
+- Retest events are queued like repairs, in `self._retests_unreported`. Both queues are flushed by two helpers,
+  and these two calls in `_run_goal` are the only edit outside `_repair_dead_ingredients` and its helpers. S06's
+  rewrite of `_run_goal` keeps one call to each:
+  - `_log_unreported(log)` replaces today's `repair` event loop. It writes the `repair` events, then the `retest`
+    events, into the next goal's trace.
+  - `_attach_unreported(record)` replaces today's `record["repairs"]` lines. It moves `"repairs"` and `"retests"`
+    into the goal record, each only when it isn't empty, and empties both queues.
+- Chat and console (`[retest]`):
+  - started: "Trying smelt iron_ingot again: nothing else I know gives iron_ingot."
+  - match: "smelt iron_ingot works again."
+  - mismatch: "smelt iron_ingot really changed; I won't use it again."
+- A retest with no outcome when the life ends is not reported. The store still holds its state.
+
+**What the change trigger and `change_report` see.**
+
+- `ChangeTrigger._open_change` counts only `source == "revision"`, so a retest never closes a change. Its code
+  doesn't change; a test pins this.
+- `ChangeTrigger._bites` treats a retest like any rule. A restored, certified retest can be the step a change fires
+  on, and its contradiction then opens an epoch, as described above.
+- The agent handles a retest mismatch the normal way: demote it (no epoch, since it has no confirmations) and make
+  one revise call. That revision is a real `revision`, stamped with the current epoch, so it must also fit the
+  original contradiction. Like any revision, it may close the change. `agent.py` doesn't change.
+- `change_report`:
+  - (a) A retest of a rule the change contradicted comes after that contradiction. But a retest started before the
+    change, after an earlier false demotion, can be the first rule the change contradicts. That is fine: a change
+    only fires on a rule with evidence in its window (`r2` needs a confirmation, `stick2` and `planks2` a certified
+    rule), so that contradiction opens an epoch and the story goes on as for any rule. A test pins this.
+  - (b) It still passes or fails on the `revision` events of the first contradicted rule. The text adds the revise
+    calls a retest of that rule caused, "; N more after its retest", without failing on them.
+  - (c) and (d) read `_revisions_of` (`source == "revision"`), so a retest is never the certified revision or "the
+    revised rule".
+  - (e) **changes**: a step by a retest of the contradicted rule (`source == "retest"` and `revision_of` that rule),
+    with the same action kind and tool, counts as a repeat. The text reads "... attempted again after the
+    contradiction: N times (M by a retest)". A retest after a real change does repeat the mistake once, and the
+    report says so.
+
+**Tests.**
+
+Life tests drive `_Life` with store fixtures and single `run_schemavoyager` episodes, not long `run_life` runs: those
+are slow and S06 rewrites the loop. The fake LLM's revise already rejects the `wooden_pickaxe: -1` case. The `r2`
+test overrides revise to return `[]`.
+
+- `tests/test_v3_retest_store.py`:
+  - `retest()` builds the copy as specified. The copy is usable, the original stays demoted, and `store.epochs` is
+    unchanged. Editing the copy's preconditions leaves the original's unchanged.
+  - It refuses a rule that isn't demoted, a retest, and a second retest of the same rule.
+  - Ids: a retest of `smelt_iron_ingot` in world `w` is `smelt_iron_ingot.retest@w`, and one of `x.rev1@w` is
+    `x.rev1.retest@w`.
+  - The copy's replay ignores the contradicting transition and the confirmations before it.
+  - One matching transition after the retest gives 1 confirmation and 0 contradictions. Two from two episodes
+    certify it.
+  - The v3-baseline-1 case: 3 confirmations, a contradiction, epoch 1. After the retest there is still one epoch
+    and the copy's `epoch` is 1.
+  - The m4-2024 case: 0 confirmations, no epoch. The copy's `epoch` is 0, and its window excludes the
+    contradiction.
+  - Demotion opens epochs as follows:
+    - a first-step mismatch opens none;
+    - matched then contradicted opens one;
+    - a revision added after a retest is stamped with the current epoch and has `since_seq` 0.
+  - `save` and `load` round-trip `since_seq` and `source`; a store without `since_seq` loads with 0.
+- `tests/test_v3_retest_life.py` (simulator, fake LLM):
+  - **The false-demotion case (v3-baseline-1):**
+    - `smelt_iron_ingot` is confirmed and then contradicted once by a corrupted outcome (an extra
+      `wooden_pickaxe: -1`). Epoch 1 opens, and the revision is rejected or absent.
+    - The smelt retest starts, with no repair call for `iron_ingot`'s consumers. The next smelt step uses the
+      retest and matches. The next `_repair_dead_ingredients` reports `match`.
+    - The copy is usable, the original is demoted, and there is one epoch.
+  - **The genuine-change case:**
+    - `r2` via `set_world_rules`; the bot holds only a wooden pickaxe. `mine_coal_ore` is demoted, and nothing
+      else produces coal.
+    - The retest runs and mismatches; the outcome is `mismatch`; no new epoch opens.
+    - A later call starts no second retest, and the repair path goes on as before.
+  - **A chain:** with `smelt_iron_ingot` and `mine_iron_ore` both demoted, one `_repair_dead_ingredients` call
+    retests both and makes no repair call.
+  - `ChangeTrigger._open_change`, with the change's `t` set to now:
+    - a certified retest of `mine_coal_ore` with `epoch` 1 or more keeps an `r2` change open;
+    - the control: a certified revision closes it.
+  - `ChangeTrigger` doesn't fire `r2` on a step by a retest that hasn't run yet (its evidence is empty).
+  - On resume, `retests` is read back. No retest starts twice and no outcome is reported twice.
+  - The `retest` events and the record's `"retests"` follow the shape above. A goal with no retest has no
+    `"retests"` key.
+  - `change_report`:
+    - (e) counts a retest step that repeats the contradicted action and tool, and ignores one that used a stone
+      pickaxe;
+    - (c) ignores a certified retest;
+    - a second contradiction and revision caused by the retest leave (a) and (b) passing, with the extra calls in
+      (b)'s text;
+    - a retest started before the change can be the first rule the change contradicts, and all five criteria
+      still pass.
+- These pass unchanged: `tests/test_v2_change.py`, `tests/test_v2_scramble.py`, `tests/test_v2_worlds.py`,
+  `tests/test_v2_repair.py`, `tests/test_v3_repair_dedupe.py`.
+
 ## v3.1 Goals
 
 Written by S05 for S06 (M1: plan steps S1.2–S1.7 and play mode). The bot side is in `contracts/bot_api.md`, v3.1.

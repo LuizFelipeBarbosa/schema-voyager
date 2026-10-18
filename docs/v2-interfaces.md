@@ -358,6 +358,8 @@ class SchemaStore:
   applies to, with `epoch_of(t) >= rule.epoch`, and classifies each with
   `verifier.evaluate`: `confirm` -> confirmed, `contradict` -> contradicted,
   `neutral` -> neither.
+  v3.0f: it also skips transitions with `seq < rule.since_seq`, a retest's window
+  (`docs/v3-interfaces.md`).
 - Certification is unchanged: 2+ confirmations from 2+ episodes, no
   contradictions (within the epoch).
 - `save` / `load` round-trip epochs, kinds and seqs.
