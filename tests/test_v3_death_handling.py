@@ -7,6 +7,7 @@ commands on chosen `status()` calls, as in test_v3_life_queue.py. Call 1 is the 
 import dataclasses
 import json
 import time
+import types
 
 import pytest
 
@@ -313,3 +314,99 @@ def test_play_mode_idle_passes_log_hungry_once_and_never_observe(tmp_path):
     run(tmp_path, world, mode="play", max_goals=1)
 
     assert seen_before_goal == [(0, 1)]  # ten idle passes: no observe, one hungry event
+
+
+# -- hunger retry ------------------------------------------------------------
+
+
+@pytest.fixture
+def apple_and_melon_slice_are_reachable(monkeypatch):
+    def make_plan(food, count, inventory, rules, skill_for=None, visible=None):
+        if food not in ("apple", "melon_slice"):
+            raise PlanningError("no")
+        return []
+
+    monkeypatch.setattr(life, "make_plan", make_plan)
+
+
+def end_hunger_goal(hungry, food, status):
+    """Queue and run `hunger: 4 <food>` to its ending, as _end_goal does it: failed, done, or cancelled by a death."""
+    text = f"hunger: {life.HUNGER_FOOD_COUNT} {food}"
+    goal_id = hungry.queue.submit(text, "system")
+    spec = GoalSpec(id=goal_id, kind="obtain", source="system", text=text, item=food, count=life.HUNGER_FOOD_COUNT)
+    hungry.queue.accept(spec)
+    hungry.queue.mark(goal_id, "running")
+    hungry._failure_reason = lambda episode: "no apples"
+    hungry._goal_record = lambda *args, **kwargs: {}
+    hungry._save = lambda record: None
+    result = types.SimpleNamespace(success=status == "done")
+    episode = types.SimpleNamespace(blocked_rules={})
+    interrupt = "death" if status == "cancelled" else None
+    hungry._end_goal(spec, None, 1, 1, 0.0, episode, result, {}, interrupt)
+    assert hungry.queue.get(goal_id).status == status
+
+
+def hungry_life(tmp_path):
+    world = DyingWorld()
+    world.food = 6
+    hungry = new_life(tmp_path, world)
+    hungry._poll_bot()
+    return hungry
+
+
+def test_a_food_whose_hunger_goal_failed_is_skipped_for_the_retry_time(tmp_path, apple_and_melon_slice_are_reachable, monkeypatch):
+    clock = [1000.0]
+    monkeypatch.setattr(life.time, "monotonic", lambda: clock[0])
+    hungry = hungry_life(tmp_path)
+    end_hunger_goal(hungry, "apple", "failed")
+
+    hungry._queue_hunger_goal()
+
+    assert [g.text for g in system_goals(tmp_path)] == ["hunger: 4 apple", "hunger: 4 melon_slice"]
+    clock[0] += life.HUNGER_RETRY_S
+    melon_goal_id = system_goals(tmp_path)[-1].id
+    hungry.queue.mark(melon_goal_id, "running")
+    hungry.queue.mark(melon_goal_id, "done")
+    hungry._queue_hunger_goal()
+    assert system_goals(tmp_path)[-1].text == "hunger: 4 apple"  # apple has more food points
+
+
+def test_without_another_reachable_food_a_failed_food_logs_hungry_until_the_retry_time_passes(tmp_path, monkeypatch):
+    def make_plan(food, count, inventory, rules, skill_for=None, visible=None):
+        if food != "apple":
+            raise PlanningError("no")
+        return []
+
+    monkeypatch.setattr(life, "make_plan", make_plan)
+    clock = [1000.0]
+    monkeypatch.setattr(life.time, "monotonic", lambda: clock[0])
+    hungry = hungry_life(tmp_path)
+    end_hunger_goal(hungry, "apple", "failed")
+
+    clock[0] += life.HUNGER_RETRY_S - 1
+    hungry._queue_hunger_goal()
+    hungry._queue_hunger_goal()
+
+    assert [g.text for g in system_goals(tmp_path)] == ["hunger: 4 apple"]  # only the failed one
+    assert [e["food"] for e in life_events(tmp_path, "hungry")] == [6]
+
+    clock[0] += 1
+    hungry._queue_hunger_goal()
+
+    assert [g.text for g in system_goals(tmp_path)] == ["hunger: 4 apple", "hunger: 4 apple"]
+
+
+@pytest.mark.parametrize("status", ["done", "cancelled"])
+def test_a_hunger_goal_that_did_not_fail_does_not_block_its_food(tmp_path, monkeypatch, status):
+    def make_plan(food, count, inventory, rules, skill_for=None, visible=None):
+        if food != "apple":
+            raise PlanningError("no")
+        return []
+
+    monkeypatch.setattr(life, "make_plan", make_plan)
+    hungry = hungry_life(tmp_path)
+    end_hunger_goal(hungry, "apple", status)
+
+    hungry._queue_hunger_goal()
+
+    assert [g.text for g in system_goals(tmp_path)] == ["hunger: 4 apple", "hunger: 4 apple"]

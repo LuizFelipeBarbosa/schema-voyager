@@ -50,6 +50,7 @@ USER_DEATHS_TO_FAIL = 2
 HUNGER_BELOW = 8  # a food level under this, with nothing edible held, queues a hunger goal (v3.2e)
 HUNGER_FOOD_COUNT = 4
 HUNGRY_LOG_EVERY_S = 300.0
+HUNGER_RETRY_S = 900.0  # a food whose hunger goal failed isn't chosen again for this long
 # Foods the bot's auto-eat never eats (v3.2g), so they don't count as edible.
 AUTO_EAT_BANNED = frozenset(
     {"pufferfish", "spider_eye", "poisonous_potato", "rotten_flesh", "chorus_fruit", "chicken", "suspicious_stew", "golden_apple"}
@@ -288,6 +289,7 @@ class _Life:
         self._food: int | None = None  # the food level of the latest poll
         self._died_in_goal = False  # the bot died since the running goal started
         self._last_hungry_log: float | None = None  # time.monotonic()
+        self._hunger_failed_at: dict[str, float] = {}  # food -> time.monotonic() of its failed hunger goal
         self._cancelled_in_chat: set[str] = set()  # their ending doesn't say "Cancelled" a second time
         if hooks.bind_store is not None:
             hooks.bind_store(self.store)
@@ -566,6 +568,9 @@ class _Life:
         rules = [rule for rule in self.store.usable_rules(self.world_id) if rule.id not in excluded]
         held = normalize.counts(inventory)
         for food in sorted(foods, key=lambda food: (-foods[food], food)):
+            failed_at = self._hunger_failed_at.get(food)
+            if failed_at is not None and time.monotonic() - failed_at < HUNGER_RETRY_S:
+                continue
             try:
                 make_plan(food, held.get(food, 0) + HUNGER_FOOD_COUNT, held, rules, self.store.skill_for)
             except PlanningError:
@@ -798,6 +803,8 @@ class _Life:
                 reason = self._failure_reason(episode)
                 self.queue.mark(spec.id, "failed", reason=reason)
                 chat = f"Couldn't get {label}: {reason}"
+                if spec.source == "system" and spec.text.startswith("hunger:"):
+                    self._hunger_failed_at[spec.item] = time.monotonic()
         if interrupt is None:
             for rule, error in episode.blocked_rules.items():
                 if error == "missing_ingredients":
