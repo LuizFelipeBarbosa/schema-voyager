@@ -240,7 +240,7 @@ class MineflayerBackend:
             inventory=self._inventory(body),
             blocks_walked=body.get("blocks_walked", 0.0),
             detail=_detail(
-                body, "missing", "used_furnace", "furnace_retrieved", "fuel", "fuel_used", "item", "inventory_before_step", "detail"
+                body, "missing", "used_furnace", "furnace_retrieved", "fuel", "fuel_used", "smelted", "item", "inventory_before_step", "detail"
             ),
             travel=body.get("travel") or {},
             events=body.get("events") or [],

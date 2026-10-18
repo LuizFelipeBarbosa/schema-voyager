@@ -16,8 +16,8 @@ from . import normalize
 from .models import Action, Rule, Skill
 
 MAX_DEPTH = 12
-ITEMS_PER_BATCH_FUEL = 8  # coal and charcoal smelt 8 items each; any other fuel, 1
-BATCH_FUELS = frozenset({"coal", "charcoal"})
+# Items smelted per fuel item (burn time / 200 ticks), by family; a nether `*_stem` burns like a log.
+ITEMS_PER_FUEL = {"coal": 8, "charcoal": 8, "#log": 1.5, "#planks": 1.5, "stick": 0.5}
 
 
 class PlanningError(Exception):
@@ -213,7 +213,10 @@ class _Planner:
 
 def _fuel_units(fuel: str, items: int) -> int:
     """Fuel items needed to smelt `items` items."""
-    return math.ceil(items / ITEMS_PER_BATCH_FUEL) if fuel in BATCH_FUELS else items
+    family = "#log" if fuel.endswith("_stem") else normalize.family(fuel)
+    if family not in ITEMS_PER_FUEL:
+        raise PlanningError(f"{fuel} is not a fuel")
+    return math.ceil(items / ITEMS_PER_FUEL[family])
 
 
 def _replace(target: Counter, source: Counter) -> None:

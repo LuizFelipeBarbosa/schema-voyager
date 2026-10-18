@@ -231,8 +231,8 @@ WHITELIST_RECIPES: dict[str, tuple[dict[str, int], int, bool]] = {
     "shears": ({"iron_ingot": 2}, 1, False),
 }
 SMELTS = {"raw_iron": "iron_ingot"}
-FUEL_ITEMS_PER_FUEL = {"coal": 8, "charcoal": 8}  # any other fuel smelts 1 item
-OTHER_FUELS = ("#planks", "#log", "stick")
+# Items smelted per fuel item (burn time / 200 ticks), by family; a nether `*_stem` burns like a log.
+FUEL_ITEMS_PER_FUEL = {"coal": 8, "charcoal": 8, "#planks": 1.5, "#log": 1.5, "stick": 0.5}
 
 TERRAIN_BOTTOM = -40  # bedrock; deepslate is -39..-1, stone 0 and up
 MAX_DISTANCE = 32
@@ -477,10 +477,11 @@ class NaturalWorld:
         item = SMELTS.get(ingredient)
         if item is None or item != action.target:
             return self._fail("craft_failed")
-        if normalize.family(fuel) not in FUEL_ITEMS_PER_FUEL and normalize.family(fuel) not in OTHER_FUELS:
+        fuel_family = "#log" if fuel.endswith("_stem") else normalize.family(fuel)
+        if fuel_family not in FUEL_ITEMS_PER_FUEL:
             return self._fail("craft_failed", detail="not_fuel")
 
-        fuel_used = -(-action.times // FUEL_ITEMS_PER_FUEL.get(fuel, 1))  # ceil
+        fuel_used = math.ceil(action.times / FUEL_ITEMS_PER_FUEL[fuel_family])
         payment = Counter({ingredient: action.times})
         payment[fuel] += fuel_used
         missing = {name: need - self.inventory[name] for name, need in payment.items() if self.inventory[name] < need}
