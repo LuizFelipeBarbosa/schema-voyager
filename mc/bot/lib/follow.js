@@ -9,6 +9,9 @@ const DEFAULT_DISTANCE = 3
 const MIN_DISTANCE = 1
 const MAX_DISTANCE = 8
 const GONE_MS = 10000
+// GoalFollow keeps the player's position from when it was set, so a bot that reached it can rest up to twice the
+// distance away. Past distance + this slack, a resting bot gets a fresh goal.
+const REST_SLACK_BLOCKS = 1.5
 
 function validateFollow (body) {
   const { player, distance } = body
@@ -92,7 +95,10 @@ function createFollow (bot, { guard, eventLog, isFree, movements = () => null, n
       }
       following.noEntitySince = null
       following.entityId = entity.id
-      if (!isFree() || (bot.pathfinder.goal === following.goal && following.goalEntity === entity)) return
+      if (!isFree()) return
+      const goalSet = bot.pathfinder.goal === following.goal && following.goalEntity === entity
+      const restingFar = !bot.pathfinder.isMoving() && bot.entity.position.distanceTo(entity.position) > following.distance + REST_SLACK_BLOCKS
+      if (goalSet && !restingFar) return
       following.goal = new goals.GoalFollow(entity, following.distance)
       following.goalEntity = entity
       const walking = movements()
