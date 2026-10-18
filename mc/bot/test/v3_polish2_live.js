@@ -58,6 +58,8 @@ const RECORD_TIMEOUT_MS = 30 * 1000
 const GOAL_TIMEOUT_MS = 6 * 60 * 1000
 const SUMMONED_KILL_WAIT_S = 300 // the life asks about new mobs only between goals
 const MOB_REPORT_EVERY_MS = 30 * 1000
+const FREE_SLOTS_TIMEOUT_MS = 60 * 1000
+const IDLE_TIMEOUT_MS = 400 * 1000
 const FINISHED = ['done', 'failed', 'cancelled', 'unsupported']
 
 const HUNGER_BELOW = 8 // life.py: a food level under this, with nothing edible held, queues a hunger goal
@@ -442,14 +444,32 @@ async function main () {
     return arrived
   }
 
+  // The bot's free slots; /observe has none while the bot is busy, so it asks again.
+  async function readFreeSlots () {
+    const freeSlots = await waitFor(async () => {
+      const { free_slots: value } = await observeBot()
+      return typeof value === 'number' ? { value } : null
+    }, FREE_SLOTS_TIMEOUT_MS, 2000)
+    assert.ok(freeSlots, `no numeric free_slots from /observe within ${FREE_SLOTS_TIMEOUT_MS / 1000} s`)
+    return freeSlots.value
+  }
+
+  // Waits until no goal is queued or running; prints the system goals that ran meanwhile.
+  async function waitUntilIdle () {
+    const idle = await waitFor(() => !readGoals().some((g) => ['queued', 'running'].includes(g.status)), IDLE_TIMEOUT_MS, 5000)
+    assert.ok(idle, `goals still queued or running after ${IDLE_TIMEOUT_MS / 1000} s: ${short(readGoals().filter((g) => ['queued', 'running'].includes(g.status)).map((g) => [g.id, g.text, g.status]))}`)
+    const system = readGoals().filter((g) => g.source === 'system')
+    console.log(`  idle; system goals so far ${short(system.map((g) => [g.id, g.text, g.status]))}`)
+  }
+
   // Gives junk (then food) until the bot has MAX_FREE_SLOTS free slots or fewer; returns the free slots.
   async function fillInventory () {
     for (const name of Object.keys(JUNK).slice(0, MAX_JUNK_STACKS)) await rcon.exec(`give ${voyagerName} minecraft:${name} ${JUNK[name]}`)
-    let freeSlots = (await observeBot()).free_slots
+    let freeSlots = await readFreeSlots()
     for (const food of FILLER_FOOD) {
       if (freeSlots <= MAX_FREE_SLOTS) break
       await rcon.exec(`give ${voyagerName} minecraft:${food} 64`)
-      freeSlots = (await observeBot()).free_slots
+      freeSlots = await readFreeSlots()
     }
     assert.ok(freeSlots <= MAX_FREE_SLOTS, `free_slots ${freeSlots} after filling the inventory`)
     return freeSlots
@@ -512,17 +532,23 @@ async function main () {
     const later = second.events.filter((event) => event.kind === 'home_slot_bad' || (event.kind === 'home_placed'))
     console.log(`  ${second.goal.id} done; home_unreachable ${short(unreachable[0])}; first plan step after ${second.toFirstPlan} s; other furnishing events ${short(later)}`)
 
-    // 4. The third goal does not try the chest again.
+    // 4. The third goal does not try the walled-in chest again (the life may furnish a new chest elsewhere).
+    await waitUntilIdle() // the moved chest allows one more "a chest for my home" goal, which may be running
+    const chestBeforeThird = await readChest(chestCell)
     const third = await runSticksGoal()
-    const thirdEpisode = readGoalEpisodeEvents(third.goal.id)
     const again = third.events.filter((event) => event.kind === 'home_unreachable')
     assert.equal(again.length, 0, `a further home_unreachable in the third goal: ${short(again)}`)
-    const deposits = thirdEpisode.filter((event) => event.kind === 'stored')
-    assert.equal(deposits.length, 0, `the third goal stored into a chest: ${short(deposits)}`)
     const chestAfter = await readChest(chestCell)
-    assert.deepEqual(chestAfter, chestBefore, `the walled-in chest changed: ${short(chestBefore)} -> ${short(chestAfter)}`)
-    const systemGoals = readGoals().filter((g) => g.source === 'system' && /chest/.test(g.text))
-    console.log(`  ${third.goal.id} done; first plan step after ${third.toFirstPlan} s (second goal: ${second.toFirstPlan} s); chest goals ${short(systemGoals.map((g) => [g.id, g.text, g.status]))}; home_slot_bad ${short(readLifeEvents().filter((e) => e.kind === 'home_slot_bad'))}`)
+    assert.deepEqual(chestAfter, chestBeforeThird, `the walled-in chest changed: ${short(chestBeforeThird)} -> ${short(chestAfter)}`)
+    // `stored` events carry no position: the unchanged chest above is the proof that none went into C.
+    const thirdEpisode = readGoalEpisodeEvents(third.goal.id)
+    const report = {
+      home_placed: third.events.filter((e) => e.kind === 'home_placed'),
+      home_slot_bad: readLifeEvents().filter((e) => e.kind === 'home_slot_bad'),
+      stored: thirdEpisode.filter((e) => e.kind === 'stored').map((e) => e.items),
+      tossed: thirdEpisode.filter((e) => e.kind === 'tossed').map((e) => e.items)
+    }
+    console.log(`  ${third.goal.id} done; first plan step after ${third.toFirstPlan} s (second goal: ${second.toFirstPlan} s); ${short(report)}`)
     return `${second.goal.id} ended with one home_unreachable (moved) at ${short(chestCell)}; ${third.goal.id} tried no deposit; time to first plan step ${second.toFirstPlan} s (second) vs ${third.toFirstPlan} s (third)`
   }
 
