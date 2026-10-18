@@ -17,6 +17,7 @@ const { scan, validateScan } = require('./lib/scan')
 const { survey, validateSurvey } = require('./lib/survey')
 const { goto, validateGoto } = require('./lib/goto')
 const { toss, validateToss } = require('./lib/toss')
+const { deposit, readChest, validateChest, validateDeposit, validateWithdraw, withdraw } = require('./lib/chest')
 const { createUnreachableMemory, look } = require('./lib/targets')
 const { attachEventTracker, createEventLog } = require('./lib/events')
 const { attachChatCommands } = require('./lib/chat_commands')
@@ -48,6 +49,7 @@ const MAX_WALK_STEP = 2 // larger per-tick jumps are teleports, not walking
 const BUILD_TIMEOUT_MS = 60000 // /place and /clear: the 20 s walk plus the placing or digging
 const SURVEY_TIMEOUT_MS = 30000
 const GOTO_TIMEOUT_MS = 60000
+const CHEST_TIMEOUT_MS = 60000
 const TOSS_TIMEOUT_MS = 20000 // the 10 s walk plus the tosses and the settle
 const SMELT_TIMEOUT_BASE_MS = 30000
 const SMELT_TIMEOUT_PER_ITEM_MS = 12000
@@ -301,6 +303,9 @@ const validators = {
   scan: validateScan,
   survey: validateSurvey,
   goto: validateGoto,
+  deposit: validateDeposit,
+  withdraw: validateWithdraw,
+  chest: validateChest,
   chat: (body) => (typeof body.message === 'string' ? null : '"message" must be a string')
 }
 
@@ -487,6 +492,9 @@ action('/clear', validators.clear, (body, session) => clear(bot, body, session),
 action('/scan', validators.scan, (body) => scan(bot, body))
 action('/survey', validators.survey, (body) => survey(bot, body), { timeoutMs: SURVEY_TIMEOUT_MS })
 action('/goto', validators.goto, (body, session) => goto(bot, body, session), { timeoutMs: GOTO_TIMEOUT_MS, cutIn: true })
+action('/deposit', validators.deposit, (body, session) => deposit(bot, body, session), { timeoutMs: CHEST_TIMEOUT_MS, cutIn: true })
+action('/withdraw', validators.withdraw, (body, session) => withdraw(bot, body, session), { timeoutMs: CHEST_TIMEOUT_MS, cutIn: true })
+action('/chest', validators.chest, (body, session) => readChest(bot, body, session), { timeoutMs: CHEST_TIMEOUT_MS, cutIn: true })
 action('/chat', validators.chat, (body) => chat(body))
 action('/reset_episode', validators.none, () => resetEpisode())
 
