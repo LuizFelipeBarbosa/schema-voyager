@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import itertools
 import math
 import random
 from collections import Counter
@@ -9,10 +10,10 @@ from typing import Any
 
 from . import normalize
 from .adapter import DIRECTIONS, LookResult
-from .blueprint import AIR_BLOCKS, REPLACEABLE
+from .blueprint import AIR_BLOCKS, REPLACEABLE, Box
 from .inventory import slots_used, stack_size
 from .layouts import ARENA_RADIUS, GROUND_Y, Layout
-from .models import Action, Observation, Outcome, Status, Task
+from .models import Action, Observation, Outcome, Site, Status, Task
 
 # Vanilla 1.21 rules for the items in the benchmark. Only the simulator reads
 # these; the planner and agents must learn them through actions.
@@ -254,7 +255,7 @@ STEP_DAMAGE_CHANCE = 0.005
 # Threats, food and entities (off peaceful, except the animals).
 THREAT_CHANCE = {"peaceful": 0.0, "easy": 0.06, "normal": 0.10, "hard": 0.15}
 FIGHT_DAMAGE = {"easy": (1, 3), "normal": (2, 5), "hard": (3, 7)}  # total damage of a fight
-THREATENED_ACTIONS = ("mine", "craft", "smelt", "explore", "place", "clear")
+THREATENED_ACTIONS = ("mine", "craft", "smelt", "explore", "place", "clear", "goto")
 THREAT_MOBS = ("zombie", "skeleton", "spider", "creeper")
 ANIMALS = ("cow", "sheep", "pig", "chicken")
 ACTIONS_PER_FOOD = 10
@@ -268,6 +269,11 @@ PASSABLE = frozenset({"air", "short_grass", "poppy", "dandelion"})
 LIQUIDS = frozenset({"water", "lava"})
 TERRAIN_BLOCKS = frozenset({"grass_block", "dirt", "stone", "deepslate"})
 UNLISTED_NEARBY = frozenset({"air", "cave_air", "grass_block", "dirt", "bedrock", "barrier", "short_grass", "tall_grass"})
+GOTO_RANGE = 3
+SURVEY_WINDOW = 12  # a survey looks this far above and below the bot's feet
+SURVEY_MAX_STEP = 3
+SURVEY_MAX_SITES = 10
+_TREE_SUFFIXES = ("_log", "_wood", "_leaves")
 _DIRECTION_VECTORS = {
     "N": (0, -1), "NE": (1, -1), "E": (1, 0), "SE": (1, 1),
     "S": (0, 1), "SW": (-1, 1), "W": (-1, 0), "NW": (-1, -1),
@@ -438,7 +444,7 @@ class NaturalWorld:
         return {"ok": True, "error": None, "output": output, "inventory_delta": {}, "events": []}
 
     def act(self, action: Action) -> Outcome:
-        if action.kind in ("place", "clear") and action.pos is None:
+        if action.kind in ("place", "clear", "goto") and action.pos is None:
             raise ValueError(f"{action.kind} needs a pos")
         self.health = min(20.0, self.health + 1)
         if self.difficulty != "peaceful":
@@ -460,6 +466,8 @@ class NaturalWorld:
             return self._place(action)
         if action.kind == "clear":
             return self._clear(action)
+        if action.kind == "goto":
+            return self._goto(action)
         return self._fail("unknown_action")
 
     def scan(self, origin: Pos, size: Pos) -> dict[Pos, str | None]:
@@ -474,6 +482,59 @@ class NaturalWorld:
     def set_keep_out(self, box: tuple[Pos, Pos] | None) -> None:
         """Remembered only: the simulator has no scaffold to keep out of the box."""
         self._keep_out = box
+
+    def survey(self, size: tuple[int, int], radius: int = 24) -> list[Site]:
+        return self._rank_sites(size, radius, protected=[])
+
+    def _rank_sites(self, size: tuple[int, int], radius: int, protected: list[Box]) -> list[Site]:
+        """The ranking of docs/v3-interfaces.md v3.4b `/survey`, over this world's columns."""
+        width, depth = size
+        feet_x, feet_y, feet_z = self._cell
+        columns: dict[tuple[int, int], int | str] = {}  # a column's ground y, or the reason it is ruled out
+
+        def column(x: int, z: int) -> int | str:
+            if (x, z) not in columns:
+                columns[x, z] = self._survey_column(x, z, feet_y)
+            return columns[x, z]
+
+        sites = []
+        for x0 in range(feet_x - radius, feet_x + radius - width + 2):
+            for z0 in range(feet_z - radius, feet_z + radius - depth + 2):
+                footprint = [column(x, z) for x in range(x0, x0 + width) for z in range(z0, z0 + depth)]
+                if any(isinstance(ground, str) for ground in footprint):
+                    continue
+                ring = [(x, z) for x in range(x0 - 1, x0 + width + 1) for z in range(z0 - 1, z0 + depth + 1)]
+                if any(column(x, z) == "liquid" for x, z in ring):
+                    continue
+                if any(
+                    x0 - 1 < ox + sx and ox < x0 + width + 1 and z0 - 1 < oz + sz and oz < z0 + depth + 1
+                    for (ox, _, oz), (sx, _, sz) in protected
+                ):
+                    continue
+                floor = sorted(footprint)[(len(footprint) - 1) // 2] + 1
+                if any(ground > floor - 1 + SURVEY_MAX_STEP or ground < floor - 2 for ground in footprint):
+                    continue
+                centre_x, centre_z = x0 + width / 2, z0 + depth / 2
+                sites.append(Site(
+                    origin=(x0, floor, z0),
+                    cut=sum(max(0, ground - floor + 1) for ground in footprint),
+                    fill=sum(max(0, floor - 1 - ground) for ground in footprint),
+                    distance=round(math.hypot(centre_x - (feet_x + 0.5), centre_z - (feet_z + 0.5)), 1),
+                ))
+        sites.sort(key=lambda site: (site.cost, site.distance, site.origin[0], site.origin[2]))
+        return sites[:SURVEY_MAX_SITES]
+
+    def _survey_column(self, x: int, z: int, feet_y: int) -> int | str:
+        """The y of the column's ground, or "unknown", "liquid" or "tree" when a site cannot use it."""
+        if self.block_at((x, feet_y + SURVEY_WINDOW, z)) != "air":
+            return "unknown"  # underground: rock or cave air up there is not sky
+        for y in range(feet_y + SURVEY_WINDOW - 1, feet_y - SURVEY_WINDOW - 1, -1):
+            block = self.block_at((x, y, z))
+            if block in LIQUIDS:
+                return "liquid"
+            if not _is_free(block) and block not in PASSABLE:
+                return "tree" if block.endswith(_TREE_SUFFIXES) else y
+        return "unknown"
 
     # --- actions -------------------------------------------------------------
 
@@ -583,6 +644,38 @@ class NaturalWorld:
         return self._built(
             cleared=True, delta={}, travel=travel, events=events, removed=found,
             **{**detail, "found": self.block_at(pos), "inventory_before_step": before_step},
+        )
+
+    def _goto(self, action: Action) -> Outcome:
+        pos = action.pos
+        detail = {"target": _xyz(pos), "inventory_before_step": self._inventory()}
+        stands = [
+            cell
+            for dx, dy, dz in itertools.product(range(-GOTO_RANGE, GOTO_RANGE + 1), repeat=3)
+            if math.sqrt(dx * dx + dy * dy + dz * dz) <= GOTO_RANGE and self._standable(cell := (pos[0] + dx, pos[1] + dy, pos[2] + dz))
+        ]
+        if not stands:
+            return self._fail("unreachable", arrived=False, **detail)
+
+        stand = min(stands, key=lambda cell: (self._distance_to(cell), cell))
+        distance = math.hypot(stand[0] - self._cell[0], stand[2] - self._cell[2])
+        self.blocks_walked += distance
+        self._cell = stand
+        travel = {**_empty_travel(), "distance": round(distance, 1)}
+        events: list[dict[str, Any]] = []
+        if distance:
+            self._roll_damage("travel", TRAVEL_DAMAGE_CHANCE, events)
+        return self._built(delta={}, travel=travel, events=events, arrived=True, **detail)
+
+    def _standable(self, cell: Pos) -> bool:
+        """Whether the bot can stand with its feet in the cell: room for its body, a floor under it."""
+        x, y, z = cell
+        floor = self.block_at((x, y - 1, z))
+        return (
+            self.block_at(cell) in PASSABLE
+            and self.block_at((x, y + 1, z)) in PASSABLE
+            and floor not in PASSABLE
+            and floor not in LIQUIDS
         )
 
     def _built(self, *, delta: dict[str, int], travel: dict[str, Any], events: list[dict[str, Any]], **detail: Any) -> Outcome:
