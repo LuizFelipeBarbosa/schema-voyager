@@ -2093,3 +2093,31 @@ class Episode:  # episode.py, new field
 | `site/dist/goals.js`, `site/dist/goals.test.mjs`, `site/dist/trace.js`, `site/dist/trace.css`, `site/dist/trace.test.mjs` | `composite-panel` | Group 2, after `composite-queue` |
 | `life.py` (places, furnishing, storing, the chest goal, protected boxes, `Episode.home`, `set_stations`), `inventory.py`, `curriculum.py`, `tests/test_v3_home_life.py` | `home-life` | Group 3, after group 2 |
 | `mc/bot/test/v3_home_live.js` | `home-live` (live, instance a) | Group 4 |
+
+## v3.6 Duels (S11: S3.5)
+
+Two bots duel on instance b, and each tactic is measured before it's kept. The routes are `contracts/bot_api.md`
+v3.6. Python has no part in this: no backend method, no goal kind.
+
+### The second bot
+
+`BOT_USERNAME=VoyagerBot2`, `BOT_API_PORT=3218`, `VIEWER_PORT=0`, the instance's `MC_PORT`, and `BOT_OWNERS=Otopo`.
+Neither bot lists the other in `BOT_OWNERS`. `scripts/v3-duel.sh` starts it in screen `sv2-<inst>-bot2`, records
+its pid in `run/bot2-<inst>.pid`, logs to `logs/bot2-<inst>.log`, and stops it by that pid when it exits.
+
+### A series (`scripts/v3-duel.sh --a <set> --b <set> --n 40`)
+
+- **Before the series:** an arena inside the world border (a glass box, stone floor at y 199, forceloaded), the
+  gamerules `naturalRegeneration false`, `keepInventory true` and `doImmediateRespawn true` on peaceful, and the
+  guard `off` on both bots. All of these are put back afterwards.
+- **Each duel:** over RCON, heal both bots and give each the same kit: iron sword, shield in the off-hand, full iron
+  armor, one golden apple. Teleport them 10 blocks apart on the floor, facing each other. The bots swap sides every
+  duel, and the two sets swap bots every 2 duels, so 4 duels cover every pairing.
+- **The result:** a death decides a duel; neither dying by `timeout_s` is a draw. Both answers are cross-checked;
+  a duel whose answers disagree, or with a bot that didn't answer, is invalid and run again.
+- **The table:** for each set, wins, losses, draws, the win rate (a draw counts half), its Wilson 95% interval,
+  mean duration, swings, hits, crits and damage per duel, and the A set's wins split by bot and by side.
+- **The keep rule:** a tactic is kept when `best + tactic` against `best` reaches a win rate of 60% or more over at
+  least 40 duels. The prompt asks for at least 20; 40 is the advisor's change, because an even tactic reaches 12 of
+  20 one time in four. The first series is baseline against baseline, an A/A test of the setup.
+- `--vs <player>` duels a person instead of the second bot, with the same reset, judged from the bot's answer only.

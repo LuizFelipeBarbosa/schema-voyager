@@ -1087,3 +1087,95 @@ The same walk and check; opens the chest, reads it and closes it. `{"ok": true, 
 ### Error codes (v3.5)
 
 No new codes: a chest call uses `not_found`, `unreachable`, `interrupted` and `timeout`.
+
+## v3.6: duels (S11, lanes `fight-core`, `duel-bot`, `duel-runner`, then one lane per tactic)
+
+The measurement protocol (second bot, reset, keep rule) is `docs/v3-interfaces.md` v3.6. Python doesn't call these routes.
+
+### POST /duel  `{"player": "VoyagerBot2", "tactics": ["crit"], "timeout_s": 60, "duel_id": "d007"}`
+
+Fight one player until one of the two dies, the time is up or `/duel/stop`.
+
+- `player` (required): the username of an online player other than the bot. `BOT_OWNERS` doesn't protect a player
+  from a duel: the duel is asked for by name.
+- `tactics` (default `[]`): names from `TACTICS` in `lib/tactics.js`; an unknown name or a repeated one is a 400.
+  `[]` is the baseline, which every set includes.
+- `timeout_s` (default 60): a number from 5 to 300. The action's own timeout is `timeout_s + 15` s.
+- `duel_id` (optional): a string of at most 64 characters, echoed in the answer and in `duel_end`.
+
+It takes the action lock (409 `busy` while another action runs) and the guard never cuts into it. It answers when
+the duel ends:
+
+```json
+{"ok": true, "duel_id": "d007", "opponent": "VoyagerBot2", "tactics": ["crit"], "winner": "VoyagerBot",
+ "reason": "killed", "duration": 11.4, "swings": 14, "hits": 9, "crits": 5, "damage_dealt": 20.0,
+ "damage_taken": 13.1, "blocked": 2, "their_blocked": 3, "health_end": 6.9, "engagements": 2,
+ "position": {...}, "events": [...]}
+```
+
+- `winner`: the bot's username, the opponent's, or `null` (`timeout`, `stopped`, `no_opponent`).
+- `reason`: `killed` (the opponent died; `winner` is the bot), `died` (the bot died), `timeout`, `stopped`, or
+  `no_opponent` (the player is online but its entity wasn't in view for 10 s in a row).
+- `duration`: seconds from the start, one decimal.
+- `swings`: strikes the bot made. `hits`: hurt events on the opponent during the duel. `crits`: critical-hit effects
+  on the opponent.
+- `damage_dealt`: the opponent's health drops as its entity metadata shows them, `null` when its health isn't seen.
+  `damage_taken`: the bot's own health drops. Both one decimal.
+- `blocked`: the opponent's hits the bot's shield stopped (entity status 29 on the bot); `their_blocked`: the same on
+  the opponent.
+- `health_end`: the bot's health at the end. `engagements`: how many `fight()` calls the duel made.
+- A player who isn't online: `{"ok": false, "error": "not_found", "detail": "..."}`, and no duel starts.
+- **The bot's death** ends the duel as a loss. The answer is then `quarantined`, as for any action, but its `events`
+  still hold the `duel_end` (`winner` the opponent, `reason: died`). A death ends the duel at once: a respawn reuses
+  the entity id, so the duel never re-engages after an `entityDead`.
+- On an abort (death, timeout, `/duel/stop`) the handler settles within 2 s.
+
+### POST /duel/stop  `{}`
+
+Not an action: it answers at once, also while `/duel` holds the lock. `{"ok": true, "stopped": true}` when a duel was
+running (it ends with `reason: stopped`), `"stopped": false` when none was.
+
+### The `duel_end` event
+
+Recorded exactly once for every duel that started, the bot's death included, with the answer's fields from
+`duel_id` to `engagements`.
+
+### Tactics (`lib/tactics.js`)
+
+`createTactics(bot, names)` builds the controller `fight()` drives. **The baseline**, in every set:
+
+- One override of mineflayer-pvp's strike (`attemptAttack`, an own property of the `pvp` instance, deleted on
+  detach). No strike before a full cooldown (the held item's attack-speed ticks) since the last strike: pvp's
+  `checkRange` resets its own timer each time the target comes back into range, so the gate counts ticks itself.
+  pvp's shield routine stays: shield down 100 ms before the strike, up again 150 ms after.
+- A mover. Within 4 blocks of the target the pathfinder goal is cleared and the mover drives the controls each
+  physics tick: face the target, walk in (sprinting) when farther than 2.5 blocks, stand closer than that. Past 5
+  blocks pvp's `GoalFollow` takes over again. The pathfinder's stop at each path end clears the controls and the
+  horizontal velocity, which would cancel jumps, strafes and knockback; the mover is there to avoid that.
+- The mover never steps where the next position has no floor within 1 block down, or has lava, fire, magma, water,
+  cactus, a sweet berry bush or powder snow. It stands still instead.
+
+Each tactic is one entry of `TACTICS`, behind its flag, added by its own lane and measured before the next:
+
+1. `crit`: jump when the cooldown is nearly full and the target is in reach, and strike while falling, with sprint
+   released (a critical hit needs both).
+2. `wtap`: after each strike, release forward and sprint for a few ticks and press them again, so the next strike
+   carries a fresh sprint and its extra knockback.
+3. `strafe`: in reach, circle the opponent, holding left or right and switching sides now and then.
+4. `shield`: replaces pvp's shield routine. Shield up when the opponent's next strike is due (its last swing plus its
+   weapon's cooldown) within the shield's 5-tick warm-up, down for the bot's own strike.
+5. `disengage`: below 6 health, run, eat a golden apple (the guard's banned-food list doesn't apply here), and come
+   back once it's eaten or the opponent is in reach.
+
+`DEFAULT_TACTICS` is the set guard fights use: `[]` until S11 has measured the best set, then that set. Each
+tactic's measured result is logged in `docs/v3-progress.md`.
+
+### `fight()` (`lib/guard.js`)
+
+Two new options. `tactics`: a controller from `createTactics`; `fight()` attaches it right after `pvp.attack` and
+detaches it first in its `finally`. `fleeBelow` (default 6): the health under which a fight ends `fled`. A duel
+passes 0 unless `disengage` is in its set.
+
+### Error codes (v3.6)
+
+No new codes: a duel uses `bad_request`, `busy`, `not_found` and `quarantined`.
