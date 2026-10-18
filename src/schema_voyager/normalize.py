@@ -8,12 +8,15 @@ from __future__ import annotations
 
 SPECIES: tuple[str, ...] = ("oak", "spruce", "birch", "jungle", "acacia", "dark_oak", "mangrove", "cherry")
 
+DOOR_PLANKS = 6  # planks of one species that a craft turns into doors
+
 _ORES = ("coal", "iron", "copper", "gold", "diamond", "redstone", "lapis", "emerald")
 
 # Group or family name -> its raw ids, sorted.
 _MEMBERS: dict[str, list[str]] = {
     "#log": sorted(f"{prefix}{s}_{kind}" for s in SPECIES for prefix in ("", "stripped_") for kind in ("log", "wood")),
     "#planks": sorted(f"{s}_planks" for s in SPECIES),
+    "#door": sorted(f"{s}_door" for s in SPECIES),
     "#leaves": sorted([f"{s}_leaves" for s in SPECIES] + ["azalea_leaves", "flowering_azalea_leaves"]),
     "#sapling": sorted([f"{s}_sapling" for s in SPECIES] + ["mangrove_propagule"]),
     "#cobblestone": ["blackstone", "cobblestone", "cobbled_deepslate"],
@@ -26,7 +29,7 @@ _SPECIES_OF: dict[str, str] = {
     f"{prefix}{s}_{kind}": s
     for s in SPECIES
     for prefix, kind in (("", "log"), ("", "wood"), ("stripped_", "log"), ("stripped_", "wood"), ("", "planks"),
-                         ("", "leaves"), ("", "sapling"))
+                         ("", "leaves"), ("", "sapling"), ("", "door"))
 }
 
 
@@ -77,6 +80,12 @@ def resolve(name: str, inventory: dict[str, int]) -> str:
                 logs_by_species[species(raw)] = logs_by_species.get(species(raw), 0) + count
         if logs_by_species:
             return f"{_most_held(logs_by_species)}_planks"
+    if name == "#door":
+        # The door of the species with planks for one (6), the most held; failing that, the most planks; failing that, the door held.
+        planks_by_species = {species(raw): inventory[raw] for raw in _MEMBERS["#planks"] if inventory.get(raw, 0) > 0}
+        enough = {kind: count for kind, count in planks_by_species.items() if count >= DOOR_PLANKS}
+        if planks_by_species:
+            return f"{_most_held(enough or planks_by_species)}_door"
     if not held:
         raise ValueError(f"cannot resolve {name}: no matching item is held")
     return _most_held(held)
