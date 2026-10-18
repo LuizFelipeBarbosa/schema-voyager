@@ -34,8 +34,13 @@ MAX_PREDICTS_CHARS = 120
 
 BeforeStep = Callable[[Episode, PlanStep, list[PlanStep]], None]
 
+# Search and travel failures are handled by Episode.act and the life's exploration round, never by blocking.
+_NEVER_BLOCKED_ERRORS = frozenset({"not_found", "unreachable", "hazard", "timeout", "not_connected"})
 
-def run_schemavoyager(episode: Episode, store: SchemaStore, before_step: BeforeStep | None = None) -> EpisodeResult:
+
+def run_schemavoyager(
+    episode: Episode, store: SchemaStore, before_step: BeforeStep | None = None, excluded: frozenset[str] = frozenset()
+) -> EpisodeResult:
     """Run one episode, replanning from the current state after any step that fails or surprises.
 
     `before_step(episode, step, plan)` is called before each step runs. What a
@@ -47,6 +52,9 @@ def run_schemavoyager(episode: Episode, store: SchemaStore, before_step: BeforeS
     | mismatch    | yes                     | demote, revise (one LLM call), replan  |
     | quarantined | never                   | log it, replan, no revision            |
     | failed      | no                      | replan (tolerant)                      |
+
+    A rule whose step fails twice the same way (same error, same inventory) is blocked for the rest
+    of the goal, and rules in `excluded` are left out: neither is planned.
     """
     task = episode.task
     episode.log.event(
@@ -56,13 +64,17 @@ def run_schemavoyager(episode: Episode, store: SchemaStore, before_step: BeforeS
     completed: list[tuple[Action, str]] = []
     first_plan = True  # v1 narrates every plan; a natural goal is announced once
     awaiting_recovery = False  # natural: a revision was proposed, no step has run under it yet
+    failed_steps: set[tuple[str, str, tuple[tuple[str, int], ...]]] = set()
 
     while not episode.goal_met and episode.can_act:
         try:
             visible = normalize.counts(episode.backend.observe().nearby) if episode.natural else None
+            rules = [
+                rule for rule in store.usable_rules(episode.world_id)
+                if rule.id not in excluded and rule.id not in episode.blocked_rules
+            ]
             plan = make_plan(
-                task.goal_item, task.goal_count, episode.counts, store.usable_rules(episode.world_id), store.skill_for,
-                visible=visible,
+                task.goal_item, task.goal_count, episode.counts, rules, store.skill_for, visible=visible,
             )
         except PlanningError as error:
             episode.log.event("plan_failed", reason=str(error))
@@ -87,6 +99,7 @@ def run_schemavoyager(episode: Episode, store: SchemaStore, before_step: BeforeS
             outcome = episode.act(step.action, annotate=lambda o, s=step: _annotate(s, o, verdict))
             result = verdict["check"]
             if result.status == "failed":
+                _block_repeated_failure(episode, step, outcome, failed_steps)
                 break  # tolerant: replan from the current state
             if result.status == "quarantined":
                 _log_quarantine(episode, outcome, result)
@@ -122,6 +135,21 @@ def run_schemavoyager(episode: Episode, store: SchemaStore, before_step: BeforeS
             changed_skill = skill
     _narrate_learning(episode, store, certified, changed_skill)
     return result
+
+
+def _block_repeated_failure(
+    episode: Episode, step: PlanStep, outcome: Outcome, failed_steps: set[tuple[str, str, tuple[tuple[str, int], ...]]]
+) -> None:
+    """Remember a failed step; the second identical one (rule, error, inventory) blocks its rule."""
+    error = outcome.error or ""
+    if error in _NEVER_BLOCKED_ERRORS:
+        return
+    key = (step.rule.id, error, tuple(sorted(normalize.counts(episode.inventory).items())))
+    if key not in failed_steps:
+        failed_steps.add(key)
+        return
+    episode.blocked_rules[step.rule.id] = error
+    episode.log.event("rule_blocked", rule=step.rule.id, error=error, missing=outcome.detail.get("missing"))
 
 
 def _narrate_learning(
