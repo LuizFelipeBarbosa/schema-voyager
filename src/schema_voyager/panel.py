@@ -6,7 +6,9 @@ first) and /runs.json (every run directory, newest first) so the panel can
 follow a run while it is being written. Run it from the repository root.
 
 It also steers the live life through that run's goals.jsonl (GoalQueue, v3.1f):
-POST /goals {"text", "run"?}, GET /goals.json?run=, POST /goals/<id>/cancel {"run"?}.
+POST /goals {"text", "run"?}, GET /goals.json?run=, POST /goals/<id>/cancel {"run"?}, and for a build
+goal waiting for approval POST /goals/<id>/approve and /discard {"run"?}; GET /goals.json adds a `preview`
+to goals with a blueprint (v3.4b).
 POST accepts only application/json from the panel's own origin. It binds 127.0.0.1.
 """
 
@@ -21,14 +23,15 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlsplit
 
-from .goals import GoalQueue
+from . import blueprint
+from .goals import GoalEntry, GoalQueue
 
 PANEL_PATH = "/site/dist/trace.html"
 _SERVED = re.compile(
     r"^(site/.+|results/.+|runs/[^/]+/episodes/[^/]+\.jsonl|runs/[^/]+/(life\.jsonl|changes\.jsonl|store\.json))$"
 )
 _RUN_NAME = re.compile(r"[A-Za-z0-9._-]+")
-_CANCEL_PATH = re.compile(r"^goals/([^/]+)/cancel$")
+_GOAL_ACTION_PATH = re.compile(r"^goals/([^/]+)/(cancel|approve|discard)$")
 _FINAL_STATUSES = {"done", "failed", "cancelled", "unsupported"}
 _MAX_BODY = 4096
 _MAX_GOAL_TEXT = 200
@@ -86,6 +89,18 @@ def _find_run(root: Path, requested: Any) -> str | None:
     return requested
 
 
+def _goal_json(goal: GoalEntry) -> dict[str, Any]:
+    """The goals.jsonl line, plus the build preview for a goal with a blueprint (None if it isn't valid)."""
+    entry = goal.to_json()
+    bp = entry["blueprint"]
+    if bp is not None:
+        entry["preview"] = None if blueprint.validate(bp) else {
+            "name": bp["name"], "size": bp["size"], "layers": blueprint.render(bp),
+            "palette": dict(bp["palette"]), "materials": blueprint.materials(bp),
+        }
+    return entry
+
+
 class _PanelHandler(SimpleHTTPRequestHandler):
     extensions_map = {**SimpleHTTPRequestHandler.extensions_map, ".jsonl": "text/plain; charset=utf-8"}
 
@@ -113,17 +128,22 @@ class _PanelHandler(SimpleHTTPRequestHandler):
             self._send_json(error.payload, error.status)
             return
         goals = GoalQueue(Path(self.directory) / "runs" / run / "goals.jsonl").goals() if run else []
-        self._send_json({"run": run, "goals": [goal.to_json() for goal in goals]})
+        self._send_json({"run": run, "goals": [_goal_json(goal) for goal in goals]})
 
     def do_POST(self) -> None:
         path = posixpath.normpath(unquote(urlsplit(self.path).path)).lstrip("/")
-        cancel_match = _CANCEL_PATH.match(path)
+        action_match = _GOAL_ACTION_PATH.match(path)
         try:
-            if path != "goals" and not cancel_match:
+            if path != "goals" and not action_match:
                 raise _ApiError(404, "not_found")
             body = self._read_json_object()
-            if cancel_match:
-                payload, status = self._cancel_goal(cancel_match.group(1), body.get("run")), 200
+            if action_match:
+                goal_id, action = action_match.groups()
+                if action == "cancel":
+                    payload = self._cancel_goal(goal_id, body.get("run"))
+                else:
+                    payload = self._answer_approval(goal_id, action, body.get("run"))
+                status = 200
             else:
                 payload, status = self._submit_goal(body), 201
         except _ApiError as error:
@@ -173,6 +193,17 @@ class _PanelHandler(SimpleHTTPRequestHandler):
         if not queue.cancel(goal_id):  # the life finished it meanwhile
             raise _ApiError(409, "not_cancellable", status=queue.get(goal_id).status)
         return {"ok": True, "id": goal_id, "status": "cancelled"}
+
+    def _answer_approval(self, goal_id: str, action: str, requested_run: Any) -> dict[str, Any]:
+        """Approve (queued) or discard (cancelled) a build goal that is awaiting_approval."""
+        queue, _ = self._live_queue(requested_run)
+        goal = queue.get(goal_id)
+        if goal is None:
+            raise _ApiError(404, "unknown_goal")
+        new_status, fields = ("queued", {}) if action == "approve" else ("cancelled", {"reason": "discarded"})
+        if goal.status != "awaiting_approval" or not queue.mark(goal_id, new_status, **fields):
+            raise _ApiError(409, "not_awaiting_approval", status=queue.get(goal_id).status)
+        return {"ok": True, "id": goal_id, "status": new_status}
 
     def _live_queue(self, requested_run: Any) -> tuple[GoalQueue, str]:
         root = Path(self.directory)

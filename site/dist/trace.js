@@ -632,6 +632,7 @@ function stepHtml(step, system) {
 }
 
 function exploreSummary(step) {
+  if (['place', 'clear', 'goto'].includes(step.action_obj.kind)) return 'Done';
   const direction = step.action_obj.direction;
   if (direction === 'up') return 'Climbed back to open sky';
   if (direction) return `Explored ${esc(direction)} (${Math.round(step.travel ? step.travel.distance : 0)} blocks)`;
@@ -751,6 +752,12 @@ function rawLogLine(event) {
       return ['', `look for ${event.target}: ${event.seen ? `${event.direction} (seen)` : `nothing in sight, trying ${event.direction}`}`];
     case 'quarantined':
       return ['warn', `quarantined · ${event.reason} · not evidence`];
+    case 'build_site':
+      return ['', `build site · ${event.size.join(' x ')} at ${event.origin.join(' ')}`];
+    case 'build_progress':
+      return ['', `build ${event.placed}/${event.total}`];
+    case 'build_failed':
+      return ['bad', `build failed · ${event.reason}`];
     case 'repair':
       return ['llm', `Claude repair · ${event.rule} needs ${event.dead_items.join(', ')} · proposed ${event.proposed.length}`];
     default: {

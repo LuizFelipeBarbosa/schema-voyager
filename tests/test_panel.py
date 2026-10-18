@@ -6,7 +6,9 @@ import urllib.request
 from functools import partial
 from http.server import ThreadingHTTPServer
 
-from schema_voyager.goals import GoalQueue
+from schema_voyager import blueprint
+from schema_voyager.goals import GoalQueue, GoalSpec
+from schema_voyager.llm import FAKE_HUT
 from schema_voyager.panel import _PanelHandler
 
 
@@ -264,6 +266,112 @@ def test_other_post_paths_are_404_and_head_stays_405(tmp_path):
             assert _request(port, "POST", path, {}) == (404, {"ok": False, "error": "not_found"}), path
         assert _request(port, "HEAD", "/goals.json")[0] == 405
         assert _request(port, "HEAD", "/site/dist/trace.html")[0] == 405
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def _hut_goal(root, run="new", status="awaiting_approval", blueprint_=FAKE_HUT):
+    """A build goal in the run's queue (queued, or moved on to `status`); returns (queue, id)."""
+    queue = GoalQueue(root / "runs" / run / "goals.jsonl")
+    goal_id = queue.submit("small hut", "user")
+    spec = GoalSpec(id=goal_id, kind="build", source="user", text="small hut", blueprint=blueprint_)
+    assert queue.accept(spec)
+    if status != "queued":
+        assert queue.mark(goal_id, status)
+    return queue, goal_id
+
+
+def test_approve_goal(tmp_path):
+    _two_runs(tmp_path)
+    queue, goal_id = _hut_goal(tmp_path)
+    server = _start_panel(tmp_path)
+    port = server.server_address[1]
+    try:
+        assert _request(port, "POST", f"/goals/{goal_id}/approve", {}) == (
+            200, {"ok": True, "id": goal_id, "status": "queued"})
+        assert _goal_lines(tmp_path, "new")[-1]["status"] == "queued"
+        assert _request(port, "GET", "/goals.json")[1]["goals"][0]["status"] == "queued"
+        assert _request(port, "POST", f"/goals/{goal_id}/approve", {"run": "new"}) == (
+            409, {"ok": False, "error": "not_awaiting_approval", "status": "queued"})
+        assert _request(port, "POST", "/goals/u099/approve", {}) == (404, {"ok": False, "error": "unknown_goal"})
+        assert queue.get(goal_id).status == "queued"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_discard_goal(tmp_path):
+    _two_runs(tmp_path)
+    queue, goal_id = _hut_goal(tmp_path)
+    server = _start_panel(tmp_path)
+    port = server.server_address[1]
+    try:
+        assert _request(port, "POST", f"/goals/{goal_id}/discard", {}) == (
+            200, {"ok": True, "id": goal_id, "status": "cancelled"})
+        line = _goal_lines(tmp_path, "new")[-1]
+        assert (line["status"], line["reason"]) == ("cancelled", "discarded")
+        assert _request(port, "POST", f"/goals/{goal_id}/discard", {}) == (
+            409, {"ok": False, "error": "not_awaiting_approval", "status": "cancelled"})
+        assert _request(port, "POST", "/goals/u099/discard", {}) == (404, {"ok": False, "error": "unknown_goal"})
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_approve_and_discard_refuse_goals_that_are_not_awaiting(tmp_path):
+    _two_runs(tmp_path)
+    _hut_goal(tmp_path, status="queued")
+    server = _start_panel(tmp_path)
+    port = server.server_address[1]
+    try:
+        for action in ("approve", "discard"):
+            assert _request(port, "POST", f"/goals/u001/{action}", {}) == (
+                409, {"ok": False, "error": "not_awaiting_approval", "status": "queued"})
+        assert _goal_lines(tmp_path, "new")[-1]["status"] == "queued"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_approve_and_discard_check_origin_media_type_and_run(tmp_path):
+    _two_runs(tmp_path)
+    _hut_goal(tmp_path)
+    server = _start_panel(tmp_path)
+    port = server.server_address[1]
+    try:
+        for action in ("approve", "discard"):
+            path = f"/goals/u001/{action}"
+            assert _request(port, "POST", path, {}, {"Origin": "http://evil.example"})[0] == 403
+            assert _request(port, "POST", path, {}, {"Content-Type": "text/plain"})[0] == 415
+            assert _request(port, "POST", path, {"run": "nope"}) == (404, {"ok": False, "error": "no_live_run"})
+            assert _request(port, "POST", path, raw=b"[1]")[0] == 400
+        assert _goal_lines(tmp_path, "new")[-1]["status"] == "awaiting_approval"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_goals_json_previews_build_goals(tmp_path):
+    _two_runs(tmp_path)
+    queue, hut_id = _hut_goal(tmp_path)
+    broken = {**FAKE_HUT, "layers": [["LPPPL"]]}
+    _, broken_id = _hut_goal(tmp_path, blueprint_=broken)
+    obtain_id = queue.submit("10 torches", "user")
+    server = _start_panel(tmp_path)
+    port = server.server_address[1]
+    try:
+        goals = {goal["id"]: goal for goal in _request(port, "GET", "/goals.json")[1]["goals"]}
+        assert goals[hut_id]["preview"] == {
+            "name": "small hut",
+            "size": [5, 4, 5],
+            "layers": blueprint.render(FAKE_HUT),
+            "palette": FAKE_HUT["palette"],
+            "materials": blueprint.materials(FAKE_HUT),
+        }
+        assert goals[broken_id]["preview"] is None
+        assert "preview" not in goals[obtain_id]
+        assert "preview" not in _goal_lines(tmp_path, "new")[0]  # computed by the panel, never stored
     finally:
         server.shutdown()
         server.server_close()

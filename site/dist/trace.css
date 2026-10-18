@@ -437,3 +437,26 @@ select { background: var(--panel); border: 1px solid var(--line); border-radius:
 .goal-chip-awaiting-approval { color: var(--violet); border-color: rgba(185, 167, 245, .4); }
 .goal-cancel { padding: 1px 9px; background: transparent; border: 1px solid var(--line); border-radius: 3px; font-family: var(--mono); font-size: 11px; cursor: pointer; }
 .goal-cancel:hover { border-color: var(--red); color: var(--red); }
+
+/* Build preview: the blueprint of a build goal that waits for approval, layer by layer */
+.build-preview { padding: 10px 18px 12px; border-bottom: 1px solid var(--line); }
+.build-preview:empty { display: none; }
+.bp-title { display: flex; align-items: baseline; gap: 10px; margin-bottom: 8px; }
+.bp-size { color: var(--muted); font-family: var(--mono); font-size: 12px; }
+.bp-layers { display: flex; flex-wrap: wrap; gap: 12px; }
+.bp-layer { margin: 0; }
+.bp-layer figcaption { color: var(--muted); font-family: var(--mono); font-size: 10px; letter-spacing: .08em; margin-bottom: 3px; }
+.bp-grid { display: grid; gap: 1px; width: 84px; }
+.bp-cell { display: block; aspect-ratio: 1; border-radius: 1px; }
+.bp-air { background: var(--panel-light); opacity: .5; }
+.bp-any { background: transparent; }
+.bp-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; list-style: none; margin: 10px 0 0; padding: 0; font-size: 12px; }
+.bp-legend li { display: flex; align-items: center; gap: 5px; }
+.bp-swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; }
+.bp-materials { margin: 8px 0 0; font-size: 13px; }
+.bp-materials b { margin-right: 6px; color: var(--dim); font-family: var(--mono); font-size: 10px; font-weight: 400; letter-spacing: .1em; }
+.bp-actions { display: flex; gap: 8px; margin-top: 10px; }
+.bp-approve, .bp-discard { padding: 4px 16px; border-radius: 3px; font-weight: 700; cursor: pointer; }
+.bp-approve { background: var(--mint); color: var(--bg); border: 0; }
+.bp-discard { background: transparent; color: var(--red); border: 1px solid var(--red); }
+.bp-error { margin-top: 6px; color: var(--red); font-family: var(--mono); font-size: 12px; }
