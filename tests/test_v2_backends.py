@@ -133,7 +133,8 @@ def test_observe_status_say_and_begin_episode():
     assert "short_grass" not in observation.nearby and "air" not in observation.nearby
     world.say("hello")  # does nothing
     status = world.status()
-    assert (status.health, status.food, status.alive, status.last_seq) == (20.0, 20, True, 0)
+    assert (status.health, status.food, status.alive) == (20.0, 20, True)
+    assert {event["type"] for event in status.events} <= {"mob_seen"}  # observe logs the mobs in view
     assert status.position == observation.position
 
 

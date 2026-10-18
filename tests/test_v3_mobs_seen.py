@@ -120,3 +120,47 @@ def test_post_still_retries_a_readable_busy_409(monkeypatch):
     monkeypatch.setattr("schema_voyager.mineflayer_backend._sleep", lambda seconds: None)
 
     assert backend._post("/status") == {"ok": True}
+
+
+def report_events(life_, events):
+    status = life_.backend.status
+    life_.backend.status = lambda since=0: dataclasses.replace(status(since=since), events=events, last_seq=max(e["seq"] for e in events))
+
+
+def test_a_poll_records_mob_seen_events_of_the_right_kinds_at_the_events_time(tmp_path):
+    watcher = new_life(tmp_path)
+    report_events(watcher, [
+        {"seq": 1, "t": 1000.5, "type": "mob_seen", "mob": "cow", "kind": "animal", "distance": 4.0},
+        {"seq": 2, "t": 1001.5, "type": "mob_seen", "mob": "boat", "kind": "other", "distance": 2.0},
+    ])
+
+    watcher._poll_bot()
+
+    assert watcher.observed_mobs == {"cow": 1000.5}
+
+
+def test_a_mob_seen_only_through_a_mob_seen_event_is_asked_at_the_next_learn_priors(tmp_path):
+    watcher = new_life(tmp_path)
+    mobs_asked = []
+    ask = watcher.llm.propose_prior_rules_v2
+    watcher.llm.propose_prior_rules_v2 = lambda families, blocks, world_id, mobs=(): (
+        mobs_asked.append(list(mobs)) or ask(families, blocks, world_id, mobs=mobs)
+    )
+    watcher._learn_priors()
+    mobs_asked.clear()
+    report_events(watcher, [{"seq": 1, "t": 1000.5, "type": "mob_seen", "mob": "cow", "kind": "animal", "distance": 4.0}])
+    watcher._poll_bot()
+
+    watcher._learn_priors()
+
+    assert [mobs for mobs in mobs_asked if mobs] == [["cow"]]
+
+
+def test_the_simulator_logs_mob_seen_once_per_type_for_its_nearby_mobs():
+    world = NaturalWorld(2)
+    mobs = world.observe().entities
+    assert mobs
+    first = [event for event in world.status().events if event["type"] == "mob_seen"]
+    world.observe()
+    assert {event["mob"] for event in first} == {mob for mob, info in mobs.items() if info["kind"] in ("animal", "hostile", "mob")}
+    assert [event for event in world.status(since=world.status().last_seq).events] == []

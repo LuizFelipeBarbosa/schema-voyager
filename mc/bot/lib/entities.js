@@ -35,4 +35,27 @@ function nearbyEntities (bot, radius = NEARBY_RADIUS) {
   }
 }
 
-module.exports = { NEARBY_RADIUS, entityKind, nearbyEntities }
+const SIGHTED_KINDS = new Set(['animal', 'hostile', 'mob'])
+const SIGHTING_REPEAT_MS = 300_000
+
+// Which mob types to log as `mob_seen`: each the first time it is in view, then again while it stays in view once
+// its last sighting is over 5 minutes old. `sample(nearby)` takes nearbyEntities' answer and returns the
+// {mob, kind, distance} events to log now.
+function createMobSightings ({ now = Date.now } = {}) {
+  const lastLoggedAt = new Map()
+  return {
+    sample (nearby) {
+      const events = []
+      for (const [mob, { kind, nearest }] of Object.entries(nearby)) {
+        if (!SIGHTED_KINDS.has(kind)) continue
+        const last = lastLoggedAt.get(mob)
+        if (last !== undefined && now() - last <= SIGHTING_REPEAT_MS) continue
+        lastLoggedAt.set(mob, now())
+        events.push({ mob, kind, distance: nearest })
+      }
+      return events
+    }
+  }
+}
+
+module.exports = { NEARBY_RADIUS, SIGHTING_REPEAT_MS, createMobSightings, entityKind, nearbyEntities }

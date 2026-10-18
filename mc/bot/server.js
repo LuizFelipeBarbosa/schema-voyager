@@ -30,7 +30,7 @@ const { DEFAULT_TACTICS, createTactics, validateTactics } = require('./lib/tacti
 const { createActionLock } = require('./lib/action_lock')
 const { DIRECTIONS } = require('./lib/geometry')
 const { hasOpenSky } = require('./lib/sky')
-const { nearbyEntities } = require('./lib/entities')
+const { createMobSightings, nearbyEntities } = require('./lib/entities')
 const { VIEWER_MODES, createViewerControl, localCors } = require('./lib/viewer')
 const {
   freeSlots, inventoryCounts, positionOf, round, scanNearbyBlocks, sleepTicks, stopMoving
@@ -117,6 +117,7 @@ function connect () {
     current.pvp.movements = pvpMovements
     if (!episode.origin) episode.origin = current.entity.position.clone()
     startViewer(current)
+    startMobSampler(current)
     log(`spawned at ${JSON.stringify(positionOf(current))}`)
   })
   // The difficulty can change after the spawn; mineflayer has updated bot.game.difficulty by now.
@@ -166,6 +167,7 @@ function worldPreservingMovements (current) {
 // opened while the bot stands still sees empty sky. Re-send the position
 // while idle; the walked-distance listener adds 0 for a zero-length move.
 const VIEWER_HEARTBEAT_MS = 1000
+const MOB_SAMPLE_MS = 1000
 
 const viewerControl = createViewerControl({
   port: config.viewerPort,
@@ -185,6 +187,23 @@ function startViewer (current) {
     if (connected && actionLock.busyDetail() === null && current.entity) current.emit('move', current.entity.position.clone())
   }, VIEWER_HEARTBEAT_MS)
   current.once('end', () => clearInterval(heartbeat))
+}
+
+// Logs a mob_seen event for each mob type that comes within 16 blocks (v3.0i), so the
+// life learns of mobs passed during a long action, between its polls.
+function startMobSampler (current) {
+  const sightings = createMobSightings()
+  let sampleFailed = false
+  const mobSampler = setInterval(() => {
+    if (!connected) return
+    try {
+      for (const sighting of sightings.sample(nearbyEntities(current))) eventLog.record('mob_seen', sighting)
+    } catch (err) {
+      if (!sampleFailed) log(`mob sampler failed: ${err.stack}`)
+      sampleFailed = true
+    }
+  }, MOB_SAMPLE_MS)
+  current.once('end', () => clearInterval(mobSampler))
 }
 
 // Stops whatever the bot is doing (used on reset and on action timeout).

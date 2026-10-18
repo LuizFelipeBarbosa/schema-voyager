@@ -631,6 +631,9 @@ class _Life:
                 self._handle_death(event)
             elif event["type"] == "threat":
                 threat_seen = True
+            elif event["type"] == "mob_seen" and event.get("kind") in ("animal", "hostile", "mob"):
+                # a mob passed during a long action (v3.0i); never older than a sighting already recorded
+                self.observed_mobs[event["mob"]] = max(self.observed_mobs.get(event["mob"], 0.0), event["t"])
             if event["type"] in ("fight_start", "fight_end", "follow_end") and self._running is not None:
                 self._goal_events.append(event)
         if threat_seen:
