@@ -289,6 +289,7 @@ class MineflayerBackend:
             events=body.get("events") or [],
             last_seq=body.get("last_seq", 0),
             follow=body.get("follow"),
+            entities=_entities(body.get("nearby_entities")),
         )
 
     def look(self, blocks: list[str], radius: int = 64, mobs: Sequence[str] = ()) -> LookResult:
@@ -507,7 +508,10 @@ class MineflayerBackend:
                 with urllib.request.urlopen(request, timeout=timeout) as response:
                     body = json.loads(response.read().decode("utf-8"))
             except urllib.error.HTTPError as error:
-                text = error.read().decode()
+                try:
+                    text = error.read().decode()
+                except (OSError, http.client.HTTPException, ValueError):  # UnicodeDecodeError is a ValueError
+                    text = ""
                 if retry_busy and error.code == 409 and _is_busy(text) and _monotonic() - first_try < BUSY_GIVE_UP_S:
                     _sleep(wait)
                     wait = BUSY_WAIT_S

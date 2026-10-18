@@ -439,6 +439,7 @@ class NaturalWorld:
             events=[event for event in self._events if event["seq"] > since],
             last_seq=self._seq,
             follow=self._following,
+            entities=self._mobs_left(),
         )
 
     def follow(self, player: str | None, distance: float = 3.0) -> str | None:

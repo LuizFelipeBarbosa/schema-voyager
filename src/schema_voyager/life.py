@@ -421,7 +421,7 @@ class _Life:
         observation = self.backend.observe()
         self._inventory_seen = observation.inventory
         self.observed_blocks |= {normalize.family(block) for block in observation.nearby}
-        self._observe_mobs(observation)
+        self._observe_mobs(observation.entities, with_kill_targets=True)
         while True:
             families = self._unasked_families()
             mobs = sorted(set(self.observed_mobs) - self.asked_mobs)
@@ -434,14 +434,15 @@ class _Life:
                 if rule.id not in self.store.rules:
                     self.store.add_rule(rule)
 
-    def _observe_mobs(self, observation: Observation) -> None:
-        """Remember the mobs in view, and the targets of the kill goals in the queue, as seen now (v3.3h)."""
+    def _observe_mobs(self, entities: dict[str, dict[str, Any]], with_kill_targets: bool = False) -> None:
+        """Remember the mobs in view (an observation's or a status's entities), and with `with_kill_targets` the
+        targets of the kill goals in the queue, as seen now (v3.3h)."""
         now = time.time()
-        in_view = [name for name, info in observation.entities.items() if info.get("kind") in ("animal", "hostile", "mob")]
+        in_view = [name for name, info in entities.items() if info.get("kind") in ("animal", "hostile", "mob")]
         targets = [
             g.spec.target for g in self.queue.goals()
             if g.status in ("queued", "running") and g.spec is not None and g.spec.kind == "kill" and g.spec.target
-        ]
+        ] if with_kill_targets else []
         self.observed_mobs.update({mob: now for mob in in_view + targets})
 
     def _unasked_families(self) -> list[str]:
@@ -612,6 +613,7 @@ class _Life:
             return
         self.bot_seq = status.last_seq
         self._food = status.food
+        self._observe_mobs(status.entities)
         threat_seen = False
         for event in sorted(status.events, key=lambda e: e["seq"]):
             if event["seq"] <= since:
