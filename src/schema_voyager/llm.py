@@ -15,7 +15,7 @@ import hashlib
 import json
 import os
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -193,20 +193,51 @@ PARSE_GOAL_SYSTEM = """You turn a request typed to a Minecraft Java Edition 1.21
 - kind "obtain": get items. item is a vanilla item id without the "minecraft:" prefix, or "#planks" / "#log" for any kind of wood. count is how many MORE to get, whatever the inventory holds: "get me 20 torches" while holding 8 means count 20.
 - kind "build": build something. kind "kill": kill mobs (target is the mob id, count how many). kind "guard": guard a player (target is the player name).
 - kind "unsupported": anything else. reply is one short, friendly sentence saying what you can do. Never use "#" in a reply.
+- kind "composite": use it when the request asks for several things at once, or for a preparation such as "get ready for night". Put 2 to 6 steps in children, in the order to do them. Each child is a goal with the fields above and a short text for itself, such as "8 torches". A child is obtain (items), kill (only when the request names the creature) or build (only a shelter, and only when the bot has no home). Never a guard, never another composite, and at most one build. Leave children empty for every other kind.
 Set unused fields to "" or 1."""
+
+PARSE_GOAL_HOME_LINE = "\nThe bot already has a home, so a shelter needs no build child."
+
+_CHILD_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "kind": {"type": "string", "enum": ["obtain", "build", "kill"]},
+        "text": {"type": "string"},  # a short text for this step, such as "8 torches"
+        "item": {"type": "string"},
+        "count": {"type": "integer"},
+        "target": {"type": "string"},
+    },
+    "required": ["kind", "text", "item", "count", "target"],
+    "additionalProperties": False,
+}
 
 PARSE_GOAL_SCHEMA = {
     "type": "object",
     "properties": {
-        "kind": {"type": "string", "enum": ["obtain", "build", "kill", "guard", "unsupported"]},
+        "kind": {"type": "string", "enum": ["obtain", "build", "kill", "guard", "composite", "unsupported"]},
         "item": {"type": "string"},  # obtain: a vanilla item id, or "#planks" / "#log" for any wood; else ""
         "count": {"type": "integer"},  # obtain: how many more (D5); kill: how many; else 1
         "target": {"type": "string"},  # kill: mob id; guard: player name; else ""
         "reply": {"type": "string"},  # unsupported: a short, friendly reply saying what it can do; else ""
+        "children": {"type": "array", "items": _CHILD_SCHEMA},  # composite: the steps in order; else omitted
     },
     "required": ["kind", "item", "count", "target", "reply"],
     "additionalProperties": False,
 }
+
+REPLAN_CHILDREN_SYSTEM = """A Minecraft Java Edition 1.21.1 bot was doing a request as a list of steps, and one step failed. Give the steps that should replace the ones not done yet, in the order to do them: you may retry the failed step, change it or swap it for another way. 0 to 6 steps; none means give up.
+Each step is a goal with a short text for itself, such as "8 torches". A step is obtain (items: item is a vanilla item id without the "minecraft:" prefix, or "#planks" / "#log" for any kind of wood; count is how many MORE to get, whatever the inventory holds), kill (target is the mob id, count how many) or build (only a shelter, and only when the bot has no home). Never a guard. At most one build.
+Set unused fields to "" or 1."""
+
+REPLAN_CHILDREN_SCHEMA = {
+    "type": "object",
+    "properties": {"children": {"type": "array", "items": _CHILD_SCHEMA}},
+    "required": ["children"],
+    "additionalProperties": False,
+}
+
+MAX_CHILDREN = 6
+_CHILD_KINDS = frozenset({"obtain", "build", "kill"})
 
 # v3.4b: Claude designs a blueprint (v3.4a "Claude's form"), and the errors go back to it.
 DESIGN_RETRIES = 2
@@ -512,18 +543,26 @@ class LLM:
     # -- goals (v3.1e) -----------------------------------------------------
 
     def parse_goal(self, text: str, inventory: dict[str, int], known_items: frozenset[str], *,
-                   goal_id: str) -> GoalSpec | Unsupported:
-        """Turn typed text into an obtain, build, kill or guard goal, or say why the bot can't do it.
-        `known_items` is what an obtain item may be (besides the groups); LLMError from the call propagates."""
+                   goal_id: str, home: bool = False) -> GoalSpec | list[GoalSpec] | Unsupported:
+        """Turn typed text into an obtain, build, kill or guard goal, or a list of 2 to 6 child goals when it asks
+        for several things (v3.5f), or say why the bot can't do it. `known_items` is what an obtain item may be
+        (besides the groups); `home` says the bot has a home, so a shelter needs no build; LLMError propagates."""
         if self.mode == "fake":
             self._meter_fake("parse_goal", text)
+            raw_children = _fake_children(text, known_items, home)
+            if raw_children is not None:
+                return self._checked_children(raw_children, known_items, goal_id=goal_id)
             kind, item, count, target = _fake_parse_goal(text, known_items)
             reply = ""
         else:
+            system = PARSE_GOAL_SYSTEM + (PARSE_GOAL_HOME_LINE if home else "")
             user = f"Request: {text}\nInventory: {json.dumps(inventory, sort_keys=True)}"
-            payload = self._json_call("parse_goal", PARSE_GOAL_SYSTEM, user, PARSE_GOAL_SCHEMA)
+            payload = self._json_call("parse_goal", system, user, PARSE_GOAL_SCHEMA)
             kind, item, count, reply = payload["kind"], payload["item"], payload["count"], payload["reply"]
             target = payload.get("target") or ""
+            if kind == "composite":
+                return self._checked_children(payload.get("children") or [], known_items, goal_id=goal_id,
+                                              reply=reply)
         if kind == "build":
             try:
                 blueprint = self.design_blueprint(text)
@@ -531,6 +570,58 @@ class LLM:
                 return Unsupported("I couldn't design that. Try \"build a small wooden house with a door\".")
             return GoalSpec(id=goal_id, kind="build", source="user", text=text, blueprint=blueprint)
         return _checked_goal(goal_id, text, kind, item, count, target, reply, known_items)
+
+    def replan_children(self, text: str, done: list[GoalSpec], failed: GoalSpec, reason: str,
+                        remaining: list[GoalSpec], inventory: dict[str, int], known_items: frozenset[str], *,
+                        home: bool = False) -> list[GoalSpec] | Unsupported:
+        """New children (0 to 6, ids "") to replace the `remaining` ones after `failed` failed for `reason`; []
+        means give up. LLMError from the call propagates."""
+        if self.mode == "fake":
+            self._meter_fake("replan_children", text)
+            return [replace(spec, id="") for spec in remaining]
+
+        def describe(spec: GoalSpec) -> dict[str, Any]:
+            return {"kind": spec.kind, "text": spec.text, "item": spec.item or "", "count": spec.count,
+                    "target": spec.target or ""}
+
+        user = (f"Request: {text}\nDone: {json.dumps([describe(spec) for spec in done])}\n"
+                f"Failed: {json.dumps(describe(failed))}\nWhy: {reason}\n"
+                f"Not done yet: {json.dumps([describe(spec) for spec in remaining])}\n"
+                f"Inventory: {json.dumps(inventory, sort_keys=True)}")
+        system = REPLAN_CHILDREN_SYSTEM + (PARSE_GOAL_HOME_LINE if home else "")
+        payload = self._json_call("replan_children", system, user, REPLAN_CHILDREN_SCHEMA)
+        return self._checked_children(payload["children"], known_items, goal_id=None)
+
+    def _checked_children(self, raw_children: list[dict[str, Any]], known_items: frozenset[str], *,
+                          goal_id: str | None, reply: str = "") -> GoalSpec | list[GoalSpec] | Unsupported:
+        """The children that pass the checks (a guard, a nested composite, a second build, a bad item or a
+        failed design is dropped), at most MAX_CHILDREN. With a `goal_id` (parse_goal): one left is that goal
+        alone, none is Unsupported. Without (replan_children): the list, empty allowed."""
+        children: list[GoalSpec] = []
+        for raw in raw_children:
+            if len(children) == MAX_CHILDREN or raw.get("kind") not in _CHILD_KINDS:
+                continue
+            text = raw.get("text") or ""
+            if raw["kind"] == "build":
+                if any(child.kind == "build" for child in children):
+                    continue
+                try:
+                    blueprint = self.design_blueprint(text)
+                except BlueprintDesignError:
+                    continue
+                children.append(GoalSpec(id="", kind="build", source="user", text=text, blueprint=blueprint))
+                continue
+            child = _checked_goal("", text, raw["kind"], raw.get("item") or "", raw.get("count") or 1,
+                                  raw.get("target") or "", "", known_items)
+            if isinstance(child, GoalSpec):
+                children.append(child)
+        if goal_id is None:
+            return children
+        if not children:
+            return _checked_goal(goal_id, "", "unsupported", "", 1, "", reply, known_items)
+        if len(children) == 1:
+            return replace(children[0], id=goal_id)
+        return children
 
     def design_blueprint(self, text: str, limits: BlueprintLimits = BlueprintLimits()) -> dict[str, Any]:
         """Turn a build request into a valid blueprint within `limits`, giving Claude the errors of a bad answer
@@ -890,6 +981,30 @@ def _fake_parse_goal(text: str, known_items: frozenset[str]) -> tuple[str, str, 
     candidates = [word, word[:-1], word[:-2], "#" + word, "#" + word[:-1]]
     item = next((name for name in candidates if name in known_items or _is_group(name)), word)
     return "obtain", item, count, ""
+
+
+_FAKE_SPLIT = re.compile(r",\s*and\s+|,\s*then\s+|\s+and\s+|\s+then\s+|,\s*")
+
+
+def _fake_children(text: str, known_items: frozenset[str], home: bool) -> list[dict[str, Any]] | None:
+    """Offline stand-in for a composite answer (v3.5f), as raw children; None when the text is a single goal."""
+    if "ready for night" in text.lower():
+        night = [{"kind": "obtain", "text": "8 torches", "item": "torch", "count": 8},
+                 {"kind": "obtain", "text": "a stone sword", "item": "stone_sword", "count": 1}]
+        return night if home else [{"kind": "build", "text": "a small hut"}] + night
+    if text.lower().split()[:1] == ["build"]:  # "build a house with a door and a torch" is one build
+        return None
+    parts = [part.strip() for part in _FAKE_SPLIT.split(text) if part.strip()]
+    if len(parts) < 2:
+        return None
+    raw_children = []
+    for part in parts:
+        kind, item, count, target = _fake_parse_goal(part, known_items)
+        if kind in ("build", "guard") or isinstance(_checked_goal("", part, kind, item, count, target, "", known_items), GoalSpec):
+            raw_children.append({"kind": kind, "text": part, "item": item, "count": count, "target": target})
+        else:
+            return None
+    return raw_children
 
 
 # minecraft-data entity types of living things; boats, items and arrows are other types

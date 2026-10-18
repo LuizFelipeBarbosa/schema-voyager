@@ -255,7 +255,7 @@ def test_next_orders_system_before_user_then_oldest(queue):
 
 
 def test_to_json_keys_and_values():
-    keys = ["id", "t", "status", "source", "text", "kind", "item", "count", "target", "blueprint", "reason", "target_count", "deaths"]
+    keys = ["id", "t", "status", "source", "text", "kind", "item", "count", "target", "blueprint", "reason", "target_count", "deaths", "parent", "children", "replanned"]
     bare = GoalEntry("u001", "submitted", "user", "hi", 5.0).to_json()
     assert list(bare) == keys
     assert (bare["kind"], bare["item"], bare["count"], bare["target"], bare["blueprint"]) == (None,) * 5
@@ -271,7 +271,7 @@ def test_to_json_keys_and_values():
 def test_file_lines_carry_every_key(queue):
     queue.submit("hi")
     record = json.loads(lines(queue)[0])
-    assert set(record) == {"id", "t", "status", "source", "text", "kind", "item", "count", "target", "blueprint", "reason", "target_count", "deaths"}
+    assert set(record) == {"id", "t", "status", "source", "text", "kind", "item", "count", "target", "blueprint", "reason", "target_count", "deaths", "parent", "children", "replanned"}
 
 
 @pytest.mark.parametrize(
