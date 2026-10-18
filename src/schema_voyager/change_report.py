@@ -117,7 +117,19 @@ def _one_revision_call(events: list[Event], store: SchemaStore, change: Event) -
     # One revision event is one LLM call; later ones are other rules' contradictions.
     first = revisions[:1]
     calls = len(first)
-    return calls == 1, f"(b) LLM calls for the revision: {calls}" + (f" ({first[0]['tokens']} tokens)" if first else "")
+    text = f"(b) LLM calls for the revision: {calls}" + (f" ({first[0]['tokens']} tokens)" if first else "")
+    if index is not None:
+        # The revise calls a retest of the contradicted rule caused are reported, not failed on.
+        after_retest = sum(
+            1 for e in events[index:]
+            if e["kind"] == "revision" and _is_retest_of(store.rules.get(e["rule"]), events[index]["rule"])
+        )
+        text += f"; {after_retest} more after its retest" if after_retest else ""
+    return calls == 1, text
+
+
+def _is_retest_of(rule: Any, rule_id: str) -> bool:
+    return rule is not None and rule.source == "retest" and rule.revision_of == rule_id
 
 
 def _revisions_of(store: SchemaStore, change: Event):
@@ -160,11 +172,14 @@ def _no_mistake_repeated(events: list[Event], store: SchemaStore, change: Event)
     mistake = next(t for t in store.transitions if t.id == contradiction["transition"]).action
     repeats = [
         e for e in events[index + 1:]
-        if e["kind"] == "step" and e.get("rule") == contradiction["rule"]
+        if e["kind"] == "step"
+        and (e.get("rule") == contradiction["rule"] or _is_retest_of(store.rules.get(e.get("rule")), contradiction["rule"]))
         and (e["action_obj"]["kind"], e["action_obj"].get("tool")) == (mistake.kind, mistake.tool)
         and _is_changed_action(e["action_obj"], change)
     ]
-    return not repeats, f"(e) {mistake.describe()} attempted again after the contradiction: {len(repeats)} times"
+    by_retest = sum(1 for e in repeats if e["rule"] != contradiction["rule"])
+    text = f"(e) {mistake.describe()} attempted again after the contradiction: {len(repeats)} times"
+    return not repeats, text + (f" ({by_retest} by a retest)" if by_retest else "")
 
 
 if __name__ == "__main__":

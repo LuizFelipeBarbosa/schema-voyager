@@ -25,7 +25,7 @@ from .inventory import junk_to_toss
 from .llm import LLM, SpendCapReached
 from .models import Action, EpisodeResult, Observation, Rule, Task
 from .planner import PlanStep
-from .schema_store import SchemaStore
+from .schema_store import TRAIN_WORLD, SchemaStore
 from .trace import EpisodeLog
 
 MIN_GOAL_BUDGET = 30
@@ -201,6 +201,10 @@ class ChangeTrigger:
         return [json.loads(line) for line in self.log_path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
+def _rule_name(rule: Rule) -> str:
+    return f"{rule.kind} {rule.subject.lstrip('#')}"
+
+
 def run_life(
     backend: LifeBackend, llm: LLM, config: LifeConfig, hooks: LifeHooks | None = None, resume: bool = False
 ) -> dict[str, Any]:
@@ -234,6 +238,7 @@ class _Life:
             self.explores_done: int = state.get("explores_done", 0)
             self.repaired: set[str] = set(state.get("repaired", []))
             self.blocked: dict[str, int] = dict(state.get("blocked", {}))
+            self.retests: dict[str, str] = dict(state.get("retests", {}))  # retest id -> "match" | "mismatch"
             self.earlier_tokens: int = state["tokens"]
             llm.carried_usd = state["spend_usd"]
         else:
@@ -244,11 +249,13 @@ class _Life:
             self.goals_done, self.earlier_tokens, self.explores_done = 0, 0, 0
             self.repaired = set()
             self.blocked = {}
+            self.retests = {}
             self.log_path.write_text("", encoding="utf-8")
         llm.spend_cap_usd = config.spend_cap_usd
         self._calls_marked = len(llm.calls)
         self._certified_marked = self._certified_ids()
         self._repairs_unreported: list[dict[str, Any]] = []  # shown in the next goal's trace and record
+        self._retests_unreported: list[dict[str, Any]] = []
         if hooks.bind_store is not None:
             hooks.bind_store(self.store)
 
@@ -327,8 +334,10 @@ class _Life:
 
     def _repair_dead_ingredients(self, observation: Observation) -> bool:
         """A rule that consumes an item nothing the agent knows produces can never be executed,
-        so it is never contradicted. Once the item's family has been asked about, ask for
-        alternatives to each such rule, once per rule per life. Returns whether any rule was added."""
+        so it is never contradicted. Once the item's family has been asked about, a demoted rule that
+        produces the item is retested first; then ask for alternatives to each such rule, once per rule
+        per life. Returns whether a retest was started or a rule was added."""
+        started = self._retest_demoted()
         rules = self.store.usable_rules(self.world_id)
         produced = {item for rule in rules for item in rule.yields()}
         dead = {item for rule in rules for item in rule.preconditions.get("consumes", {})} - produced
@@ -359,7 +368,79 @@ class _Life:
             self._repairs_unreported.append(
                 {"rule": rule.id, "dead_items": dead_items, "proposed": [r.id for r in proposed], "skipped": skipped}
             )
-        return added
+        return started or added
+
+    def _retest_demoted(self) -> bool:
+        """Report the outcome of retests that have one, then retest demoted rules whose product is needed
+        and produced by nothing else, in passes (a retest can make another item needed). Each rule is
+        retested at most once per life (v3.0f). Returns whether any retest started."""
+        self._report_retest_outcomes()
+        started = False
+        while True:
+            rules = self.store.usable_rules(self.world_id)
+            produced = {item for rule in rules for item in rule.yields()}
+            pass_started = False
+            for item in sorted(self._needed_items(rules, produced) & self.asked):
+                original = self._best_demoted_producer(item)
+                if original is None:
+                    continue
+                retest = self.store.retest(original.id, self.world_id)
+                demoted_by = self.store.demoted_in[self.world_id][original.id]
+                self._announce_retest(
+                    f"Trying {_rule_name(original)} again: nothing else I know gives {item.lstrip('#')}.",
+                    {"rule": original.id, "retest": retest.id, "outcome": "started", "transition": demoted_by, "item": item},
+                )
+                pass_started = True
+            if not pass_started:
+                return started
+            started = True
+
+    def _report_retest_outcomes(self) -> None:
+        for retest in list(self.store.rules.values()):
+            if retest.source != "retest" or retest.id in self.retests:
+                continue
+            name = _rule_name(retest)
+            demoted_by = self.store.demoted_in.get(self.world_id, {}).get(retest.id)
+            confirmed = self.store.replay(retest)[0]
+            if demoted_by is not None:
+                outcome, transition, message = "mismatch", demoted_by, f"{name} really changed; I won't use it again."
+            elif confirmed:
+                outcome, transition, message = "match", confirmed[0].id, f"{name} works again."
+            else:
+                continue  # no step has used it yet
+            self.retests[retest.id] = outcome
+            self._announce_retest(
+                message, {"rule": retest.revision_of, "retest": retest.id, "outcome": outcome, "transition": transition, "item": None}
+            )
+
+    def _needed_items(self, rules: list[Rule], produced: set[str]) -> set[str]:
+        """Items nothing usable produces that a usable rule consumes, uses as a station or needs as its
+        first tool (when it has no producible tool), or that are on the frontier."""
+        needed = set(self.curriculum.frontier)
+        for rule in rules:
+            needed.update(rule.preconditions.get("consumes", {}))
+            if rule.preconditions.get("station"):
+                needed.add(rule.preconditions["station"])
+            tools = rule.preconditions.get("tool_any", [])
+            if tools and not produced.intersection(tools):
+                needed.add(tools[0])
+        return needed - produced
+
+    def _best_demoted_producer(self, item: str) -> Rule | None:
+        """The demoted rule with the most confirmations that yields `item` and has not been retested."""
+        demoted_here = self.store.demoted_in.get(self.world_id, {})
+        retested = {rule.revision_of for rule in self.store.rules.values() if rule.source == "retest"}
+        producers = [
+            rule for rule in self.store.rules.values()
+            if item in rule.yields() and rule.scope in (TRAIN_WORLD, self.world_id) and rule.id in demoted_here
+            and rule.source != "retest" and rule.id not in retested
+        ]
+        return max(producers, key=lambda rule: len(self.store.replay(rule)[0]), default=None)  # first of the ties
+
+    def _announce_retest(self, message: str, event: dict[str, Any]) -> None:
+        print(f"[retest] {event['retest']}: {event['outcome']}")
+        self.backend.say(message[:MAX_CHAT_CHARS])
+        self._retests_unreported.append(event)
 
     def _useless_repair_reason(self, repair: Rule, dead: set[str]) -> str | None:
         """Why a proposed repair is not worth adding: it repeats a known rule or still consumes a dead item."""
@@ -408,8 +489,7 @@ class _Life:
             names = [f"{count} {item.lstrip('#')}" for item, count in tossed.items()]
             listed = names[0] if len(names) == 1 else f"{', '.join(names[:-1])} and {names[-1]}"
             self.backend.say(f"Dropping {listed} to make room."[:MAX_CHAT_CHARS])
-        for repair in self._repairs_unreported:
-            log.event("repair", **repair)
+        self._log_unreported(log)
 
         result = run_schemavoyager(episode, self.store, self.hooks.before_step, excluded=self._excluded_rules())
         for rule, error in episode.blocked_rules.items():
@@ -424,13 +504,26 @@ class _Life:
         self.goals_done = index
         record = self._goal_record(index, goal, budget, result, started_at, interrupted)
         record["tossed"] = tossed
-        if self._repairs_unreported:
-            record["repairs"], self._repairs_unreported = self._repairs_unreported, []
+        self._attach_unreported(record)
         self._save(record)
         if self.hooks.after_goal is not None:
             self.hooks.after_goal(record)
         steps = [event for event in log.events if event["kind"] == "step"]
         return not result.success and not interrupted and bool(steps) and steps[-1]["error"] in MISSING_RESOURCE_ERRORS
+
+    def _log_unreported(self, log: EpisodeLog) -> None:
+        for repair in self._repairs_unreported:
+            log.event("repair", **repair)
+        for retest in self._retests_unreported:
+            log.event("retest", **retest)
+
+    def _attach_unreported(self, record: dict[str, Any]) -> None:
+        """Move the repairs and retests reported since the last goal into its record, then empty both queues."""
+        if self._repairs_unreported:
+            record["repairs"] = self._repairs_unreported
+        if self._retests_unreported:
+            record["retests"] = self._retests_unreported
+        self._repairs_unreported, self._retests_unreported = [], []
 
     def _make_room(self, goal: Goal, observation: Observation) -> tuple[Observation, dict[str, int]]:
         """Toss junk when the bot is nearly full. Returns the observation to start the goal from
@@ -511,7 +604,7 @@ class _Life:
         self.store.save(self.store_path)
         state = {
             "world_id": self.world_id, "goal_index": self.goals_done, "explores_done": self.explores_done, "curriculum": self.curriculum.to_dict(),
-            "asked": sorted(self.asked), "repaired": sorted(self.repaired), "blocked": self.blocked, "observed_blocks": sorted(self.observed_blocks),
+            "asked": sorted(self.asked), "repaired": sorted(self.repaired), "blocked": self.blocked, "retests": self.retests, "observed_blocks": sorted(self.observed_blocks),
             "tokens": self.earlier_tokens + self.llm.total_tokens, "spend_usd": self.llm.spent_usd,
         }
         self.state_path.write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
