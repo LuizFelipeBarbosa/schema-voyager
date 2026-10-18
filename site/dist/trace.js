@@ -843,7 +843,15 @@ function ruleLabel(rule) {
     const how = tools.length ? `with ${tools.join(' / ')}` : 'with any tool or bare hand';
     return `mine ${rule.action.block} ${how} → ${formatCounts(rule.effects.drops)}`;
   }
+  if (rule.action.type === 'kill') {
+    return `kill ${rule.action.mob} → ${formatRanges(rule.effects.allowed)}`;
+  }
   return `craft ${rule.action.item} → ${formatCounts(rule.effects.gains)}`;
+}
+
+function formatRanges(ranges) {
+  const entries = Object.entries(ranges || {});
+  return entries.length ? entries.map(([item, [low, high]]) => `${item} ${low}-${high}`).join(', ') : 'nothing';
 }
 
 function formatEffect(key, value) {

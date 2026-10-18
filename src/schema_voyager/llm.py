@@ -892,6 +892,10 @@ def _fake_parse_goal(text: str, known_items: frozenset[str]) -> tuple[str, str, 
     return "obtain", item, count, ""
 
 
+# minecraft-data entity types of living things; boats, items and arrows are other types
+_KILLABLE_MOB_KINDS = frozenset({"hostile", "animal", "mob", "passive", "water_creature", "ambient"})
+
+
 def _checked_goal(goal_id: str, text: str, kind: str, item: str, count: int, target: str, reply: str,
                   known_items: frozenset[str]) -> GoalSpec | Unsupported:
     """The checks every mode shares, in the order of v3.1e; replies lose "#" and are cut."""
@@ -904,10 +908,11 @@ def _checked_goal(goal_id: str, text: str, kind: str, item: str, count: int, tar
         return GoalSpec(id=goal_id, kind="guard", source="user", text=text, target=target.strip() or "me")
     if kind == "kill":
         mob = _vanilla_mob_name(target)
-        if mob is None:
-            return unsupported(f"I don't know a creature called {target.strip()}.")
-        if vanilla_mobs()[mob] == "player":
+        mob_kind = vanilla_mobs().get(mob)
+        if mob_kind == "player":
             return unsupported("I won't fight players.")
+        if mob_kind not in _KILLABLE_MOB_KINDS:
+            return unsupported(f"I don't know a creature called {target.strip()}.")
         if count > MAX_KILL_COUNT:
             return unsupported(f"I can kill at most {MAX_KILL_COUNT} at a time.")
         return GoalSpec(id=goal_id, kind="kill", source="user", text=text, target=mob, count=max(1, count))

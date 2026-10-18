@@ -25,7 +25,7 @@ function load(source) {
     URLSearchParams
   };
   vm.createContext(context);
-  vm.runInContext(`${source}\nthis.api = { logLine, readable: typeof readable === "function" ? readable : null, stepLogLine, stateAt, episodeHtml, stepHtml, goalStory: typeof goalStory === "function" ? goalStory : null, lifeOverview: typeof lifeOverview === "function" ? lifeOverview : null, goalCardHtml: typeof goalCardHtml === "function" ? goalCardHtml : null, changeStory: typeof changeStory === "function" ? changeStory : null, worldChangesHtml: typeof worldChangesHtml === "function" ? worldChangesHtml : null, hypothesisHtml: typeof hypothesisHtml === "function" ? hypothesisHtml : null, revisionHtml: typeof revisionHtml === "function" ? revisionHtml : null, lifePlanHtml: typeof lifePlanHtml === "function" ? lifePlanHtml : null, overviewHtml: typeof overviewHtml === "function" ? overviewHtml : null, compactMode: typeof compactMode === "function" ? compactMode : null, routeOf: typeof routeOf === "function" ? routeOf : null, scaleLength: typeof scaleLength === "function" ? scaleLength : null };`, context);
+  vm.runInContext(`${source}\nthis.api = { logLine, readable: typeof readable === "function" ? readable : null, stepLogLine, stateAt, episodeHtml, stepHtml, goalStory: typeof goalStory === "function" ? goalStory : null, lifeOverview: typeof lifeOverview === "function" ? lifeOverview : null, goalCardHtml: typeof goalCardHtml === "function" ? goalCardHtml : null, changeStory: typeof changeStory === "function" ? changeStory : null, worldChangesHtml: typeof worldChangesHtml === "function" ? worldChangesHtml : null, hypothesisHtml: typeof hypothesisHtml === "function" ? hypothesisHtml : null, revisionHtml: typeof revisionHtml === "function" ? revisionHtml : null, lifePlanHtml: typeof lifePlanHtml === "function" ? lifePlanHtml : null, overviewHtml: typeof overviewHtml === "function" ? overviewHtml : null, compactMode: typeof compactMode === "function" ? compactMode : null, routeOf: typeof routeOf === "function" ? routeOf : null, scaleLength: typeof scaleLength === "function" ? scaleLength : null, ruleLabel };`, context);
   return context.api;
 }
 
@@ -273,6 +273,9 @@ const scriptGoal = now.goalCardHtml(now.goalStory([{ ...userGoal, text: '<script
 assert.ok(scriptGoal.includes('&lt;script&gt;') && !scriptGoal.includes('<script>'), 'the goal text is escaped');
 assert.match(now.goalCardHtml(oldStory, null), /Get 5 torch/, 'an old goal card is unchanged');
 assert.match(now.goalCardHtml(now.goalStory([userGoal]), { ...lifeRows[2], outcome: 'interrupted', interrupt: 'cancelled' }), /INTERRUPTED · cancelled/);
+
+const killRule = { action: { type: 'kill', mob: 'cow' }, effects: { killed: true, drops: { beef: 1 }, allowed: { beef: [1, 3], leather: [0, 2] } } };
+assert.equal(now.ruleLabel(killRule), 'kill cow → beef 1-3, leather 0-2');
 
 console.log('life view ok');
 console.log(`v1 ok: ${v1.length} events identical`);
