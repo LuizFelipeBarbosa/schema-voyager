@@ -231,6 +231,11 @@ WHITELIST_RECIPES: dict[str, tuple[dict[str, int], int, bool]] = {
     "iron_sword": ({"iron_ingot": 2, "stick": 1}, 1, True),
     "bucket": ({"iron_ingot": 3}, 1, True),
     "shears": ({"iron_ingot": 2}, 1, False),
+    "iron_helmet": ({"iron_ingot": 5}, 1, True),
+    "iron_chestplate": ({"iron_ingot": 8}, 1, True),
+    "iron_leggings": ({"iron_ingot": 7}, 1, True),
+    "iron_boots": ({"iron_ingot": 4}, 1, True),
+    "shield": ({"#planks": 6, "iron_ingot": 1}, 1, True),
 }
 SMELTS = {"raw_iron": "iron_ingot"}
 # Items smelted per fuel item (burn time / 200 ticks), by family; a nether `*_stem` burns like a log.
