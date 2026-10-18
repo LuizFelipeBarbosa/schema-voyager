@@ -26,6 +26,7 @@ const { attachSurvival } = require('./lib/survival')
 const { createFollow, validateFollow } = require('./lib/follow')
 const { DUEL_TIMEOUT_S, runDuel, validateDuel } = require('./lib/duel')
 const { MODES, createGuard } = require('./lib/guard')
+const { DEFAULT_TACTICS, createTactics, validateTactics } = require('./lib/tactics')
 const { createActionLock } = require('./lib/action_lock')
 const { DIRECTIONS } = require('./lib/geometry')
 const { hasOpenSky } = require('./lib/sky')
@@ -64,6 +65,7 @@ let tracker = null
 let survival = null
 // The guard's mode outlives reconnects; the guard follows the current bot.
 let guardMode = process.env.BOT_GUARD || 'defend'
+let guardTactics = [...DEFAULT_TACTICS] // read at each fight, so a change applies to the next one
 let guard = null
 let follow = null
 let pvpMovements = null
@@ -97,7 +99,9 @@ function connect () {
   current.loadPlugin(pathfinder)
   current.loadPlugin(require('mineflayer-pvp').plugin)
   survival = attachSurvival(current, eventLog)
-  const currentGuard = createGuard(current, { eventLog, mode: guardMode, movements: () => pvpMovements })
+  const currentGuard = createGuard(current, {
+    eventLog, mode: guardMode, movements: () => pvpMovements, tactics: () => createTactics(current, guardTactics)
+  })
   guard = currentGuard
   const currentFollow = createFollow(current, {
     guard: currentGuard, eventLog, isFree: () => actionLock.busyDetail() === null, movements: () => pvpMovements
@@ -406,25 +410,35 @@ function status (req, res) {
     nearby_entities: ready ? nearbyEntities(bot) : {},
     events: eventLog.since(body.since ?? 0),
     last_seq: eventLog.lastSeq(),
-    guard: guard ? guard.status() : { mode: guardMode, fighting: null },
+    guard: { ...(guard ? guard.status() : { mode: guardMode, fighting: null }), tactics: guardTactics },
     follow: follow ? follow.status() : null
   })
 }
 app.post('/status', status)
 app.get('/status', status)
 
-// Sets the guard's mode; doesn't take the action lock, and works without a bot.
+// Sets the guard's mode and/or its fight tactics; doesn't take the action lock, and works without a bot.
 app.post('/guard', (req, res) => {
   const body = req.body || {}
   const respond = responder('/guard', body, res)
+  if (body.mode === undefined && body.tactics === undefined) {
+    return respond(400, { ok: false, error: 'bad_request', detail: 'give a mode, tactics or both' })
+  }
   try {
-    if (guard) guard.setMode(body.mode)
-    else if (!MODES.includes(body.mode)) throw new Error(`unknown guard mode: ${body.mode}`)
+    if (body.tactics !== undefined) {
+      const problem = validateTactics(body.tactics)
+      if (problem) throw new Error(problem)
+    }
+    if (body.mode !== undefined) {
+      if (guard) guard.setMode(body.mode)
+      else if (!MODES.includes(body.mode)) throw new Error(`unknown guard mode: ${body.mode}`)
+    }
   } catch (err) {
     return respond(400, { ok: false, error: 'bad_request', detail: err.message })
   }
-  guardMode = body.mode
-  respond(200, { ok: true, mode: guardMode })
+  if (body.mode !== undefined) guardMode = body.mode
+  if (body.tactics !== undefined) guardTactics = [...body.tactics]
+  respond(200, { ok: true, mode: guardMode, tactics: guardTactics })
 })
 
 // Follows a player, or stops following; doesn't take the action lock and never answers 409.
