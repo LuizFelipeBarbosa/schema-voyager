@@ -15,7 +15,7 @@ async function craft (bot, { item: itemName, times = 1 }, { tracker }) {
   await settleInventory(bot)
   const before = inventoryCounts(bot)
   tracker.log.setPhase('step') // a craft has no travel: its step starts now
-  const result = { item: itemName, times, used_table: false, table_retrieved: null }
+  const result = { item: itemName, times, used_table: false, table_retrieved: null, tools_broken: [] }
   const finish = (error, extra = {}) => {
     const inventory = inventoryCounts(bot)
     return {
@@ -62,9 +62,11 @@ async function craft (bot, { item: itemName, times = 1 }, { tracker }) {
   }
   await clearCraftingGrids(bot)
   if (placedTablePos) {
-    result.table_retrieved = await retrieveStation(bot, placedTablePos, 'crafting_table', before.crafting_table || 0, {
+    const { retrieved, toolsBroken } = await retrieveStation(bot, placedTablePos, 'crafting_table', before.crafting_table || 0, {
       onDrop: (entity) => tracker.ownDrops.add(entity.id)
     })
+    result.table_retrieved = retrieved
+    result.tools_broken = toolsBroken
   }
   await settleInventory(bot)
   if (craftError && !recipe) {

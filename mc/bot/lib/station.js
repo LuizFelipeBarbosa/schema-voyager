@@ -5,6 +5,7 @@ const { Vec3 } = require('vec3')
 const {
   AIR_BLOCKS, findInventoryItem, inventoryCounts, pickUpEntities, settleInventory, sleepTicks, watchDrops
 } = require('./world')
+const { cheapestHarvestTool } = require('./movements')
 
 const SEARCH_RADIUS = 4
 const DROP_WINDOW_TICKS = 20
@@ -93,16 +94,22 @@ function overlapsBot (bot, cell) {
     cell.z < z + halfWidth && cell.z + 1 > z - halfWidth
 }
 
-// Digs the station the bot placed and picks it back up. True when the bot
-// holds as many `itemName` as before the call. With `withBestTool`, the best
-// tool in the inventory is held for the dig (a furnace only drops when
-// broken with a pickaxe). `onDrop` sees each item entity the dig drops.
+// Digs the station the bot placed and picks it back up. Resolves to
+// {retrieved, toolsBroken}: `retrieved` is true when the bot holds as many
+// `itemName` as before the call; `toolsBroken` names the tool the dig wore out.
+// The tool is the cheapest that harvests the block. With `withBestTool` and no
+// such tool, the best one in the inventory is held (a furnace only drops when
+// broken with a pickaxe), even if it breaks. `onDrop` sees each item entity the
+// dig drops.
 async function retrieveStation (bot, pos, itemName, countBefore, { withBestTool = false, onDrop = null } = {}) {
   const watcher = watchDrops(bot, pos, { onDrop })
+  let held = null // the tool the dig starts with, and how many of it there are
   try {
     const block = bot.blockAt(pos)
-    const tool = withBestTool ? bot.pathfinder.bestHarvestTool(block) : null
+    let tool = cheapestHarvestTool(bot)(block)
+    if (withBestTool && !(tool && block.canHarvest(tool.type))) tool = bot.pathfinder.bestHarvestTool(block)
     if (tool) await bot.equip(tool, 'hand')
+    if (bot.heldItem?.maxDurability) held = { name: bot.heldItem.name, count: inventoryCounts(bot)[bot.heldItem.name] }
     await bot.dig(block, true)
     await sleepTicks(DROP_WINDOW_TICKS)
   } catch (err) {
@@ -111,7 +118,11 @@ async function retrieveStation (bot, pos, itemName, countBefore, { withBestTool 
   const { entities } = watcher.stop()
   await pickUpEntities(bot, entities)
   await settleInventory(bot)
-  return (inventoryCounts(bot)[itemName] || 0) >= countBefore
+  const counts = inventoryCounts(bot)
+  return {
+    retrieved: (counts[itemName] || 0) >= countBefore,
+    toolsBroken: held && (counts[held.name] || 0) < held.count ? [held.name] : []
+  }
 }
 
 module.exports = { acquireTable, findPlacedStation, findSpots, placeStation, retrieveStation }
