@@ -5,6 +5,7 @@ const express = require('express')
 const mineflayer = require('mineflayer')
 const { pathfinder, Movements } = require('mineflayer-pathfinder')
 const { mine } = require('./lib/mine')
+const { sprintAllowed } = require('./lib/movements')
 const { craft } = require('./lib/craft')
 const { explore, newSpiral, trackWorldBorder } = require('./lib/explore')
 const { probe } = require('./lib/probe')
@@ -98,6 +99,10 @@ function connect () {
     startViewer(current)
     log(`spawned at ${JSON.stringify(positionOf(current))}`)
   })
+  // The difficulty can change after the spawn; mineflayer has updated bot.game.difficulty by now.
+  current._client.on('difficulty', () => {
+    if (pvpMovements) pvpMovements.allowSprinting = sprintAllowed(current)
+  })
   current.on('move', (oldPos) => {
     const { x, z } = current.entity.position
     const step = Math.hypot(x - oldPos.x, z - oldPos.z)
@@ -131,7 +136,7 @@ function worldPreservingMovements (current) {
   movements.canDig = false
   movements.allow1by1towers = false
   movements.scafoldingBlocks = []
-  movements.allowSprinting = false // sprinting costs hunger; walking does not
+  movements.allowSprinting = sprintAllowed(current)
   return movements
 }
 
