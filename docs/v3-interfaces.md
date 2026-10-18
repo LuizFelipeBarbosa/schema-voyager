@@ -44,6 +44,69 @@ Across goals (`life.py`):
   ending `_pickaxe`, `_axe`, `_shovel` or `_sword`, plus `bucket` and `shears`. The skip is per call, from the
   inventory, and isn't saved in the curriculum's `skipped`. Rules for kept items stay hypotheses longer (plan S0.5).
 
+### v3.0c Inventory space (S0.6, lanes `toss-bot`, `toss-backend`, `junk-policy`, `toss-sim`, `junk-life`)
+
+The bot has 36 slots (27 main, 9 hotbar). Before each goal, a life whose bot has fewer than 4 free slots drops
+junk. Bot side: `contracts/bot_api.md` v3.0 (`POST /toss`, `free_slots` on `/observe`).
+
+Models and backends:
+
+- `Observation.free_slots: int | None = None` (`models.py`): empty main and hotbar slots, 0 to 36. `None` when the
+  backend doesn't report it (the v1 simulator, test fakes); nothing is tossed then.
+- `LifeBackend.toss(items: dict[str, int]) -> dict[str, int]` (`adapter.py`): raw id → the count to drop. Returns
+  what left the inventory (raw ids, counts above 0). An empty request returns `{}` without a call.
+  - `MineflayerBackend` posts `/toss`, returns the response's `tossed` (`{}` when `ok` is false and there is
+    none), and refreshes its cached inventory from the response. Transport errors raise `BackendError`, as for every
+    call. It parses `free_slots` wherever it builds an `Observation`; a missing one (an older bot) is `None`.
+  - `NaturalWorld` (simulator) removes the items. They are gone: the simulator has no items on the ground.
+
+`inventory.py` (new):
+
+- `stack_size(item: str) -> int`: 1 for tools, armor, filled buckets and the other unstackables it lists; 16 for
+  `bucket`, `snowball`, `egg`, `ender_pearl`, signs and banners; 64 otherwise.
+- `slots_used(inventory: dict[str, int]) -> int`: the sum of ceil(count / stack_size), the packed count. The
+  simulator reports `36 - slots_used`. The real bot can use more slots than this.
+- `junk_to_toss(inventory, rules, wanted, free_slots, min_free=4, scaffold_reserve=64) -> dict[str, int]`, pure.
+  `inventory`: raw id → count. `rules`: the usable rules. `wanted`: normalized names the goals need (today
+  `{goal.item}`). Returns raw id → count, or `{}` when `free_slots` is `None` or at least `min_free`.
+  - **Kept**, never tossed: an item whose stack size is 1 (a tool, armor); an item `curriculum.is_kept_item` names
+    (raw id or `normalize.family`); an item in `wanted` (raw id or family).
+  - **Rule items**: those a rule names (raw id or family) in `preconditions.consumes`, `station`, `tool_any` or
+    `fuel_any`. The first stack (`stack_size` items) of each raw id is kept; the rest is surplus.
+  - **Junk**: everything else. Of the junk in `SCAFFOLD_BLOCKS` (`mineflayer_backend.py`), enough is kept that the
+    bot still holds `scaffold_reserve` scaffold blocks in total: scaffold blocks kept for other reasons count first,
+    then junk scaffold blocks in `SCAFFOLD_BLOCKS` order.
+  - Once triggered, it tosses all the junk: junk that isn't a scaffold block, then the scaffold surplus. Then, only
+    while `free_slots` plus the slots freed is still below `min_free`, rule-item surplus, the item that frees the most
+    slots first, then by name. Freed slots: `slots_used` before minus after, per item.
+  - It may fall short of `min_free`: it never tosses a kept item or a rule item's first stack.
+
+Life (`life.py`):
+
+- At the start of each goal (`_Life._run_goal`, once the episode log is open, before the `Task` and `Episode` are
+  built), if the observation's `free_slots` is below 4: `junk_to_toss(observation.inventory,
+  store.usable_rules(world_id), {goal.item}, free_slots)`, then `backend.toss(...)` if that isn't empty, then
+  observe again so the goal starts from the inventory after the toss.
+- Log a `tossed` event `{"items": {...}, "free_slots_before": n, "free_slots_after": m}`, add `"tossed": {...}` to
+  the goal record (`{}` when nothing was tossed), and say "Dropping 40 dirt and 12 granite to make room."
+
+Simulator (`environment.py`):
+
+- `NaturalWorld` has 36 slots, with `inventory.stack_size`. Mine drops and travel pickups stop at what fits; the
+  rest is left on the ground (gone). A mine step's `drops` still reports what the block dropped, while its
+  `picked_up` and `inventory_delta` report what was kept, and `detail["inventory_full"]` is `True`.
+- A craft or smelt whose output doesn't fit fails, as the real bot does (`craft_failed`, `partial_delta`): `ok`
+  false, the inventory unchanged, `detail["inventory_full"]` `True`. An `ok: true` step with a short delta would read
+  as a contradiction.
+- `observe()` reports `free_slots = 36 - slots_used(inventory)`; `toss()` as above.
+
+Deferred:
+
+- A goal that fills the inventory halfway through. Nothing tosses between steps. Once full, the real bot leaves new
+  drops on the ground, and `emptyHand` (`lib/world.js`) keeps the held stack in hand.
+- Tossed stacks stay on the ground for 5 minutes. A later goal that walks back over them picks them up again
+  (travel, tolerant) and refills the inventory.
+
 ### v3.0d `/explore` reports the attempt that moved (lane `explore-took`)
 
 - A directional `/explore` response gains `took: {"direction", "distance"} | null`: the attempt that moved the bot

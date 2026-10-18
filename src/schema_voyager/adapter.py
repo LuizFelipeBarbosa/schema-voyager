@@ -46,3 +46,7 @@ class LifeBackend(Backend, Protocol):
     def probe(self, grid: list[list[str | None]]) -> dict[str, Any]:
         """The recipe output for a crafting grid, without spending anything: {"output": {"item", "count"} | None}."""
         ...
+
+    def toss(self, items: dict[str, int]) -> dict[str, int]:
+        """v3: drop up to these counts (raw ids) to make room; returns what left the inventory. See docs/v3-interfaces.md."""
+        ...

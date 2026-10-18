@@ -52,6 +52,7 @@ class Observation:
     inventory: dict[str, int]
     nearby: dict[str, int]  # block type -> count within the 16-block view
     blocks_walked: float = 0.0
+    free_slots: int | None = None  # v3: empty main and hotbar slots (0-36); None when not reported
 
 
 @dataclass

@@ -429,3 +429,62 @@ v1 codes, plus `hazard`, `quarantined` and `missing_furnace`.
   attempt that moved the bot 1 block or more, out of the request, the 10-block hop the same way and the two
   neighbouring directions (v3 explorefast), with the distance that attempt asked for. `null` when no attempt moved.
   Blind (spiral) and `up` explores don't send it. Tolerant: never part of a check.
+
+## v3.0: `/toss` and `free_slots` (session S04)
+
+### `free_slots` on `/observe`
+
+`/observe` (and `/reset_episode`, which answers with `/observe`) also reports
+`"free_slots": 12`: the number of empty slots among the 27 main and 9 hotbar
+slots (window slots 9-44), from 0 to 36. Armor, the offhand, the crafting grid
+and the cursor don't count. A slot holding anything, even a stack that isn't
+full, isn't free.
+
+### POST /toss  `{"items": {"dirt": 40, "granite": 64}}`
+
+Drops items on the ground to make room. Takes the action lock like any action.
+
+1. **Toss.** Level the pitch first (keep the yaw), so the stacks fly forward
+   instead of landing at the bot's feet. For each named item, toss up to that
+   count from the main and hotbar slots, smallest stacks first (so the most
+   slots come free). Never toss the held item if it is a tool (it has
+   durability), and never an item the request doesn't name. A name the bot
+   doesn't hold is skipped, not an error.
+2. **Walk away**, straight after the last toss. If anything was tossed, walk
+   to a spot at least 4.5 blocks (horizontal) from where the bot stood when
+   it tossed, and not in front of it: the offset from the toss point has a
+   dot product of 0 or less with the yaw's facing vector. One pathfinder goal,
+   the world-preserving movements every other walk uses (no digging, no
+   placing), 10 s at most.
+   Why: a tossed stack can be picked up again after 2 s (40 ticks), and a
+   pickup inside a later craft's or smelt's step window is a `stray_pickup`,
+   which quarantines that step.
+3. **Travel phase only.** `/toss` never opens a step window, so it never
+   reports `stray_pickup`. `travel` is recorded from after the toss (once the
+   inventory has settled) to the end of the walk, so anything picked up again
+   shows in `travel.picked_up`, and isn't counted in `tossed`.
+
+```jsonc
+{
+  "ok": true,
+  // What left the inventory: before minus after, for the named items only,
+  // measured after the walk. Zero counts omitted.
+  "tossed": {"dirt": 40},
+  "inventory": {"dirt": 24, "oak_log": 3},
+  "free_slots": 14,
+  // Ended 4 or more blocks (horizontal) from the toss point. false when
+  // nothing was tossed, or when the walk didn't get that far.
+  "walked_away": true,
+  "travel": {"distance": 6.0, "dug": {}, "placed": {}, "picked_up": {}},
+  "events": [],                     // all "phase": "travel"
+  "position": {"x": 4.5, "y": 70, "z": -2.5}
+}
+```
+
+Nothing to toss (no named item held, or only the held tool): `ok: true`,
+`tossed: {}`, `walked_away: false`, no walk.
+
+Errors: `bad_request` (HTTP 400) unless `items` is a non-empty object of item
+name to positive integer; `busy` (HTTP 409) and `not_connected` as for any
+action. A walk that falls short is not an error: `ok: true`,
+`walked_away: false`.
