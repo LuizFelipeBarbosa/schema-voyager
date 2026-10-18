@@ -18,6 +18,7 @@ import json
 import os
 import posixpath
 import re
+import subprocess
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -76,8 +77,18 @@ def list_runs(root: Path) -> list[dict[str, Any]]:
     return sorted(runs, key=lambda run: -run["mtime"])
 
 
+def _is_life_process(pid: int) -> bool:
+    """Whether `pid` is a python running schema_voyager, so a stale live.json whose pid was reused is not alive."""
+    try:
+        ps = subprocess.run(["ps", "-o", "command=", "-p", str(pid)], capture_output=True, text=True, timeout=2)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    command = ps.stdout.lower()
+    return ps.returncode == 0 and "python" in command and "schema_voyager" in command
+
+
 def _live_runs(root: Path) -> list[str]:
-    """The runs whose live.json names a running process, newest `started` first (ties by name)."""
+    """The runs whose live.json names a running life process, newest `started` first (ties by name)."""
     live = []
     for path in root.glob("runs/*/live.json"):
         try:
@@ -85,9 +96,12 @@ def _live_runs(root: Path) -> list[str]:
             pid, started = info["pid"], str(info.get("started", ""))
             if type(pid) is not int or pid <= 0:
                 continue
-            os.kill(pid, 0)
-        except PermissionError:
-            pass  # the process exists, it's just not ours
+            try:
+                os.kill(pid, 0)
+            except PermissionError:
+                pass  # the process exists, it's just not ours
+            if not _is_life_process(pid):
+                continue  # a reused pid
         except (OSError, ValueError, KeyError, TypeError):
             continue  # unreadable, malformed or dead
         live.append((started, path.parent.name))
