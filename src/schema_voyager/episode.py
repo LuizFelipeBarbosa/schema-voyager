@@ -86,13 +86,18 @@ class Episode:
         (such as the verifier's verdict) to each attempt's step."""
         outcome = self._act_once(action, annotate)
         explores = retries = 0
+        went_up = False
         max_explores = MAX_NATURAL_EXPLORES_PER_TARGET if self.natural else MAX_EXPLORES_PER_TARGET
         while not outcome.ok and self.budget_left >= 2 and not self.out_of_time:
             # A natural world's hazard (lava or water next to the target) means "look elsewhere" too.
             searching = outcome.error == "not_found" or (self.natural and outcome.error == "hazard")
             if searching and explores < max_explores:
                 explores += 1
-                explore = self._explore_toward(action.target) if self.natural and action.kind == "mine" else Action("explore")
+                if self.natural and action.kind == "mine":
+                    explore = self._explore_toward(action.target, may_go_up=not went_up)
+                    went_up = went_up or explore.direction == "up"
+                else:
+                    explore = Action("explore")
             elif outcome.error in RETRIED_ERRORS and retries < MAX_RETRIES:
                 retries += 1
                 explore = Action("explore")
@@ -102,9 +107,10 @@ class Episode:
             outcome = self._act_once(action, annotate)
         return outcome
 
-    def _explore_toward(self, target: str | None) -> Action:
+    def _explore_toward(self, target: str | None, may_go_up: bool) -> Action:
         """Natural mode: look for the target's raw ids and explore toward the nearest
-        hit; with none in sight, try the next compass direction."""
+        hit; with none in sight, first back up to open sky (once per target: most
+        resources are at the surface), then try the next compass direction."""
         hits = self.backend.look(normalize.members(target), LOOK_RADIUS)  # type: ignore[attr-defined]
         nearest = min(
             ((found["distance"], direction) for direction, blocks in hits.items() for found in blocks.values()),
@@ -112,6 +118,8 @@ class Episode:
         )
         if nearest is not None:
             direction = nearest[1]
+        elif may_go_up:
+            direction = "up"
         else:
             direction = DIRECTIONS[self._next_direction % len(DIRECTIONS)]
             self._next_direction += 1
