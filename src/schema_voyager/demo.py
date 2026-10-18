@@ -272,7 +272,7 @@ def run_life_command(args: argparse.Namespace) -> None:
     llm = LLM(mode=args.llm, cache_path=run_dir / "llm_cache.jsonl")
     config = LifeConfig(
         run_dir=run_dir, world_id=f"life-{seed}-{time.strftime('%Y%m%d-%H%M')}", max_goals=args.goals,
-        wall_clock_s=args.minutes * 60, spend_cap_usd=args.cap_usd,
+        wall_clock_s=args.minutes * 60, spend_cap_usd=args.cap_usd, keep_going=getattr(args, "keep_going", False),
     )
     print(f"SchemaVoyager life: backend={args.backend} llm={args.llm} model={llm.model} run_dir={run_dir}")
     hooks = LifeHooks(before_step=ChangeTrigger(change, run_dir, switch_on, args.resume)) if change else None
@@ -397,6 +397,7 @@ def main(argv: list[str] | None = None) -> None:
     life.add_argument("--run-dir", type=Path)
     life.add_argument("--resume", action="store_true", help="continue the life saved in --run-dir")
     life.add_argument("--goals", type=int, help="stop after this many goals")
+    life.add_argument("--keep-going", action="store_true", help="explore for new blocks instead of stopping when no goal is left")
     life.add_argument("--minutes", type=float, default=30, help="wall-clock limit of this session")
     life.add_argument("--cap-usd", type=float, default=10, help="LLM spend cap")
     life.add_argument("--seed", help="the running world's level seed, for the world id")
