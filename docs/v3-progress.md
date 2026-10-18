@@ -146,6 +146,9 @@ pushed to `origin` until the user says so.
 - 08:43 S12 e68a163 merge `v3/composite-queue` (parents with ordered children in `goals.jsonl`, `accept_children`, `settle`, cancel cascade; `parse_goal` lists with `home=`, `replan_children`; architect's fix: a fake `build ...` text is never split). pytest 1247.
 - 08:45 S12 f54526e merge `v3/chest-backend` (deposit, the withdraw action, `set_stations` with `station`/`protect` on `/craft` and `/smelt`; simulator chests and home stations; architect's fix: deposit `free_slots` is the inventory's in both backends). pytest 1280.
 - 08:47 S12 2b1c52c merge `v3/chest-bot` (`/deposit`, `/withdraw`, `/chest`). pytest 1280 (1 skipped), bot 415 (with S11's merges), panel pass.
+- S11 live `runs/v3-duel-smoke` (instance b, `fresh-2024`, 2 duels baseline vs baseline): the runner works end to end (arena, RCON reset, both `/duel`, the table). Found: double KOs (server log: both bots slain in the same second in 3 of 4 duels; each bot had ended `killed` on the other's `entityDead`), and 10 s lost per reset while the dead bot respawned. Every hit 3.12 (a full-cooldown iron sword on iron armor), 7 to kill; regen stays off (`health_end` = 20 − `damage_taken`).
+- S11 91ec089 contract `both_died`; 7100330 merge `v3/double-ko` (`killed` after a 0.5 s grace, `both_died`; the runner reads `death` events, a double KO is a draw, waits for both bots alive); 8d08c2d merge `v3/crit`. pytest 1280, bot 432, panel pass.
+- S11 live `runs/v3-duel-aa` (A/A, 40 duels, 0 invalid): 27 double KOs, A 10 wins to B 3 (58.8%, CI [43.4, 72.6]), A winning with either bot and on either side. The set whose request went first won: a few ms of head start decide a mirror duel. Fixed by 2f3fa99 (contract `start_at`) and 09:00 b19b7cc merge `v3/duel-sync` (one start instant 1 s ahead; `duration` ends at the deciding death). pytest 1297, bot 437, panel pass.
 
 ## S01 setup and baseline (done 2026-10-17)
 
