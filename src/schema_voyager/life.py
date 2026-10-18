@@ -12,17 +12,17 @@ from __future__ import annotations
 import json
 import os
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Callable, ContextManager, Protocol
 
 from . import normalize
-from .adapter import LifeBackend
+from .adapter import DIRECTIONS, LifeBackend
 from .agent import run_schemavoyager
 from .curriculum import Curriculum, Goal
 from .episode import Episode
 from .llm import LLM, SpendCapReached
-from .models import EpisodeResult, Observation, Task
+from .models import Action, EpisodeResult, Observation, Task
 from .planner import PlanStep
 from .schema_store import SchemaStore
 from .trace import EpisodeLog
@@ -30,6 +30,7 @@ from .trace import EpisodeLog
 MIN_GOAL_BUDGET = 30
 BUDGET_PER_PLAN_STEP = 4
 MAX_CHAT_CHARS = 240
+EXPLORES_PER_ROUND = 3
 # Blocks around the bot that no rule is worth asking about.
 AMBIENT_BLOCKS = frozenset({"air", "cave_air", "void_air", "water", "lava", "bedrock"})
 
@@ -42,6 +43,7 @@ class LifeConfig:
     wall_clock_s: float = 1800.0  # per session (a resumed life gets a fresh allowance)
     goal_wall_clock_s: float = 300.0
     spend_cap_usd: float = 10.0
+    keep_going: bool = False  # explore for new blocks instead of stopping on an empty frontier
 
 
 @dataclass
@@ -157,7 +159,8 @@ class ChangeTrigger:
 def run_life(
     backend: LifeBackend, llm: LLM, config: LifeConfig, hooks: LifeHooks | None = None, resume: bool = False
 ) -> dict[str, Any]:
-    """Run goals until a stop condition: spend_cap, wall_clock, empty_frontier or max_goals.
+    """Run goals until a stop condition: spend_cap, wall_clock, empty_frontier (not with
+    `config.keep_going`, which explores instead) or max_goals.
     Returns a summary: world id, goals done, stop reason, certified rules, tokens, spend.
 
     `llm` should be a fresh object: on resume its spend starts from the saved total."""
@@ -183,6 +186,7 @@ class _Life:
             self.asked: set[str] = set(state["asked"])
             self.observed_blocks: set[str] = set(state["observed_blocks"])
             self.goals_done: int = state["goal_index"]
+            self.explores_done: int = state.get("explores_done", 0)
             self.earlier_tokens: int = state["tokens"]
             llm.carried_usd = state["spend_usd"]
         else:
@@ -190,7 +194,7 @@ class _Life:
             self.store = SchemaStore()
             self.curriculum = Curriculum()
             self.asked, self.observed_blocks = set(), set()
-            self.goals_done, self.earlier_tokens = 0, 0
+            self.goals_done, self.earlier_tokens, self.explores_done = 0, 0, 0
             self.log_path.write_text("", encoding="utf-8")
         llm.spend_cap_usd = config.spend_cap_usd
         self._calls_marked = len(llm.calls)
@@ -214,7 +218,10 @@ class _Life:
                 if goal is None:
                     if self._expand_frontier():
                         continue
-                    return "empty_frontier"
+                    if not self.config.keep_going:
+                        return "empty_frontier"
+                    self._run_exploration_round()
+                    continue
             except SpendCapReached:
                 return "spend_cap"
             self._run_goal(goal)
@@ -306,6 +313,45 @@ class _Life:
         if self.hooks.after_goal is not None:
             self.hooks.after_goal(record)
 
+    def _run_exploration_round(self) -> None:
+        """Nothing left to learn here: walk a few compass directions (cycling on across
+        rounds) so the next `_learn_priors` sees new blocks, and give skipped goals another try."""
+        index = self.goals_done + 1
+        started_at = time.time()
+        name = f"g{index:03d}"
+        observation = self.backend.begin_episode()
+        task = Task(
+            task_id=name, split="train", goal_item="explore", goal_count=1,
+            start_inventory=dict(observation.inventory), world_rules=(), budget=EXPLORES_PER_ROUND,
+            description="Explore for new blocks",
+        )
+        log = EpisodeLog(
+            self.config.run_dir / "episodes" / f"D_life_{name}_explore.jsonl", label=f"{name} explore", say=self.backend.say
+        )
+        episode = Episode(
+            episode_id=f"D/life/{name}-explore", system="D", task=task, layout_seed=0, world_id=self.world_id,
+            backend=self.backend, llm=self.llm, log=log, inventory=dict(observation.inventory), natural=True,
+            deadline=time.monotonic() + min(self.config.goal_wall_clock_s, max(self._remaining_s(), 0.0)),
+        )
+        goal = Goal("explore", 1, 0, (), "nothing left to learn here")
+        log.event("goal", index=index, item=goal.item, count=goal.count, reason=goal.reason, budget=task.budget)
+        self.backend.say("Nothing left to learn here; exploring for new blocks.")
+
+        all_ok = True
+        while episode.can_act and episode.actions < EXPLORES_PER_ROUND:
+            direction = DIRECTIONS[self.explores_done % len(DIRECTIONS)]
+            self.explores_done += 1
+            all_ok &= episode.act(Action("explore", direction=direction)).ok
+        result = replace(episode.finish(), success=all_ok)
+
+        self.curriculum.skipped.clear()
+        self.curriculum.failures.clear()
+        self.goals_done = index
+        record = self._goal_record(index, goal, task.budget, result, started_at, interrupted=False)
+        self._save(record)
+        if self.hooks.after_goal is not None:
+            self.hooks.after_goal(record)
+
     def _goal_record(
         self, index: int, goal: Goal, budget: int, result: EpisodeResult, started_at: float, interrupted: bool
     ) -> dict[str, Any]:
@@ -329,7 +375,7 @@ class _Life:
             handle.write(json.dumps(record) + "\n")
         self.store.save(self.store_path)
         state = {
-            "world_id": self.world_id, "goal_index": self.goals_done, "curriculum": self.curriculum.to_dict(),
+            "world_id": self.world_id, "goal_index": self.goals_done, "explores_done": self.explores_done, "curriculum": self.curriculum.to_dict(),
             "asked": sorted(self.asked), "observed_blocks": sorted(self.observed_blocks),
             "tokens": self.earlier_tokens + self.llm.total_tokens, "spend_usd": self.llm.spent_usd,
         }
