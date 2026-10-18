@@ -9,13 +9,14 @@ const { craft } = require('./lib/craft')
 const { explore, newSpiral, trackWorldBorder } = require('./lib/explore')
 const { probe } = require('./lib/probe')
 const { smelt } = require('./lib/smelt')
+const { toss, validateToss } = require('./lib/toss')
 const { createUnreachableMemory, look } = require('./lib/targets')
 const { attachEventTracker, createEventLog } = require('./lib/events')
 const { DIRECTIONS } = require('./lib/geometry')
 const { hasOpenSky } = require('./lib/sky')
 const { VIEWER_MODES, createViewerControl, localCors } = require('./lib/viewer')
 const {
-  inventoryCounts, positionOf, round, scanNearbyBlocks, sleepTicks, stopMoving
+  freeSlots, inventoryCounts, positionOf, round, scanNearbyBlocks, sleepTicks, stopMoving
 } = require('./lib/world')
 
 const config = {
@@ -30,6 +31,7 @@ const config = {
 const RECONNECT_DELAY_MS = 3000
 const ACTION_TIMEOUT_MS = 120000
 const MAX_WALK_STEP = 2 // larger per-tick jumps are teleports, not walking
+const TOSS_TIMEOUT_MS = 20000 // the 10 s walk plus the tosses and the settle
 const SMELT_TIMEOUT_BASE_MS = 30000
 const SMELT_TIMEOUT_PER_ITEM_MS = 12000
 
@@ -144,6 +146,7 @@ function observe () {
     ok: true,
     position: positionOf(bot),
     inventory: inventoryCounts(bot),
+    free_slots: freeSlots(bot),
     nearby_blocks: scanNearbyBlocks(bot),
     blocks_walked: walked(),
     sky: hasOpenSky(bot)
@@ -234,6 +237,7 @@ const validators = {
     return grid.flat().every((cell) => cell === null || isName(cell)) ? null : 'grid cells must be item names or null'
   },
   status: (body) => (body.since != null && !Number.isInteger(body.since) ? '"since" must be an integer' : null),
+  toss: validateToss,
   chat: (body) => (typeof body.message === 'string' ? null : '"message" must be a string')
 }
 
@@ -358,6 +362,7 @@ action('/smelt', validators.smelt, async (body, session) => ({ ...await smelt(bo
   timeoutMs: (body) => SMELT_TIMEOUT_BASE_MS + SMELT_TIMEOUT_PER_ITEM_MS * (body.times ?? 1)
 })
 action('/probe', validators.probe, (body, session) => probe(bot, body, session))
+action('/toss', validators.toss, (body, session) => toss(bot, body, session), { timeoutMs: TOSS_TIMEOUT_MS })
 action('/chat', validators.chat, (body) => chat(body))
 action('/reset_episode', validators.none, () => resetEpisode())
 
