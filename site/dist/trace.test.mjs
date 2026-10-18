@@ -13,7 +13,7 @@ const V1_TRACE = '/Users/luiz/Developer/crusoe-hackathon/sv2/results/episodes/B_
 function load(source) {
   const element = { addEventListener() {}, querySelector: () => null, insertAdjacentHTML() {}, classList: { add() {}, toggle() {} } };
   const context = {
-    document: { getElementById: () => element, querySelector: () => null, addEventListener() {} },
+    document: { getElementById: () => element, querySelector: (selector) => (selector === '.controls' ? element : null), addEventListener() {} },
     location: { search: '', hostname: 'localhost' },
     history: { replaceState() {} },
     fetch: async () => ({ ok: false }),
