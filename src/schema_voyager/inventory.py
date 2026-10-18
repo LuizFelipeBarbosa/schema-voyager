@@ -61,6 +61,45 @@ def junk_to_toss(
     if free_slots is None or free_slots >= min_free:
         return {}
 
+    toss, rule_surplus = _junk_and_surplus(inventory, rules, wanted, scaffold_reserve)
+
+    def freed_by(item: str) -> int:
+        return slots_used({item: inventory[item]}) - slots_used({item: inventory[item] - rule_surplus[item]})
+
+    freed = slots_used({item: inventory[item] for item in toss}) - slots_used(
+        {item: inventory[item] - count for item, count in toss.items()}
+    )
+    for item in sorted(rule_surplus, key=lambda item: (-freed_by(item), item)):
+        if free_slots + freed >= min_free:
+            break
+        toss[item] = rule_surplus[item]
+        freed += freed_by(item)
+    return toss
+
+
+def junk_to_store(
+    inventory: dict[str, int],
+    rules: Iterable[Rule],
+    wanted: Iterable[str],
+    free_slots: int | None,
+    min_free: int = 4,
+    scaffold_reserve: int = 64,
+) -> dict[str, int]:
+    """Raw id -> count to put in the home chest (v3.5c): junk_to_toss's junk plus every rule item's surplus beyond
+    one stack, always. Same trigger and never-list. Deposit order: rule-item surpluses, then junk, each by count,
+    largest first (ties by name)."""
+    if free_slots is None or free_slots >= min_free:
+        return {}
+
+    junk, rule_surplus = _junk_and_surplus(inventory, rules, wanted, scaffold_reserve)
+    by_count = lambda counts: sorted(counts.items(), key=lambda entry: (-entry[1], entry[0]))
+    return dict(by_count(rule_surplus) + by_count(junk))
+
+
+def _junk_and_surplus(
+    inventory: dict[str, int], rules: Iterable[Rule], wanted: Iterable[str], scaffold_reserve: int
+) -> tuple[dict[str, int], dict[str, int]]:
+    """(the junk to get rid of, scaffold reserve held back; each rule item's surplus beyond its first stack)."""
     wanted = set(wanted)
     rule_items = _rule_items(rules)
     kept: dict[str, int] = {}
@@ -79,7 +118,7 @@ def junk_to_toss(
         else:
             junk[item] = count
 
-    toss = {item: count for item, count in junk.items() if item not in SCAFFOLD_BLOCKS}
+    surplus_junk = {item: count for item, count in junk.items() if item not in SCAFFOLD_BLOCKS}
 
     reserve_left = max(0, scaffold_reserve - sum(kept.get(block, 0) for block in SCAFFOLD_BLOCKS))
     for block in SCAFFOLD_BLOCKS:
@@ -87,20 +126,8 @@ def junk_to_toss(
             reserved = min(junk[block], reserve_left)
             reserve_left -= reserved
             if junk[block] > reserved:
-                toss[block] = junk[block] - reserved
-
-    def freed_by(item: str) -> int:
-        return slots_used({item: inventory[item]}) - slots_used({item: inventory[item] - rule_surplus[item]})
-
-    freed = slots_used({item: inventory[item] for item in toss}) - slots_used(
-        {item: inventory[item] - count for item, count in toss.items()}
-    )
-    for item in sorted(rule_surplus, key=lambda item: (-freed_by(item), item)):
-        if free_slots + freed >= min_free:
-            break
-        toss[item] = rule_surplus[item]
-        freed += freed_by(item)
-    return toss
+                surplus_junk[block] = junk[block] - reserved
+    return surplus_junk, rule_surplus
 
 
 def _rule_items(rules: Iterable[Rule]) -> set[str]:
