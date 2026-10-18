@@ -1441,7 +1441,10 @@ for several. It returns the completed steps (for the skill), and records, revise
   1. logs `build_site {"goal_id", "origin", "size", "cut", "fill"}` and sets `set_keep_out(site_box)`. Says
      "Building small hut at 12 64 -30: gathering 55 planks, 12 logs, 1 torch, 1 door." (only what isn't held).
   2. **Materials**: `pursue(episode, store, needs, before_step=before_step, excluded=excluded, narrate=False)`.
-     Not all held when it returns: the goal fails "couldn't get 55 planks" (the first need not held).
+     A `#door` need is gathered last: first `pursue` of the needs without it, then of all of them, since a door
+     takes 6 planks of one species and planks crafted early from mixed logs may not have them (S10: simulator seeds
+     1, 4, 5, 7, 8). Not all held when it returns: the goal fails "couldn't get 1 door, 12 logs" (every need not
+     held, in the needs' order).
   3. **On site**: if the bot is more than `NEAR_SITE` blocks (horizontally) from the footprint's centre, or the
      last scan had a `None` cell, `goto` (`range` 3) a point 2 blocks out from the middle of the footprint's south
      side at the origin's y, then on `unreachable` the east, north and west sides: up to 3 walks. The walk only
