@@ -14,7 +14,8 @@ RCON from Python, not through this API.
   `BOT_USERNAME=SchemaBot`, `BOT_API_PORT=3000`, `VIEWER_PORT=3007`
   (`VIEWER_PORT=0` disables the viewer).
 - prismarine-viewer runs third person on `VIEWER_PORT`.
-- One action at a time. A request while another action runs gets HTTP 409.
+- One action at a time. A request while another action runs gets HTTP 409 `{"ok": false, "error": "busy"}`
+  (v3.2: also while the guard fights, `"detail": "guard"`, or an aborted handler is still running, `"detail": "orphan"`).
 - All bodies are JSON. Item and block names never carry the `minecraft:` prefix.
 - Every action response is HTTP 200 with `ok: false` and an `error` code on
   in-game failure. HTTP 4xx/5xx are reserved for bad requests and crashes.
@@ -488,3 +489,134 @@ Errors: `bad_request` (HTTP 400) unless `items` is a non-empty object of item
 name to positive integer; `busy` (HTTP 409) and `not_connected` as for any
 action. A walk that falls short is not an error: `ok: true`,
 `walked_away: false`.
+
+## v3.1: chat commands (S06, lane `chat-bot`)
+
+- **`BOT_OWNERS`** (env): comma-separated Minecraft usernames, trimmed and compared case-insensitively. Unset or
+  empty means nobody, and no command is recorded. `scripts/v2-up.sh` passes `BOT_OWNERS='${BOT_OWNERS:-Otopo}'` on
+  the bot's command line, and live tests add their test player (`BOT_OWNERS=Otopo,Tester`). `lib/chat_commands.js`
+  reads it, not the `config` block. The servers run in offline mode, so a username isn't authenticated: the list
+  only keeps out other players on a server that strangers can't reach.
+- **The listener** is `attachChatCommands(bot, eventLog)` from `lib/chat_commands.js`, called once per `connect()`.
+  On `bot.on('chat', (username, message))` it records a message when all of these hold:
+  - it comes from an owner who isn't the bot itself;
+  - it starts with `!`, and its first word matches `^![A-Za-z]+$`.
+- **The event** is `chat_command {"player", "command", "args"}`, recorded through `eventLog.record`. `command` is the
+  first word without `!`, lowercased. `args` is the rest of the message, trimmed and cut to 200 characters (`""` if
+  there is none). Any `!word` is recorded, and Python answers unknown ones with the list of commands.
+
+  ```jsonc
+  {"seq": 57, "t": 1760731301.204, "type": "chat_command", "phase": "step",
+   "player": "Otopo", "command": "goal", "args": "10 torches"}
+  ```
+
+- The life knows `goal`, `cancel`, `stop` and `status` (`docs/v3-interfaces.md`, v3.1g); M4 adds `yes` and `no`. It
+  reads these events from `/status?since=` only, never from an action response's `events`.
+- The bot never answers in chat by itself. Python answers through `POST /chat`, which keeps its anti-spam limit.
+
+## v3.2: survival (S07)
+
+### `nearby_entities` in `/observe` and `/status` (lane `entities-bot`)
+
+```jsonc
+"nearby_entities": {
+  "zombie": {"count": 2, "nearest": 6.4, "kind": "hostile"},
+  "cow":    {"count": 3, "nearest": 11.0, "kind": "animal"},
+  "player": {"count": 1, "nearest": 4.2, "kind": "player"}
+}
+```
+
+- Entity type → `count`, `nearest` and `kind`, over `bot.entities` within 16 blocks of the bot, not counting the bot.
+  - `nearest` is the distance in blocks to the closest one, rounded to 0.1.
+  - `kind` is minecraft-data's entity `type`: `hostile`, `mob` (slime, magma cube, phantom, golems, ...), `animal`,
+    `passive` (villagers), `water_creature`, `ambient` or `player`.
+- The kinds `other` (items, experience orbs, boats, falling blocks), `projectile` and `living` (armor stands) are
+  left out. Players are all counted under `player`.
+- The result is `{}` when nothing is near or the bot hasn't spawned.
+- Tolerant: never part of a check.
+
+### The guard (lanes `guard-core`, `guard-wire`)
+
+- **Modes**: `off` (does nothing, v2 behavior), `passive` (runs from threats) and `defend` (fights back; the
+  default). `BOT_GUARD` (env, read by `lib/guard.js`) sets the mode at start.
+- **`POST /guard {"mode": "off" | "passive" | "defend"}`** answers `{"ok": true, "mode": "defend"}`, or 400 for any
+  other mode. It doesn't take the action lock, so it works mid-fight. Switching to `off` ends a fight at the next
+  guard tick.
+- **`/status` gains `guard`**: `{"mode": "defend", "fighting": "zombie" | null}`.
+- **The tick** runs every 4 game ticks. A threat is either of these:
+  - a hostile entity within 8 blocks that the bot can see. Hostile here means kind `hostile`, plus `slime`,
+    `magma_cube` and `phantom`, but not `enderman`, `zombified_piglin` or `piglin`, which count only once they hit
+    the bot;
+  - any entity that damaged the bot in the last 3 s.
+- **What the guard does** (`decide(mode, threat, health)` → `fight | flee | back_off | ignore`):
+  - `off`: always `ignore`;
+  - a creeper closer than 5 blocks: `back_off`, to 8 blocks or more, in `passive` and `defend`;
+  - health below 6: `flee`, and eat if it holds food, in `passive` and `defend`;
+  - otherwise `passive` flees and `defend` fights.
+- **A fight**: equip the best sword (else axe) the bot holds and a shield in the off-hand if it has one, then
+  `bot.pvp.attack(target)`. It ends in one of these outcomes:
+  - `killed`: the target died;
+  - `lost`: the target is gone or more than 16 blocks away;
+  - `timeout`: 30 s passed;
+  - `fled`: health fell below 6 and the guard switched to `flee`;
+  - `died`: the bot died.
+- **Cutting into an action.** The guard cuts only into `/mine`, `/craft`, `/smelt` and `/explore` (later `/attack`,
+  `/place`, `/clear`). Any other endpoint that holds the lock (`/observe`, `/chat`, `/look`, `/probe`,
+  `/reset_episode`, `/toss`) runs to its end, and the guard acts after it. When the guard decides anything but
+  `ignore` during one of those four, it rejects `rejectOnThreat()` (`lib/events.js`, next to `rejectOnDeath()`),
+  which `action()` races like the death promise.
+  - The wrapper calls `interruptBot()` and aborts `session.signal`, an `AbortSignal` every handler gets. It then
+    waits for the handler to settle, at most 10 s. If it doesn't settle, the wrapper records
+    `orphaned_handler {"path"}` and goes on.
+  - Then it awaits the guard's response: the fight or flight, at most 30 s.
+  - It answers `{"ok": false, "error": "interrupted", "detail": {"threat": "zombie", "outcome": "killed"},
+    "blocks_walked": ..., "position": ..., "events": [...]}`.
+  - It releases `busy` only once the handler has settled, however long that takes. Until then every request gets
+    `409 {"ok": false, "error": "busy", "detail": "orphan"}`, even after the response was sent. A timeout and a
+    death release `busy` the same way.
+  - A death at any point in this answers `quarantined`, as in v2.
+  - `/smelt` checks the signal in its furnace wait loop and before it retrieves the furnace. On an abort it stops
+    there and leaves the furnace standing.
+  - Backstop: a handler still unsettled 45 s after the abort makes the bot reconnect (`bot.quit()`, then the
+    existing reconnect). The wrapper records `orphaned_handler {"path", "reconnected": true}` and releases `busy`.
+- **Open windows.** While a container window is open (a craft at a table, a smelt), `fight` waits for the window to
+  close, at most 10 s. `back_off` and `flee` don't wait.
+- **Furnace leftovers.** Before its shortfall check, `/smelt` drains a placed furnace it is about to use (anything
+  in it goes back into the inventory) and records `interference {"block": "furnace", "position"}`. Python then
+  quarantines that step, so an aborted smelt's leftovers are never counted, and the retry gets its ingredients
+  back.
+- **While idle** (no action holds the lock), the guard fights directly and holds `busy` while it does. A request
+  then gets `409 {"ok": false, "error": "busy", "detail": "guard"}`. The guard holds it at most 30 s at a time, and
+  releases it for at least 1 s between fights so that a waiting request gets in.
+
+### Armor and food (lane `survival-plugins`)
+
+- `attachSurvival(bot)` loads `mineflayer-armor-manager` and `mineflayer-auto-eat`; the versions are in
+  `docs/v3-interfaces.md`, v3.2g. It returns `{onActionStart, onActionEnd}`, which `action()` calls when it takes
+  and releases the lock. `onActionStart` is async, and the handler starts only after it resolves.
+- Nothing from these plugins clicks in the inventory while an action holds the lock.
+- **auto-eat** is enabled only while the lock is free. `onActionStart` disables it and waits for an eat in progress
+  to end (at most 3 s). It eats at food 14 or less, with the plugin's default ban list and `equipOldItem: false`.
+- **Armor**: armor-manager's own pickup listener is removed. `equipAll()` runs in `onActionEnd` and on idle ticks,
+  so armor the bot picked up or crafted goes on once the lock is free. The guard holds a shield in the off-hand.
+  Armor and off-hand slots are counted in every `inventory`, so equipping changes no count.
+
+### Event types (v3.2)
+
+| type | when | extra fields |
+|---|---|---|
+| `threat` | the guard decided to act on an entity | `mob`, `id`, `distance`, `reason` (`near` or `attacked`), `action` (the running path, or `null` when idle) |
+| `fight_start` | a fight began | `target`, `id`, `distance`, `weapon` (`null` for a bare hand) |
+| `fight_end` | a fight ended | `target`, `outcome` (`killed`, `lost`, `timeout`, `fled`, `died`), `damage_taken`, `duration_s` |
+| `fled` | the guard ran or backed off | `from`, `reason` (`creeper`, `low_health` or `passive`), `distance`, `health` |
+| `ate` | the bot ate | `item`, `food` (the food level after) |
+| `orphaned_handler` | an aborted handler didn't settle within 10 s (the guard fights anyway; `busy` stays held until it settles), or within 45 s (the bot reconnects) | `path`, `reconnected` (`true` for the 45 s backstop) |
+
+`interference` also covers furnace leftovers (`block: "furnace"`). As in v2, Python decides what an event means
+for a check.
+
+### Error codes (v3.2)
+
+v2 codes, plus `interrupted` (an action response, `detail: {"threat", "outcome"}`) and `busy` (HTTP 409, now also
+while the guard fights idle, with `detail: "guard"`, and while an aborted handler hasn't settled, with
+`detail: "orphan"`).

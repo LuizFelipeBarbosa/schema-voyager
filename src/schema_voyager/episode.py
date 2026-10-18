@@ -25,7 +25,8 @@ MIN_EXPLORE_BLOCKS = 2
 NEW_PLACE_BLOCKS = 8
 # Failures of pathing, digging or the bot itself, which say nothing about the
 # world's rules: retried after an explore, so the bot tries from somewhere else.
-RETRIED_ERRORS = frozenset({"unreachable", "craft_failed", "dig_failed", "timeout"})
+# interrupted (v3.2): the bot's guard cut in to fight or flee.
+RETRIED_ERRORS = frozenset({"unreachable", "craft_failed", "dig_failed", "timeout", "interrupted"})
 MAX_RETRIES = 2
 # The goal item of a life's exploration round: nothing to hold, so its success is reported by the life.
 EXPLORE_GOAL = "explore"
