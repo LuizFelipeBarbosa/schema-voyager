@@ -13,6 +13,7 @@ import json
 import os
 import time
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, ContextManager, Literal, Protocol
 
@@ -46,6 +47,7 @@ AMBIENT_BLOCKS = frozenset({"air", "cave_air", "void_air", "water", "lava", "bed
 FINAL_GOAL_STATUSES = frozenset({"done", "failed", "cancelled", "unsupported"})
 GOAL_RANK = {"system": 0, "user": 1, "curriculum": 2}  # a queued goal of a lower rank preempts the running one
 CHAT_COMMANDS_HELP = "Commands: !goal <what>, !yes [id], !no [id], !cancel [id], !stop, !status"
+BOT_LOSSES_TO_FAIL = 3  # a goal that loses the bot this many times in a life fails (v3.0h)
 DEATHS_TO_STOP = 3  # this many deaths within DEATH_WINDOW_S stop the life (v3.2d)
 DEATH_WINDOW_S = 600.0
 USER_DEATHS_TO_FAIL = 2
@@ -239,7 +241,15 @@ def run_life(
 
     `llm` should be a fresh object: on resume its spend starts from the saved total."""
     life = _Life(backend, llm, config, hooks or LifeHooks(), resume)
-    stop_reason = life.run()
+    live_path = config.run_dir / "live.json"  # v3.0h: tells the panel which life is running
+    live_path.write_text(
+        json.dumps({"pid": os.getpid(), "started": datetime.now().isoformat(timespec="seconds"), "mode": config.mode}) + "\n",
+        encoding="utf-8",
+    )
+    try:
+        stop_reason = life.run()
+    finally:
+        live_path.unlink(missing_ok=True)
     return life.summary(stop_reason)
 
 
@@ -299,6 +309,8 @@ class _Life:
         self._last_hungry_log: float | None = None  # time.monotonic()
         self._system_failed_at: dict[str, float] = {}  # item of a failed hunger or arming goal -> time.monotonic()
         self._cancelled_in_chat: set[str] = set()  # their ending doesn't say "Cancelled" a second time
+        self._bot_gone = False  # the bot did not come back within bot_wait_s: nothing may call it any more
+        self._bot_losses: dict[str, int] = {}  # goal id -> times it lost the bot (v3.0h)
         if hooks.bind_store is not None:
             hooks.bind_store(self.store)
         self._send_protected()
@@ -315,37 +327,50 @@ class _Life:
                 return "wall_clock"
             if sum(time.time() - died <= DEATH_WINDOW_S for died in self.deaths) >= DEATHS_TO_STOP:
                 return "deaths"
-            self._poll_bot()
-            self._queue_hunger_goal()
-            self._parse_pending()
-            spec = self.queue.next()
-            if spec is None and self.config.mode == "play":
-                time.sleep(self.config.idle_poll_s)
-                continue
-            goal = None
             try:
-                observation = self._learn_priors()
-                if self._repair_dead_ingredients(observation):
-                    observation = self._learn_priors()  # the repairs may name families nobody asked about
-                if spec is None:
-                    goal = self.curriculum.next_goal(
-                        normalize.counts(observation.inventory), self.store, self.world_id, normalize.counts(observation.nearby),
-                        excluded=self._excluded_rules(),
-                    )
-                    if goal is None:
-                        if self._expand_frontier():
-                            continue
-                        if not self.config.keep_going:
-                            return "empty_frontier"
-                        self._run_exploration_round()
-                        continue
-                    spec = GoalSpec(
-                        id=f"g{self.goals_done + 1:03d}", kind="obtain", source="curriculum", item=goal.item, count=goal.count
-                    )
-            except SpendCapReached:
-                return "spend_cap"
-            if self._run_goal(spec, goal) and self.config.mode == "learn" and spec.source == "curriculum":
-                self._run_exploration_round(reason="the resource was not found here", reset_skips=False)
+                stop_reason = self._run_pass()
+            except BackendError as error:  # the bot is down (v3.0h): wait for it, then try the pass again
+                running = next((g.id for g in self.queue.goals() if g.status == "running"), None)
+                back = self._wait_for_bot(running, error)
+                self.queue.requeue_running()
+                stop_reason = None if back else "bot_down"
+            if stop_reason is not None:
+                return stop_reason
+
+    def _run_pass(self) -> str | None:
+        """One pass of the loop: poll, queue and run a goal (or idle). Returns the stop reason, else None."""
+        self._poll_bot(raises=True)
+        self._queue_hunger_goal()
+        self._parse_pending()
+        spec = self.queue.next()
+        if spec is None and self.config.mode == "play":
+            time.sleep(self.config.idle_poll_s)
+            return None
+        goal = None
+        try:
+            observation = self._learn_priors()
+            if self._repair_dead_ingredients(observation):
+                observation = self._learn_priors()  # the repairs may name families nobody asked about
+            if spec is None:
+                goal = self.curriculum.next_goal(
+                    normalize.counts(observation.inventory), self.store, self.world_id, normalize.counts(observation.nearby),
+                    excluded=self._excluded_rules(),
+                )
+                if goal is None:
+                    if self._expand_frontier():
+                        return None
+                    if not self.config.keep_going:
+                        return "empty_frontier"
+                    self._run_exploration_round()
+                    return None
+                spec = GoalSpec(
+                    id=f"g{self.goals_done + 1:03d}", kind="obtain", source="curriculum", item=goal.item, count=goal.count
+                )
+        except SpendCapReached:
+            return "spend_cap"
+        if self._run_goal(spec, goal) and self.config.mode == "learn" and spec.source == "curriculum":
+            self._run_exploration_round(reason="the resource was not found here", reset_skips=False)
+        return "bot_down" if self._bot_gone else None
 
     def summary(self, stop_reason: str) -> dict[str, Any]:
         return {
@@ -522,10 +547,11 @@ class _Life:
 
     # -- the bot's chat and the goal queue --------------------------------
 
-    def _poll_bot(self) -> None:
+    def _poll_bot(self, raises: bool = False) -> None:
         """Handle the chat commands (v3.1g) and deaths (v3.2d) the bot recorded since the last poll, and arm the
-        bot if it met a threat (v3.2e)."""
-        if not self._polls_bot:
+        bot if it met a threat (v3.2e). A lost bot (v3.0h) raises `BackendError` for the pass to wait on if `raises`;
+        else it is only printed, as the step's own action will raise."""
+        if not self._polls_bot or self._bot_gone:
             return
         since = self.bot_seq
         try:
@@ -534,6 +560,8 @@ class _Life:
                 since = 0
                 status = self.backend.status(since=0)
         except BackendError as error:
+            if raises:
+                raise
             print(f"[bot] could not poll events: {error}")
             return
         self.bot_seq = status.last_seq
@@ -734,7 +762,29 @@ class _Life:
             handle.write(json.dumps({"t": time.time(), "kind": kind, **fields}) + "\n")
 
     def _say(self, message: str) -> None:
-        self.backend.say(message.replace("#", "")[:MAX_CHAT_CHARS])
+        """Best-effort chat: a lost bot (v3.0h) doesn't hear it."""
+        if self._bot_gone:
+            return
+        try:
+            self.backend.say(message.replace("#", "")[:MAX_CHAT_CHARS])
+        except BackendError as error:
+            print(f"[bot] could not say it: {error}")
+
+    def _wait_for_bot(self, goal_id: str | None, error: Exception) -> bool:
+        """Wait up to `bot_wait_s` for the bot to be connected again (v3.0h). Returns whether it is."""
+        self._log_event("bot_down", goal_id=goal_id, error=str(error)[:200])
+        print(f"[bot] lost the bot ({str(error)[:200]}); waiting up to {self.config.bot_wait_s:.0f} s")
+        went_down = time.monotonic()
+        while not self.backend.connected():
+            if time.monotonic() - went_down >= self.config.bot_wait_s:
+                return False
+            time.sleep(self.config.bot_poll_s)
+        self._log_event("bot_back", goal_id=goal_id, down_s=round(time.monotonic() - went_down, 1))
+        try:
+            self._send_protected()  # a restarted bot has forgotten the boxes
+        except BackendError:
+            pass  # lost again: the next call finds out
+        return True
 
     def _obtain_items(self, *statuses: str, source: str | None = None) -> set[str]:
         return {
@@ -891,13 +941,17 @@ class _Life:
         self, spec: GoalSpec, episode: Episode, run: Callable[[], EpisodeResult], life_clock_limits_goal: bool
     ) -> tuple[EpisodeResult, str | None]:
         """Run the goal's episode with the interrupts armed. Returns its result and why it was cut short: cancelled,
-        preempted, death or wall_clock (the life's own clock, not the goal's deadline or budget), else None."""
+        preempted, death, bot (lost, v3.0h) or wall_clock (the life's own clock, not the goal's deadline or budget),
+        else None."""
         interrupt: str | None = None
         self._running = spec
         self._died_in_goal = False
         try:
             result = run()
-        except GoalInterrupted as stop:
+        except (GoalInterrupted, BackendError) as stop:
+            if isinstance(stop, BackendError):
+                self._bot_gone = not self._wait_for_bot(spec.id, stop)
+                stop = GoalInterrupted(spec.id, "bot")
             episode.log.event("goal_interrupted", goal_id=stop.goal_id, reason=stop.reason)
             result = episode.finish(success=False)  # as a normal end does, but no skill is compiled
             episode.log.event("certified", rules=self.store.certify())
@@ -963,11 +1017,20 @@ class _Life:
         entry = self._protected_entry(spec.id)
         chat = ""
         if queued_goal:
-            if interrupt == "cancelled":  # the queue already says cancelled
+            if interrupt == "cancelled" or (interrupt == "bot" and self.queue.get(spec.id).status == "cancelled"):
+                # the queue already says cancelled
                 chat = "" if spec.id in self._cancelled_in_chat else f"Cancelled: {label}"
             elif interrupt == "preempted":
                 chat = self._pausing_line(label)
                 self.queue.mark(spec.id, "queued")
+            elif interrupt == "bot":
+                self._bot_losses[spec.id] = self._bot_losses.get(spec.id, 0) + 1
+                if self._bot_losses[spec.id] < BOT_LOSSES_TO_FAIL:
+                    self.queue.mark(spec.id, "queued")  # keeps target_count, like preempted
+                else:
+                    reason = f"lost the bot {BOT_LOSSES_TO_FAIL} times"
+                    self.queue.mark(spec.id, "failed", reason=reason)
+                    chat = f"{couldnt} {label}: {reason}"
             elif interrupt == "death":
                 chat = self._end_after_death(spec, f"{couldnt} {label}")
             elif interrupt is not None:  # wall_clock: --resume runs it again
@@ -1187,7 +1250,7 @@ class _Life:
         self._send_protected()
 
     def _send_protected(self) -> None:
-        if hasattr(self.backend, "set_protected"):  # v2's scripted test backends have none
+        if hasattr(self.backend, "set_protected") and not self._bot_gone:  # v2's scripted test backends have none
             self.backend.set_protected(self._protected_boxes())
 
     def _save_state(self) -> None:

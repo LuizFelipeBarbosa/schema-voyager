@@ -287,8 +287,13 @@ class Episode:
     def finish(self, success: bool | None = None, announce: bool = True) -> EpisodeResult:
         """`success` overrides the goal check, for a goal that isn't an item to hold. `announce=False` skips the
         "Goal reached" chat line (a user goal's life says "Done: ..." instead, v3.1h)."""
-        final = self.backend.observe()
-        self.inventory = final.inventory
+        from .mineflayer_backend import BackendError  # here, not at the top: see _rest_before_retry
+
+        try:
+            final = self.backend.observe()
+            self.inventory, blocks_walked = final.inventory, final.blocks_walked
+        except BackendError:  # the bot is gone (v3.0h): the last inventory the episode saw is the final one
+            blocks_walked = 0.0
         events = self.log.events
         result = EpisodeResult(
             episode_id=self.episode_id,
@@ -300,12 +305,12 @@ class Episode:
             actions=self.actions,
             llm_tokens=self.llm_tokens,
             llm_calls=len(self.llm.calls) - self._calls_at_start,
-            blocks_walked=final.blocks_walked,
+            blocks_walked=blocks_walked,
             repeated_failures=repeated_failures(events),
             contradictions=sum(1 for e in events if e["kind"] == "contradiction"),
             actions_after_contradiction=actions_after_contradiction(events),
             revisions=self.revisions,
-            final_inventory=final.inventory,
+            final_inventory=self.inventory,
             used_skills=self.used_skills,
         )
         self.log.event("episode_end", **result.to_dict())
