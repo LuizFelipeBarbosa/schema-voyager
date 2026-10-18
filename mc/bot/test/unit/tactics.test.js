@@ -68,7 +68,7 @@ test('validateTactics: [] is fine; a non-array, non-string, unknown or repeated 
   assert.equal(validateTactics(['b', 'a'], registry), null)
   assert.match(validateTactics(['a', 'b', 'a'], registry), /repeated/)
   assert.deepEqual([...TACTICS], ['wtap', 'strafe', 'shield', 'crit', 'disengage'])
-  assert.deepEqual([...DEFAULT_TACTICS], [])
+  assert.deepEqual([...DEFAULT_TACTICS], ['crit', 'shield'])
 })
 
 test('createTactics: an invalid list throws', () => {
