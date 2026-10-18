@@ -62,13 +62,6 @@ def test_fake_text_without_a_word():
     assert isinstance(parse_fake("10"), Unsupported)
 
 
-@pytest.mark.parametrize("text, reply_part", [("kill 3 zombies", "can't hunt"), ("guard me", "can't guard")])
-def test_fake_other_kinds_are_unsupported(text, reply_part):
-    result = parse_fake(text)
-    assert isinstance(result, Unsupported)
-    assert reply_part in result.reply
-
-
 def test_fake_is_metered_and_makes_no_call():
     llm = LLM(mode="fake")
     llm.parse_goal("get me 10 torches", {}, ITEMS, goal_id="u001")
@@ -124,13 +117,6 @@ def test_live_reply_has_no_hash_and_is_cut(monkeypatch):
     result, _ = parse_live(monkeypatch, {"kind": "unsupported", "reply": "Try #planks " + "x" * 300})
     assert "#" not in result.reply
     assert len(result.reply) == 240
-
-
-@pytest.mark.parametrize("kind, reply_part", [("kill", "can't hunt"), ("guard", "can't guard")])
-def test_live_other_kinds_get_the_fixed_reply(monkeypatch, kind, reply_part):
-    result, _ = parse_live(monkeypatch, {"kind": kind, "target": "zombie", "reply": "ignored"})
-    assert isinstance(result, Unsupported)
-    assert reply_part in result.reply and "ignored" not in result.reply
 
 
 def test_llm_errors_propagate(monkeypatch):

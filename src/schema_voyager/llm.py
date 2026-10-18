@@ -185,8 +185,9 @@ ITEMS_SCHEMA = {
 FAKE_EXPANSION_SIZE = 3
 
 # v3.1e: parsing what the user typed.
-SUPPORTED_GOAL_KINDS: frozenset[GoalKind] = frozenset({"obtain", "build"})  # M3 adds kill and guard
+SUPPORTED_GOAL_KINDS: frozenset[GoalKind] = frozenset({"obtain", "build", "kill", "guard"})
 MAX_GOAL_COUNT = 256
+MAX_KILL_COUNT = 16
 
 PARSE_GOAL_SYSTEM = """You turn a request typed to a Minecraft Java Edition 1.21.1 bot into one goal.
 - kind "obtain": get items. item is a vanilla item id without the "minecraft:" prefix, or "#planks" / "#log" for any kind of wood. count is how many MORE to get, whatever the inventory holds: "get me 20 torches" while holding 8 means count 20.
@@ -272,12 +273,7 @@ class BlueprintDesignError(Exception):
         self.errors = errors
 
 
-_TRY_FETCH = 'I can fetch items: try "get me 10 torches".'
 _DEFAULT_UNSUPPORTED_REPLY = 'I can only fetch items for now: try "get me 10 torches".'
-_UNSUPPORTED_KIND_REPLIES = {
-    "kill": f"I can't hunt yet. {_TRY_FETCH}",
-    "guard": f"I can't guard anyone yet. {_TRY_FETCH}",
-}
 _MAX_REPLY_CHARS = 240
 
 
@@ -517,23 +513,24 @@ class LLM:
 
     def parse_goal(self, text: str, inventory: dict[str, int], known_items: frozenset[str], *,
                    goal_id: str) -> GoalSpec | Unsupported:
-        """Turn typed text into an obtain or build goal, or say why the bot can't do it. `known_items` is
-        what an obtain item may be (besides the groups); LLMError from the call propagates."""
+        """Turn typed text into an obtain, build, kill or guard goal, or say why the bot can't do it.
+        `known_items` is what an obtain item may be (besides the groups); LLMError from the call propagates."""
         if self.mode == "fake":
             self._meter_fake("parse_goal", text)
-            kind, item, count = _fake_parse_goal(text, known_items)
+            kind, item, count, target = _fake_parse_goal(text, known_items)
             reply = ""
         else:
             user = f"Request: {text}\nInventory: {json.dumps(inventory, sort_keys=True)}"
             payload = self._json_call("parse_goal", PARSE_GOAL_SYSTEM, user, PARSE_GOAL_SCHEMA)
             kind, item, count, reply = payload["kind"], payload["item"], payload["count"], payload["reply"]
+            target = payload.get("target") or ""
         if kind == "build":
             try:
                 blueprint = self.design_blueprint(text)
             except BlueprintDesignError:
                 return Unsupported("I couldn't design that. Try \"build a small wooden house with a door\".")
             return GoalSpec(id=goal_id, kind="build", source="user", text=text, blueprint=blueprint)
-        return _checked_goal(goal_id, text, kind, item, count, reply, known_items)
+        return _checked_goal(goal_id, text, kind, item, count, target, reply, known_items)
 
     def design_blueprint(self, text: str, limits: BlueprintLimits = BlueprintLimits()) -> dict[str, Any]:
         """Turn a build request into a valid blueprint within `limits`, giving Claude the errors of a bad answer
@@ -870,22 +867,32 @@ def _is_group(name: str) -> bool:
     return name.startswith("#") and normalize.members(name) != [name]
 
 
-def _fake_parse_goal(text: str, known_items: frozenset[str]) -> tuple[str, str, int]:
-    """Offline stand-in for the model: (kind, item, count), by the rule in v3.1e."""
-    text = text.lower()
+def _fake_parse_goal(text: str, known_items: frozenset[str]) -> tuple[str, str, int, str]:
+    """Offline stand-in for the model: (kind, item, count, target), by the rule in v3.1e and v3.3i."""
     words = text.split()
-    if words and words[0] in ("build", "kill", "guard"):
-        return words[0], "", 1
+    verb = words[0].lower() if words else ""
+    if verb == "build":
+        return "build", "", 1, ""
+    if verb == "kill":
+        rest = words[1:]
+        count = 1
+        if rest and (rest[0].isdigit() or rest[0].lower() in ("a", "an")):
+            count = int(rest[0]) if rest[0].isdigit() else 1
+            rest = rest[1:]
+        return "kill", "", count, " ".join(rest).lower()
+    if verb == "guard":
+        return "guard", "", 1, " ".join(words[1:])
+    text = text.lower()
     match = re.search(r"(\d+)?\s*([a-z_]+)\s*$", text)
     if match is None:
-        return "obtain", "", 1
+        return "obtain", "", 1, ""
     count, word = int(match.group(1) or 1), match.group(2)
     candidates = [word, word[:-1], word[:-2], "#" + word, "#" + word[:-1]]
     item = next((name for name in candidates if name in known_items or _is_group(name)), word)
-    return "obtain", item, count
+    return "obtain", item, count, ""
 
 
-def _checked_goal(goal_id: str, text: str, kind: str, item: str, count: int, reply: str,
+def _checked_goal(goal_id: str, text: str, kind: str, item: str, count: int, target: str, reply: str,
                   known_items: frozenset[str]) -> GoalSpec | Unsupported:
     """The checks every mode shares, in the order of v3.1e; replies lose "#" and are cut."""
     def unsupported(message: str) -> Unsupported:
@@ -893,8 +900,19 @@ def _checked_goal(goal_id: str, text: str, kind: str, item: str, count: int, rep
 
     if kind == "unsupported":
         return unsupported(reply or _DEFAULT_UNSUPPORTED_REPLY)
+    if kind == "guard":
+        return GoalSpec(id=goal_id, kind="guard", source="user", text=text, target=target.strip() or "me")
+    if kind == "kill":
+        mob = _vanilla_mob_name(target)
+        if mob is None:
+            return unsupported(f"I don't know a creature called {target.strip()}.")
+        if vanilla_mobs()[mob] == "player":
+            return unsupported("I won't fight players.")
+        if count > MAX_KILL_COUNT:
+            return unsupported(f"I can kill at most {MAX_KILL_COUNT} at a time.")
+        return GoalSpec(id=goal_id, kind="kill", source="user", text=text, target=mob, count=max(1, count))
     if kind not in SUPPORTED_GOAL_KINDS:
-        return unsupported(_UNSUPPORTED_KIND_REPLIES[kind])
+        return unsupported(_DEFAULT_UNSUPPORTED_REPLY)
 
     item = item.strip().removeprefix("minecraft:").strip()
     if item not in known_items and not _is_group(item):
@@ -903,3 +921,11 @@ def _checked_goal(goal_id: str, text: str, kind: str, item: str, count: int, rep
         return unsupported(f"That's more than I can carry. Ask for {MAX_GOAL_COUNT} or fewer.")
     return GoalSpec(id=goal_id, kind="obtain", source="user", text=text,
                     item=normalize.family(item), count=max(1, count))
+
+
+def _vanilla_mob_name(spoken: str) -> str | None:
+    """The vanilla entity name for what a player or the model called a mob ("cave spiders" -> "cave_spider")."""
+    name = "_".join(spoken.lower().split())
+    mobs = vanilla_mobs()
+    candidates = [name, name.removesuffix("s"), name.removesuffix("es")]
+    return next((candidate for candidate in candidates if candidate in mobs), None)

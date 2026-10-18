@@ -185,7 +185,7 @@ def test_torches_made_for_the_user_are_not_tossed_as_junk_later(tmp_path, monkey
 def test_chat_commands_and_their_replies(tmp_path):
     world = ChatWorld(
         {
-            2: chat("goal", "kill 3 zombies"),
+            2: chat("goal", "kill 3 players"),
             3: [  # one burst, while the first curriculum goal runs; u002 to u004 are cancelled before any parse
                 chat("status"),
                 chat("goal", "4 sticks"),
@@ -207,7 +207,7 @@ def test_chat_commands_and_their_replies(tmp_path):
     run(tmp_path, world, max_goals=1)
 
     said = world.said
-    assert next(s for s in said if "can't hunt" in s)
+    assert next(s for s in said if "won't fight players" in s)
     assert entry(tmp_path, "u001").status == "unsupported"
     assert "Learning: 1 plank." in said
     assert "No goal u009." in said
