@@ -140,6 +140,29 @@ test('two holds: only the last release enables, then equipAll and eat run once',
   assert.deepEqual(calls, ['disable', 'enable', 'equipAll:start', 'equipAll', 'eat'])
 })
 
+test('a hold opened while the last release is still equipping blocks the queued eat', async () => {
+  const { bot, survival, state } = setup()
+  const holdsAtEat = []
+  let open = 0
+  bot.autoEat.eat = async () => { holdsAtEat.push(open) }
+  state.equipAllMs = 50
+
+  const first = await survival.hold()
+  open = 1
+  first()
+  open = 0
+  await sleep(10) // equipAll is still running
+  const second = survival.hold()
+  open = 1
+  await second.then((release) => {
+    assert.deepEqual(holdsAtEat, [])
+    release()
+    open = 0
+  })
+  await sleep(80)
+  assert.deepEqual(holdsAtEat, [0])
+})
+
 test('releasing twice is a no-op', async () => {
   const { bot, survival } = setup()
   const first = await survival.hold()

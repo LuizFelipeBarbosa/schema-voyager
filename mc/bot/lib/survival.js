@@ -60,6 +60,7 @@ function attachSurvival (bot, eventLog, {
   }
 
   async function eat () {
+    if (holds > 0) return // a hold opened after the equipAll that queued this eat
     try {
       if (bot.autoEat) await bot.autoEat.eat()
     } catch (error) {
@@ -74,11 +75,9 @@ function attachSurvival (bot, eventLog, {
   }
 
   async function settle () {
-    if (bot.autoEat) {
-      bot.autoEat.disable()
-      await waitUntilNotEating()
-    }
-    await equipping
+    if (bot.autoEat) bot.autoEat.disable()
+    await equipping // an eat it queued with .then(eat) has started by now
+    if (bot.autoEat) await waitUntilNotEating()
   }
 
   return {
