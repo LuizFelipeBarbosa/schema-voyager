@@ -68,7 +68,7 @@ class MineflayerBackend:
                 inventory_delta=body.get("picked_up") or {},
                 inventory=self._inventory(body),
                 blocks_walked=body.get("blocks_walked", 0.0),
-                detail=_detail(body, "target", "tool", "detail"),
+                detail=_detail(body, "position", "target", "tool", "detail"),
             )
         if action.kind == "craft":
             body = self._post("/craft", {"item": action.target, "times": action.times})
@@ -78,7 +78,7 @@ class MineflayerBackend:
                 inventory_delta=body.get("inventory_delta") or {},
                 inventory=self._inventory(body),
                 blocks_walked=body.get("blocks_walked", 0.0),
-                detail=_detail(body, "missing", "used_table", "table_retrieved", "detail"),
+                detail=_detail(body, "position", "missing", "used_table", "table_retrieved", "detail"),
             )
         body = self._post("/explore")
         return Outcome(
@@ -148,7 +148,7 @@ class MineflayerBackend:
             "max_distance": MINE_MAX_DISTANCE,
             "scaffold": list(SCAFFOLD_BLOCKS),
         })
-        detail = _detail(body, "target", "block", "tool", "inventory_before_step", "detail")
+        detail = _detail(body, "position", "target", "block", "tool", "inventory_before_step", "detail")
         if "tool_used" in body:  # null is meaningful: an empty hand
             detail["tool_used"] = body["tool_used"]
         return Outcome(
@@ -185,6 +185,7 @@ class MineflayerBackend:
             delta.update(body.get("inventory_delta") or {})
         failed = next((body for body in bodies if not body["ok"]), None)
         detail = _detail(bodies[0], "item", "inventory_before_step")
+        detail.update(_detail(bodies[-1], "position"))  # where the last call left the bot
         for key in ("missing", "used_table", "table_retrieved", "detail"):
             values = [body[key] for body in bodies if body.get(key) is not None]
             if values:
@@ -240,7 +241,7 @@ class MineflayerBackend:
             inventory=self._inventory(body),
             blocks_walked=body.get("blocks_walked", 0.0),
             detail=_detail(
-                body, "missing", "used_furnace", "furnace_retrieved", "fuel", "fuel_used", "smelted", "item", "inventory_before_step", "detail"
+                body, "position", "missing", "used_furnace", "furnace_retrieved", "fuel", "fuel_used", "smelted", "item", "inventory_before_step", "detail"
             ),
             travel=body.get("travel") or {},
             events=body.get("events") or [],

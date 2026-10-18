@@ -125,7 +125,7 @@ start() {
   sv2_wait_until 20 life_has_lock || { stop_life; die "the life did not take the lock in 20 s; see $log_file"; }
 
   start_panel "$fresh_panel"
-  echo "panel:   http://localhost:$PANEL_PORT/site/dist/trace.html?run=$run&viewer=http://localhost:$SV2_VIEWER_PORT"
+  echo "panel:   http://localhost:$PANEL_PORT/site/dist/trace.html?run=$run&viewer=http://localhost:$SV2_VIEWER_PORT&bot=http://localhost:$SV2_BOT_PORT"
   echo "viewer:  http://localhost:$SV2_VIEWER_PORT"
   echo "log:     $log_file"
   echo "stop:    SV2_INSTANCE=$SV2_INSTANCE $SV2_HOME/scripts/v2-demo.sh stop"

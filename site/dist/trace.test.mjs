@@ -14,8 +14,9 @@ const V1_TRACE = '/Users/luiz/Developer/crusoe-hackathon/sv2/results/episodes/B_
 function load(source) {
   const element = { addEventListener() {}, querySelector: () => null, insertAdjacentHTML() {}, classList: { add() {}, toggle() {} } };
   const context = {
-    document: { getElementById: () => element, querySelector: (selector) => (selector === '.controls' ? element : null), addEventListener() {} },
+    document: { getElementById: () => element, querySelector: (selector) => (['.controls', '.layout'].includes(selector) ? element : null), querySelectorAll: () => [], addEventListener() {} },
     location: { search: '', hostname: 'localhost' },
+    window: {},
     history: { replaceState() {} },
     fetch: async () => ({ ok: false }),
     setInterval() {},
@@ -24,13 +25,13 @@ function load(source) {
     URLSearchParams
   };
   vm.createContext(context);
-  vm.runInContext(`${source}\nthis.api = { logLine, readable: typeof readable === "function" ? readable : null, stepLogLine, stateAt, episodeHtml, stepHtml, goalStory: typeof goalStory === "function" ? goalStory : null, lifeOverview: typeof lifeOverview === "function" ? lifeOverview : null, goalCardHtml: typeof goalCardHtml === "function" ? goalCardHtml : null, changeStory: typeof changeStory === "function" ? changeStory : null, worldChangesHtml: typeof worldChangesHtml === "function" ? worldChangesHtml : null, hypothesisHtml: typeof hypothesisHtml === "function" ? hypothesisHtml : null, revisionHtml: typeof revisionHtml === "function" ? revisionHtml : null, lifePlanHtml: typeof lifePlanHtml === "function" ? lifePlanHtml : null, overviewHtml: typeof overviewHtml === "function" ? overviewHtml : null };`, context);
+  vm.runInContext(`${source}\nthis.api = { logLine, readable: typeof readable === "function" ? readable : null, stepLogLine, stateAt, episodeHtml, stepHtml, goalStory: typeof goalStory === "function" ? goalStory : null, lifeOverview: typeof lifeOverview === "function" ? lifeOverview : null, goalCardHtml: typeof goalCardHtml === "function" ? goalCardHtml : null, changeStory: typeof changeStory === "function" ? changeStory : null, worldChangesHtml: typeof worldChangesHtml === "function" ? worldChangesHtml : null, hypothesisHtml: typeof hypothesisHtml === "function" ? hypothesisHtml : null, revisionHtml: typeof revisionHtml === "function" ? revisionHtml : null, lifePlanHtml: typeof lifePlanHtml === "function" ? lifePlanHtml : null, overviewHtml: typeof overviewHtml === "function" ? overviewHtml : null, compactMode: typeof compactMode === "function" ? compactMode : null, routeOf: typeof routeOf === "function" ? routeOf : null, scaleLength: typeof scaleLength === "function" ? scaleLength : null };`, context);
   return context.api;
 }
 
 const plain = (value) => JSON.parse(JSON.stringify(value));
 const readTrace = (path) => readFileSync(path, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
-const now = load(['life.js', 'trace.js'].map((name) => readFileSync(join(here, name), 'utf8')).join('\n'));
+const now = load(['life.js', 'minimap.js', 'trace.js'].map((name) => readFileSync(join(here, name), 'utf8')).join('\n'));
 const before = load(execFileSync('git', ['show', 'v2/open-world:site/dist/trace.js'], { cwd: here, encoding: 'utf8' }));
 
 // v2: every logged line is readable text
@@ -213,6 +214,57 @@ const everything = [
 for (const html of everything) assert.doesNotMatch(html.replace(/&#39;/g, "'").replace(/<[^>]*>/g, ' '), /#/);
 assert.equal(now.readable('craft #planks changed (planks2)'), 'craft planks (any wood) changed (planks2)');
 assert.equal(now.readable('craft #stone_bricks'), 'craft stone_bricks');
+// --- Compact stage view
+const flags = (query) => now.compactMode(new URLSearchParams(query));
+assert.equal(flags('run=r&viewer=http://localhost:3207'), true, 'on by default with a viewer');
+assert.equal(flags('run=r'), false, 'off without a viewer');
+assert.equal(flags('run=r&viewer=1&compact=0'), false);
+assert.equal(flags('run=r&compact=1'), true);
+assert.equal(flags('viewer=1&compact=false'), false);
+
+// the plan: the running step plus the next 3, done steps folded into verdicts
+const planRow = (state, verdict, i) => ({ state, verdict, action: `mine log${i}`, start: { predicts: 'log -> 1 log' } });
+const longPlan = { rows: [planRow('done', 'match', 1), planRow('done', 'mismatch', 2), planRow('done', 'failed', 3), planRow('running', undefined, 4), ...[5, 6, 7, 8, 9].map((i) => planRow('todo', undefined, i))] };
+const compactPlan = now.lifePlanHtml(longPlan, true);
+assert.equal((compactPlan.match(/class="row /g) || []).length, 4, 'running + 3');
+assert.match(compactPlan, /3 done[\s\S]*class="match"[\s\S]*class="mismatch"[\s\S]*class="failed"/);
+assert.match(compactPlan, /<span class="n">4<\/span>[\s\S]*<span class="n">7<\/span>/);
+assert.doesNotMatch(compactPlan, /<span class="n">8<\/span>/);
+assert.match(compactPlan, /2 more not shown/);
+assert.equal((now.lifePlanHtml(longPlan).match(/class="row /g) || []).length, 9, 'non-compact lists every step');
+assert.equal((now.lifePlanHtml({ rows: longPlan.rows.slice(0, 3) }, true).match(/class="row /g) || []).length, 0, 'a finished goal is just the verdicts');
+// the world-change card: one row of stages instead of four
+const compactChange = now.worldChangesHtml([now.changeStory(r2, [{ index: 3, events: goalThreeToRecovery }], T_END)], true);
+assert.match(compactChange, /change-card compact[\s\S]*✓ caught[\s\S]*✓ recovered[\s\S]*… certified[\s\S]*coal ore now drops coal only for a stone-tier pickaxe/);
+assert.doesNotMatch(compactChange, /<ol class="change-stages"/);
+
+// --- Route minimap: positions of the steps, starts of the goals, the last target
+const at = (x, z, y = 64) => ({ x, y, z });
+const stepAt = (index, position, target) => ({ kind: 'step', index, detail: { position, ...(target ? { target } : {}) } });
+const goalsWithRoute = [
+  { index: 2, events: [stepAt(1, at(0, 0)), stepAt(2, at(10, -4))] },
+  { index: 3, events: [stepAt(1, at(14, -4), at(20, -8)), stepAt(2, at(18, -9))] },
+  { index: 4, events: [] }
+];
+let route = now.routeOf(goalsWithRoute, 3, null);
+assert.deepEqual(plain(route.starts), [{ goal: 2, x: 0, z: 0 }, { goal: 3, x: 10, z: -4 }, { goal: 4, x: 18, z: -9 }], 'a goal starts where the last one stopped');
+assert.deepEqual(plain(route.trail.map((point) => [point.x, point.z])), [[10, -4], [14, -4], [18, -9]]);
+assert.deepEqual(plain([route.current, route.target]), [at(18, -9), { x: 20, y: 64, z: -8 }]);
+assert.equal(route.hasData, true);
+route = now.routeOf(goalsWithRoute, 3, { goal: 3, points: [at(19, -9)] });
+assert.deepEqual(plain(route.current), at(19, -9), 'the live position is the current one');
+route = now.routeOf(goalsWithRoute, 3, { goal: 4, points: [at(50, 50)] });
+assert.deepEqual(plain(route.current), at(18, -9), 'a live position of another goal is ignored');
+// old runs: steps without positions, and explore steps with them
+const withoutPositions = g009.map((event) => (event.detail ? { ...event, detail: { ...event.detail, position: undefined } } : event));
+const oldRoute = now.routeOf([{ index: 1, events: withoutPositions }], 1, null);
+assert.deepEqual([oldRoute.hasData, oldRoute.trail.length, oldRoute.current], [false, 0, null], 'no route data');
+assert.equal(now.routeOf([], null, null).hasData, false);
+const exploreRoute = now.routeOf([{ index: 33, events: explore }], 33, null);
+assert.ok(exploreRoute.hasData === (explore.some((event) => event.kind === 'step' && event.detail && event.detail.position)));
+assert.equal(now.scaleLength(37), 20);
+assert.equal(now.scaleLength(0.4), 1);
+
 console.log('life view ok');
 console.log(`v1 ok: ${v1.length} events identical`);
 console.log('all panel tests passed');

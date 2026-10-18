@@ -24,7 +24,18 @@ const LIVE_WINDOW_S = 60; // an unfinished trace written to this recently is liv
 
 const params = new URLSearchParams(location.search);
 const LIFE_RUN = params.get('run'); // set: show the life view (life.js) of this run
+const BOT_URL = (params.get('bot') || '').replace(/\/+$/, '') || null; // the bot's HTTP API: live position and camera mode
+const BOT_POLL_MS = 1000;
+const CAMERA_RELOAD_MS = 800; // the viewer restarts on its port before the iframe reloads
 const byId = (id) => document.getElementById(id);
+
+// The compact stage layout leaves the screen to the 3D viewer: on whenever one is
+// embedded, ?compact=1 forces it on and ?compact=0 off.
+function compactMode(search) {
+  if (search.has('compact')) return !['0', 'false'].includes(search.get('compact'));
+  return Boolean(search.get('viewer'));
+}
+const COMPACT = compactMode(params);
 
 const player = {
   path: null, // the served trace on screen; null for a dropped file
@@ -37,7 +48,10 @@ const player = {
 };
 
 // What the life view reads besides the trace on screen: the run's goals and world changes.
-const lifeFeed = { rows: [], changes: [], episodes: [], goals: [] }; // goals: [{ index, path, ended, events }] from the first world change on
+const lifeFeed = { rows: [], changes: [], episodes: [], goals: [], live: null }; // goals: [{ index, path, ended, events }]; live: { goal, points } from the bot's /status
+
+// The view: pinned freezes the life view, the route minimap and the viewer's camera.
+const view = { pinned: false, cameraMode: ['first', 'third'].includes(params.get('viewmode')) ? params.get('viewmode') : null }; // null: whatever the bot started with
 
 // --- Loading and following traces --------------------------------------------
 
@@ -121,22 +135,21 @@ async function pollLife() {
       return [];
     }
   }));
-  const goals = await pollChangeGoals(changes);
+  const goals = await pollGoals();
   const eventCount = (list) => list.reduce((sum, goal) => sum + goal.events.length, 0);
   if (rows.length === lifeFeed.rows.length && changes.length === lifeFeed.changes.length && eventCount(goals) === eventCount(lifeFeed.goals)) return;
   Object.assign(lifeFeed, { rows, changes, goals });
   render();
 }
 
-// The world-change card follows a change across goals, so it needs the events of every
-// goal since the first change. Finished goals never change and are fetched once.
-async function pollChangeGoals(changes) {
-  if (!changes.length) return [];
-  const firstGoal = Math.min(...changes.map((change) => Number(String(change.goal).slice(1))));
+// The world-change card follows a change across goals and the route minimap marks where each
+// goal began, so both need the events of every goal. Finished goals never change and are
+// fetched once.
+async function pollGoals() {
   const known = new Map(lifeFeed.goals.map((goal) => [goal.path, goal]));
   const wanted = lifeFeed.episodes
     .map((episode) => ({ path: episode.path, index: Number((episode.name.match(/_g(\d+)_/) || [])[1]) }))
-    .filter((goal) => goal.index >= firstGoal);
+    .filter((goal) => goal.index > 0);
   return Promise.all(wanted.map(async (goal) => {
     const cached = known.get(goal.path);
     if (cached && cached.ended) return cached;
@@ -391,16 +404,18 @@ function render() {
 }
 
 function renderLife() {
+  if (view.pinned) return; // frozen until unpinned
   const story = goalStory(player.events.slice(0, player.index + 1));
   const row = story.goal ? lifeFeed.rows.find((candidate) => candidate.index === story.goal.index) : null;
   byId('life-follow').innerHTML = player.followNewest
-    ? '<span class="live-badge">● LIVE</span> following the newest goal'
-    : `<span class="pinned-badge">PINNED</span> ${story.goal ? `to goal ${story.goal.index}` : ''} <button data-live>back to live</button>`;
+    ? '<span class="live-badge">● LIVE</span><span class="follow-text"> following the newest goal</span>'
+    : `<span class="pinned-badge">GOAL PINNED</span> ${story.goal ? `<span class="follow-text">to goal ${story.goal.index}</span>` : ''} <button data-live>back to live</button>`;
   byId('life-goal').innerHTML = goalCardHtml(story, story.end ? row : null);
   byId('life-revision').innerHTML = revisionHtml(story);
   byId('life-hypothesis').innerHTML = hypothesisHtml(story);
-  byId('life-changes').innerHTML = worldChangesHtml(worldChangeStories(story));
-  byId('life-plan').innerHTML = lifePlanHtml(story);
+  byId('life-changes').innerHTML = worldChangesHtml(worldChangeStories(story), COMPACT);
+  byId('life-plan').innerHTML = lifePlanHtml(story, COMPACT);
+  renderRoute(story);
   byId('life-overview').innerHTML = overviewHtml(lifeOverview(lifeFeed.rows, lifeFeed.changes, story, lifeFeed.episodes));
   const running = document.querySelector('.plan-rows li.running');
   if (running) running.parentElement.scrollTop = running.offsetTop - running.parentElement.clientHeight / 2;
@@ -409,20 +424,103 @@ function renderLife() {
 // What the world changes so far did, as of the moment on screen. The goal on screen
 // comes from the player, which is fresher than the polled copy.
 function worldChangeStories(story) {
-  const shownIndex = story.goal ? story.goal.index : null;
-  const goals = [
-    ...lifeFeed.goals.filter((goal) => goal.index !== shownIndex),
-    ...(story.goal ? [{ index: shownIndex, events: player.events.slice(0, player.index + 1) }] : [])
-  ];
+  const goals = goalsAsShown(story);
   return lifeFeed.changes
     .filter((change) => change.t <= story.lastT)
     .sort((a, b) => a.t - b.t)
     .map((change) => changeStory(change, goals, story.lastT));
 }
 
+// The polled goals, with the one on screen cut at the event on screen.
+function goalsAsShown(story) {
+  const shownIndex = story.goal ? story.goal.index : null;
+  return [
+    ...lifeFeed.goals.filter((goal) => goal.index !== shownIndex),
+    ...(story.goal ? [{ index: shownIndex, events: player.events.slice(0, player.index + 1) }] : [])
+  ];
+}
+
+// --- Route minimap, pin and camera ----------------------------------------------
+
+function renderRoute(story) {
+  const shownIndex = story.goal ? story.goal.index : null;
+  const route = routeOf(goalsAsShown(story), shownIndex, lifeFeed.live);
+  const canvas = byId('route-canvas');
+  canvas.hidden = !route.hasData;
+  byId('route-empty').hidden = route.hasData;
+  byId('route-note').textContent = route.current
+    ? `goal ${shownIndex} · now ${Math.round(route.current.x)}, ${Math.round(route.current.y ?? 0)}, ${Math.round(route.current.z)}`
+    : route.hasData ? `goal ${shownIndex} · no positions recorded yet` : '';
+  if (route.hasData) drawRoute(canvas, route);
+}
+
+// While the panel follows a live goal and is not pinned, the bot's own position joins the trail.
+async function pollBot() {
+  const goal = player.events.find((event) => event.kind === 'goal');
+  if (!BOT_URL || view.pinned || !player.followNewest || !goal) return;
+  let position;
+  try {
+    const response = await fetch(`${BOT_URL}/status`, { cache: 'no-store' });
+    ({ position } = await response.json());
+  } catch {
+    return; // the bot is down or unreachable: the recorded route still shows
+  }
+  if (!isPoint(position) || view.pinned) return;
+  if (!lifeFeed.live || lifeFeed.live.goal !== goal.index) lifeFeed.live = { goal: goal.index, points: [] };
+  const points = lifeFeed.live.points;
+  const last = points[points.length - 1];
+  if (last && Math.hypot(position.x - last.x, position.z - last.z) < ROUTE_MIN_MOVE) return;
+  points.push(position);
+  render();
+}
+
+// One click pins what the panel shows: the life view, the minimap and the viewer's camera
+// stop following until the next click.
+function setPinned(pinned) {
+  view.pinned = pinned;
+  renderPin();
+  postPinToViewer();
+  if (!pinned) render();
+}
+
+function renderPin() {
+  const button = byId('pin');
+  button.classList.toggle('on', view.pinned);
+  button.textContent = view.pinned ? '📌 PINNED · click to follow' : '📌 PIN';
+}
+
+function postPinToViewer() {
+  const viewer = byId('viewer');
+  if (viewer.contentWindow) viewer.contentWindow.postMessage({ type: 'sv-pin', pinned: view.pinned }, '*');
+}
+
+// Asks the bot to restart its viewer in `mode`; false when the bot did not answer.
+async function postCameraMode(mode) {
+  try {
+    const response = await fetch(`${BOT_URL}/viewer`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode }) });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+async function setCameraMode(mode) {
+  if (!await postCameraMode(mode)) return;
+  view.cameraMode = mode;
+  renderCameraButtons();
+  const next = new URLSearchParams(location.search);
+  next.set('viewmode', mode);
+  history.replaceState(null, '', `?${next}`);
+  setTimeout(() => { byId('viewer').src = byId('viewer').src; }, CAMERA_RELOAD_MS);
+}
+
+function renderCameraButtons() {
+  for (const button of document.querySelectorAll('[data-camera]')) button.classList.toggle('on', button.dataset.camera === view.cameraMode);
+}
+
 function tickElapsed() {
   const elapsed = byId('life-elapsed');
-  if (elapsed && !elapsed.dataset.end && isLive()) elapsed.textContent = formatElapsed(Date.now() / 1000 - Number(elapsed.dataset.start));
+  if (elapsed && !elapsed.dataset.end && isLive() && !view.pinned) elapsed.textContent = formatElapsed(Date.now() / 1000 - Number(elapsed.dataset.start));
 }
 
 // Pins the goal of a timeline chip, or goes back to following the newest.
@@ -825,6 +923,13 @@ function wireControls() {
       openPath(value, false);
     }
   });
+  byId('pin').addEventListener('click', () => setPinned(!view.pinned));
+  byId('route-canvas').addEventListener('click', () => setPinned(!view.pinned));
+  byId('camera').addEventListener('click', (event) => {
+    const button = event.target.closest('[data-camera]');
+    if (button) setCameraMode(button.dataset.camera);
+  });
+  byId('viewer').addEventListener('load', postPinToViewer);
   byId('life').addEventListener('click', (event) => {
     const chip = event.target.closest('.chip[data-path]');
     if (chip) pinGoal(chip.dataset.path);
@@ -863,22 +968,31 @@ function wireDrop() {
 
 // ?viewer=1 embeds the bot's prismarine viewer (port 3007) beside the panel,
 // for recording both in one window; ?viewer=<url> points it elsewhere.
-function embedViewer() {
+// With ?bot=<api url>&viewmode=first|third the bot switches its camera before the viewer loads.
+async function embedViewer() {
   const setting = params.get('viewer');
   if (!setting) return;
+  document.querySelector('.layout').classList.add('with-viewer');
+  if (BOT_URL && view.cameraMode) await postCameraMode(view.cameraMode);
   const viewer = byId('viewer');
   viewer.src = setting === '1' ? `http://${location.hostname}:3007` : setting;
   viewer.hidden = false;
-  document.querySelector('.layout').classList.add('with-viewer');
 }
 
 async function main() {
+  if (COMPACT) document.querySelector('.layout').classList.add('compact');
   if (LIFE_RUN) {
     byId('life').hidden = false;
     document.querySelector('.layout').classList.add('life-mode');
     pollLife();
     setInterval(pollLife, INDEX_POLL_MS);
     setInterval(tickElapsed, 1000);
+    if (BOT_URL) {
+      byId('camera').hidden = false;
+      renderCameraButtons();
+      setInterval(pollBot, BOT_POLL_MS);
+    }
+    renderPin();
   }
   embedViewer();
   wireControls();
