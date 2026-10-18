@@ -1081,8 +1081,9 @@ class _Life:
                     print(f"life: could not clear keep_food: {error}")
 
     def _kept_food_for(self, spec: GoalSpec) -> list[str]:
-        """v3.0i: the raw items auto-eat must leave alone for an obtain goal for a food: the ingredients of every
-        usable smelt rule that yields it. Empty for any other goal, or a backend without `keep_food`."""
+        """v3.0i: the items auto-eat must leave alone for an obtain goal for a food: the food itself (the hungry bot
+        would eat what the goal just made) and the ingredients of every usable smelt rule that yields it. Empty for
+        any other goal, or a backend without `keep_food`."""
         if spec.item not in vanilla_foods() or not hasattr(self.backend, "keep_food"):
             return []
         ingredients = {
@@ -1091,7 +1092,7 @@ class _Life:
             if rule.kind == "smelt" and spec.item in rule.yields()
             for ingredient in rule.preconditions.get("consumes", {})
         }
-        return sorted(ingredients)
+        return sorted({spec.item} | ingredients)
 
     def _run_build_goal(
         self, spec: GoalSpec, index: int, started_at: float, observation: Observation, tossed: dict[str, int],
