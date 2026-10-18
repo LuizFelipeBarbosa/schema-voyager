@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 import os
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, ContextManager, Literal, Protocol
@@ -24,6 +24,7 @@ from .agent import run_schemavoyager
 from .build_runner import BUILD_GOAL, BuildOutcome, prepare_build, run_build
 from .curriculum import Curriculum, Goal
 from .episode import EXPLORE_GOAL, Episode
+from .goal_runners import ARM_SWORDS, KILL_SECONDS_PER_KILL, RunnerOutcome, run_guard, run_kill
 from .goals import GoalEntry, GoalInterrupted, GoalQueue, goal_label
 from .inventory import SCAFFOLD_BLOCKS, junk_to_toss
 from .llm import LLM, LLMError, SpendCapReached, vanilla_foods, vanilla_items
@@ -57,7 +58,8 @@ HUNGER_FOOD_COUNT = 4
 HUNGRY_LOG_EVERY_S = 300.0
 HUNGER_RETRY_S = 900.0  # a food whose hunger goal failed isn't chosen again for this long
 UNSEEN_MOB_S = 600.0  # a mob not seen for this long makes a hunger plan that kills it rank later (v3.3h)
-ARM_SWORDS = ("iron_sword", "stone_sword", "wooden_sword")  # the arming goal's choices, best first (v3.2e)
+ARM_BUDGET = 40  # steps a kill or guard goal may spend arming itself, and the guard's whole budget
+KILL_BUDGET_PER_KILL = 20
 ARM_RETRY_S = 900.0  # a sword whose arming goal failed isn't chosen again for this long
 # Foods the bot's auto-eat never eats (v3.2g), so they don't count as edible.
 AUTO_EAT_BANNED = frozenset(
@@ -311,6 +313,8 @@ class _Life:
         self._inventory_seen: dict[str, int] = {}  # the last inventory the life observed, for parsing goals
         self._food: int | None = None  # the food level of the latest poll
         self._died_in_goal = False  # the bot died since the running goal started
+        self._goal_events: list[dict[str, Any]] = []  # fight and follow events polled since the running goal started
+        self._goal_speakers: dict[str, str | None] = {}  # goal id -> the player whose !goal submitted it
         self._last_hungry_log: float | None = None  # time.monotonic()
         self._system_failed_at: dict[str, float] = {}  # item of a failed hunger or arming goal -> time.monotonic()
         self._cancelled_in_chat: set[str] = set()  # their ending doesn't say "Cancelled" a second time
@@ -319,6 +323,11 @@ class _Life:
         if hooks.bind_store is not None:
             hooks.bind_store(self.store)
         self._send_protected()
+        if hasattr(backend, "stop_follow"):  # v2's scripted test backends have none
+            try:
+                backend.stop_follow()  # a bot left following by an earlier life
+            except BackendError as error:
+                print(f"[bot] could not stop following at the start: {error}")  # the first pass waits for the bot
 
     # -- the loop ---------------------------------------------------------
 
@@ -596,6 +605,8 @@ class _Life:
                 self._handle_death(event)
             elif event["type"] == "threat":
                 threat_seen = True
+            if event["type"] in ("fight_start", "fight_end", "follow_end") and self._running is not None:
+                self._goal_events.append(event)
         if threat_seen:
             self._queue_arming_goal()
 
@@ -699,7 +710,7 @@ class _Life:
         self._log_event("chat_command", player=event.get("player"), command=command, args=args)
         if command == "goal":
             if args:
-                self.queue.submit(args, "user")  # _parse_pending answers it
+                self._goal_speakers[self.queue.submit(args, "user")] = event.get("player")  # _parse_pending answers it
             else:
                 self._say("Usage: !goal <what>, like !goal 10 torches")
         elif command == "cancel":
@@ -791,6 +802,7 @@ class _Life:
             except LLMError as error:
                 print(f"[goal] could not parse {entry.id}: {error}")
                 return  # it stays submitted; the next pass tries again
+            parsed = self._resolve_me(parsed)
             if isinstance(parsed, Unsupported):
                 if self.queue.mark(entry.id, "unsupported", reason=parsed.reply):
                     self._log_event("goal_unsupported", goal_id=entry.id, reply=parsed.reply)
@@ -801,6 +813,12 @@ class _Life:
                     **({"name": parsed.blueprint["name"]} if parsed.kind == "build" else {}),
                 )
                 self._say(self._plan_line(parsed) if parsed.kind == "build" else f"Queued {entry.id}: {goal_label(parsed)}")
+
+    def _resolve_me(self, parsed: GoalSpec | Unsupported) -> GoalSpec | Unsupported:
+        """A guard goal for "me" is for the player who typed it, if known (else None: the bot follows the nearest owner)."""
+        if isinstance(parsed, GoalSpec) and parsed.kind == "guard" and (parsed.target or "").lower() == "me":
+            return replace(parsed, target=self._goal_speakers.get(parsed.id))
+        return parsed
 
     def _log_event(self, kind: str, **fields: Any) -> None:
         """An event outside any episode, in EpisodeLog's line format."""
@@ -886,6 +904,9 @@ class _Life:
         observation, tossed = self._make_room(spec.item, observation)
         if spec.kind == "build":
             self._run_build_goal(spec, index, started_at, observation, tossed)
+            return False
+        if spec.kind in ("kill", "guard"):
+            self._run_kill_or_guard_goal(spec, index, started_at, observation, tossed)
             return False
         if goal is None:
             goal = self._start_queued_goal(spec, observation)
@@ -983,6 +1004,48 @@ class _Life:
             outcome = BuildOutcome(result, reason, plan.placed, total)
         self._end_goal(spec, goal, index, budget, started_at, episode, outcome.result, tossed, interrupt, build=outcome)
 
+    def _run_kill_or_guard_goal(
+        self, spec: GoalSpec, index: int, started_at: float, observation: Observation, tossed: dict[str, int]
+    ) -> None:
+        """Run a kill or guard goal in one episode (v3.3i): arm if need be, then the kill or guard runner."""
+        if not self.queue.mark(spec.id, "running"):
+            return  # cancelled meanwhile: no goal index used, nothing recorded
+        name = f"g{index:03d}"
+        free_slots_before = observation.free_slots
+        if spec.kind == "kill":
+            item, budget = f"kill_{spec.target}", ARM_BUDGET + KILL_BUDGET_PER_KILL * spec.count
+            goal_clock_s = max(self.config.goal_wall_clock_s, KILL_SECONDS_PER_KILL * spec.count)
+        else:
+            item, budget, goal_clock_s = "guard", ARM_BUDGET, self.config.goal_wall_clock_s
+        goal = Goal(item, spec.count, 0, (), f"{spec.source} goal {spec.id}")
+        task = Task(
+            task_id=name, split="train", goal_item=item, goal_count=goal.count,
+            start_inventory=dict(observation.inventory), world_rules=(), budget=budget, description=spec.text,
+        )
+        log = EpisodeLog(self.config.run_dir / "episodes" / f"D_life_{name}_{item}.jsonl", label=f"{name} {item}", say=self.backend.say)
+        episode = Episode(
+            episode_id=f"D/life/{name}-{item}", system="D", task=task, layout_seed=0, world_id=self.world_id,
+            backend=self.backend, llm=self.llm, log=log, inventory=dict(observation.inventory), natural=True,
+            deadline=time.monotonic() + min(goal_clock_s, max(self._remaining_s(), 0.0)),
+        )
+        self._log_goal_start(log, spec, goal, task, index, observation, free_slots_before, tossed)
+
+        def check_interrupts() -> None:
+            self._inventory_seen = dict(episode.inventory)  # what a death in this poll may have cost
+            self._check_interrupts()
+
+        runner = run_kill if spec.kind == "kill" else run_guard
+        outcome = RunnerOutcome()
+        result, interrupt = self._run_until_interrupted(
+            spec, episode,
+            lambda: runner(
+                episode, self.store, spec, bot_events=self._goal_events, check_interrupts=check_interrupts,
+                before_step=self._before_step, excluded=self._excluded_rules(), clock_s=goal_clock_s, outcome=outcome,
+            ),
+            self._remaining_s() <= goal_clock_s,
+        )
+        self._end_goal(spec, goal, index, budget, started_at, episode, result, tossed, interrupt, runner=outcome)
+
     def _run_until_interrupted(
         self, spec: GoalSpec, episode: Episode, run: Callable[[], EpisodeResult], life_clock_limits_goal: bool
     ) -> tuple[EpisodeResult, str | None]:
@@ -992,6 +1055,7 @@ class _Life:
         interrupt: str | None = None
         self._running = spec
         self._died_in_goal = False
+        self._goal_events.clear()
         try:
             result = run()
         except (GoalInterrupted, BackendError) as stop:
@@ -1054,12 +1118,13 @@ class _Life:
     def _end_goal(
         self, spec: GoalSpec, goal: Goal, index: int, budget: int, started_at: float, episode: Episode,
         result: EpisodeResult, tossed: dict[str, int], interrupt: str | None, build: BuildOutcome | None = None,
+        runner: RunnerOutcome | None = None,
     ) -> None:
         """The one ending of a goal (v3.1d): done, failed, cancelled, preempted or cut short by the life's clock.
         A build goal also settles its protected entry (v3.4b)."""
         queued_goal = spec.source != "curriculum"
         label = goal_label(spec)
-        couldnt = "Couldn't build" if spec.kind == "build" else "Couldn't get"
+        couldnt = {"build": "Couldn't build", "kill": "Couldn't do", "guard": "Couldn't do"}.get(spec.kind, "Couldn't get")
         entry = self._protected_entry(spec.id)
         chat = ""
         if queued_goal:
@@ -1087,7 +1152,7 @@ class _Life:
                 if not marked and self.queue.get(spec.id).status == "cancelled":  # cancelled after its last step
                     chat = cancelled_chat
             else:
-                reason = build.reason if build is not None else self._failure_reason(episode)
+                reason = build.reason if build is not None else (runner.reason if runner is not None else "") or self._failure_reason(episode)
                 marked = self.queue.mark(spec.id, "failed", reason=reason)
                 chat = f"{couldnt} {label}: {reason}"
                 if not marked and self.queue.get(spec.id).status == "cancelled":
@@ -1109,6 +1174,8 @@ class _Life:
         record |= {"goal_id": spec.id, "source": spec.source, "text": spec.text, "goal_kind": spec.kind, "tossed": tossed}
         if interrupt is not None:
             record["interrupt"] = interrupt
+        if runner is not None:
+            record |= runner.record
         if build is not None:
             record["build"] = {
                 "name": spec.blueprint["name"], "origin": entry["origin"] if entry else None,
