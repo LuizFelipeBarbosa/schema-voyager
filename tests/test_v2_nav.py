@@ -104,7 +104,7 @@ class LifeBackend:
 
 def run_one_goal(tmp_path, monkeypatch, end_goal, **config):
     """One goal whose run is `end_goal(episode)`, which leaves the episode unfinished."""
-    def stub(episode, store, before_step=None):
+    def stub(episode, store, before_step=None, excluded=frozenset()):
         end_goal(episode)
         return episode.finish()
 
