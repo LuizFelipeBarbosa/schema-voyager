@@ -557,7 +557,8 @@ action. A walk that falls short is not an error: `ok: true`,
     `phantom`, but not `enderman`, `zombified_piglin` or `piglin`, which count only once they hit the bot. (S07: a
     plain 8-block radius would cut into most steps at night, when some hostile is in view nearly all the time);
   - any entity that damaged the bot in the last 3 s (mineflayer's `entityHurt(entity, source)`, where `source` is
-    the cause: the skeleton, not its arrow).
+    the cause: the skeleton, not its arrow). A hit from a player named in `BOT_OWNERS` never counts: the guard
+    never fights an owner (and M3's `guard me` never targets the guarded owner).
   - Several at once: a creeper closer than 5 blocks first, then the most recent attacker, then the nearest.
 - **What the guard does** (`decide(mode, threat, health)` → `fight | flee | back_off | ignore`):
   - `off`: always `ignore`;
