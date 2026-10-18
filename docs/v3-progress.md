@@ -48,7 +48,7 @@ pushed to `origin` until the user says so.
 | S11 duels | not started | b | |
 | S12 home, storage, composite goals | not started | a | |
 | S13 mine reach (`unreachable` ore) | done | b | v3.0g; 4 lanes merged (pytest 997, bot 313); live `runs/v3-reach-2024` 1/44 ore `unreachable`, 11/12 iron goals, `runs/v3-reach-31337` 0/13, 4/4; `v2_iron.js` GATE PASS; not pushed |
-| S14 polish | running | a | Contract v3.0h; lanes backend-health, life-robust, panel-live, door-species, then life-polish, trace-interrupted, bot-polish, build-scaffold, readme |
+| S14 polish | done | a | Contract v3.0h; 11 lanes merged (pytest 1106 at 77b4bd1, 1147 on fed3117; bot 338/356); live `runs/v3-polish-live`: bot killed mid-goal -> `interrupted` `bot`, requeued, `done`; panel by `live.json`; second house leaves no scaffold; guard live test ALL PASS; not pushed |
 
 ## Log
 
@@ -134,6 +134,8 @@ pushed to `origin` until the user says so.
 - 06:10-06:20 S14 live `runs/v3-polish-live` (instance a, `fresh-2024`, peaceful, daylight off, `BOT_OWNERS=Otopo,Tester`, `--mode play --minutes 20 --cap-usd 2`; bot, panel (8768) and Python from `sv2` at 73474f9). The panel resolved the run from `live.json` (no `run` in the requests). u001 "get me 10 torches": the bot killed by pid mid-`/mine` -> `RemoteDisconnected` -> `BackendError` -> `bot_down`, the bot restarted with `v2-up.sh` (lock hand-over `SV2_LOCK_SESSION`), `bot_back` after 22.1 s, u001 `interrupted` with `bot`, requeued (`target_count` 10 kept), rerun `done` (12 torches). u002 "build a small wooden house with a door": `awaiting_approval` in 8 s, approved in the panel, `done` in 6 min, 72/72 placed, an independent scan `mismatches` `[]`; `build_done` `scaffold_cleared` 1, `scaffold_left` 0, but a 2-block dirt tower stayed at (15, 67..68, 13): mineflayer's `blockPlaced` came after the walk resolved and was never recorded.
 - 06:30 S14 after the advisor (do both): 8d39016 merge `v3/scaffold-record` (`recordTravel` wraps `bot.placeBlock` and reads the cells back after placements settle; place and goto walks always settle); 77b4bd1 merge `v3/scaffold-ring` (ring scan before and after the build, `scaffold_from`). pytest 1106 (1 skipped), bot 338, panel, goals and preview pass.
 - 06:49 S08 group 2: eb518fb merge `v3/parse-kill-guard` (`parse_goal` kill and guard; two tests that asserted the old can't-hunt replies updated); d671c09 merge `v3/kill-backend` (`/attack` in the backend, `look(mobs=)`, `follow`/`stop_follow`, `Episode.act` explores toward a mob sighting, retries `escaped`/`timeout` in place); c159ded merge `v3/hunt-food` (`observed_mobs`/`asked_mobs`, `cooked_x` asked, hunger ranking; three LLM test doubles take `mobs`); fed3117 merge `v3/follow-bot` (`/follow`, `/follow/stop`, `/status.follow`, `player_attacked`/`player_near`, fights sprint, ranged mobs 8 s). pytest 1147 (1 skipped), bot 356, panel pass.
+- 06:32-06:48 S14 live `runs/v3-polish-live` session 2 (`--resume --minutes 15`, the same world with u002's house, bot restarted on main at 77b4bd1, Python and panel from `sv2` at e2a734a). u003 "build a small wooden house with a door": approved in the panel, `done` in 5 min at [4, 76, 31], 72/72 placed, an independent scan `mismatches` `[]`; `build_done` `scaffold_cleared` 2, `scaffold_left` 0, `scaffold_from {walks: 2, ring: 2}` (the new recorder caught the tower by itself); both cells air on a rescan. **The live scaffold check passes on u003.** u002's 2-block tower at (15, 67..68, 13) is still in instance a's world: it was built before `scaffold-record` and `scaffold-ring` (the next `world-restore.sh fresh-2024` removes it). Ended `wall_clock`, `live.json` removed, lock released; $0.076.
+- 06:49 S14 live `node mc/bot/test/v3_guard_live.js` (instance a, under the lock, main at fed3117's bot code): ALL PASS (5 checks) in the new arena at y 200 over the bot; afterwards the bot was back on the ground and a scan of the arena's 6727 cells found no block left. Instance a down, panel stopped, lock released.
 
 ## S01 setup and baseline (done 2026-10-17)
 
@@ -491,3 +493,34 @@ pushed to `origin` until the user says so.
   - `v3-reach-31337` is thin (13 ore mines; the curriculum ran out after g018), and `v2_iron.js` passed once (one run, not a rate).
   - `no_path` and `ended` never happened live, so the 10-minute memory is now nearly unused; `path_timeout` once.
   - Report only, not investigated: v3-baseline g017's missed furnace drop (`furnace_retrieved: false`, no dig warning).
+
+## S14 polish (done 2026-10-18)
+
+- Contract v3.0h (`docs/v3-interfaces.md`, `contracts/bot_api.md`), plan S0.9; advisor's review: GO with changes.
+- Merges: 77ab8ee `backend-health` (every lost-bot condition is a `BackendError`, `connected()`), e9b379f `life-robust`
+  (wait up to 120 s, `interrupted` `bot`, requeue, `bot_down`, `live.json`), 2b3fd71 `panel-live` (the live run,
+  `ambiguous_run`, the run line, `?run=`), 899f7e3 `door-species`, b9ff10b `trace-interrupted`, 8cf585a `life-polish`
+  (play-mode needed items, late cancel, `!status`), 52d3d42 `bot-polish` (sprintAllowed, quiet auto-eat, guard arena),
+  32091e2 `build-scaffold`, 73474f9 `readme`, then after the first live build 8d39016 `scaffold-record` and 77b4bd1
+  `scaffold-ring`. Architect's merge fixes: the path in the `URLError` message (a flaky test), the guard arena's
+  cleanup height, four bot unit tests' empty travel. `life.py` changed in e9b379f and 8cf585a (logged for S08).
+- Suite on fed3117 (with S08's merges): pytest 1147 (1 skipped), bot unit 356, trace, goals and preview pass.
+- Live (instance a, `runs/v3-polish-live`, `NOTES.md` there): item 1 and item 2 checked live (bot killed mid-`/mine`,
+  `RemoteDisconnected` handled, `bot_back` 22 s, u001 requeued and `done`; panel requests without `run` went to the
+  live life); item 10 failed on u002 (tower recorded only partly), fixed, passed on u003; item 9's guard test ALL PASS.
+  $0.14 in all. README updated; the build gif isn't committed (no user approval), the README points to `scripts/v3-clip.js`.
+- Advisor (one Opus `Plan`, three consultations): design GO with changes; scaffold miss: do both (recorder and ring);
+  final review: GO.
+- Open, for S12 and the orchestrator:
+  - A wedged bot loops: if every pass-level call gets a `409` past 60 s while `connected()` is True, the life waits,
+    requeues and retries until a stop check (pass-level losses don't count toward the 3). Suggested: count consecutive
+    near-0 s losses and stop with `bot_stuck`.
+  - `_post`'s `HTTPError` branch reads the body with `error.read()`, which can itself raise `ConnectionResetError`
+    unwrapped. One-line fix, unlikely to fire.
+  - u002's dirt tower stays in instance a's world until the next `world-restore.sh fresh-2024`.
+  - Not tried live (unit-tested): door planks of mixed species, the chat late-cancel and `!status` lines,
+    `ambiguous_run` and `?run=` in a real browser.
+  - A stale `live.json` after a SIGKILL looks alive if its pid is reused (at worst an `ambiguous_run`; `--resume`
+    rewrites it).
+  - v3.0h gaps: pillars from an earlier, requeued attempt and scaffold placed while gathering aren't cleared.
+  - The README gif still waits for the user's approval.
