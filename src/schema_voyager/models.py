@@ -144,7 +144,7 @@ class Rule:
     preconditions: dict[str, Any]
     effects: dict[str, Any]
     status: RuleStatus = "hypothesis"
-    source: Literal["prior", "revision"] = "prior"
+    source: Literal["prior", "revision", "retest"] = "prior"
     scope: str = "train"  # "train" or the holdout world id that proposed it
     rank: int = 0  # order among sibling revision hypotheses
     rationale: str = ""
@@ -158,6 +158,8 @@ class Rule:
     # and the epoch of its (world, action, family) key it was proposed in.
     check: RuleCheck = "exact"
     epoch: int = 0
+    # v3: replay ignores transitions with seq < since_seq, which is a retest's evidence window.
+    since_seq: int = 0
 
     @property
     def kind(self) -> str:

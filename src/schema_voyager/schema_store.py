@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -103,6 +104,36 @@ class SchemaStore:
                 flagged.append(skill.id)
         return flagged
 
+    def retest(self, rule_id: str, world_id: str) -> Rule:
+        """Add a copy of a demoted rule whose evidence starts now, so the contradiction that
+        demoted the original cannot count against it. A retest never opens an epoch."""
+        rule = self.rules[rule_id]
+        transition_id = self.demoted_in.get(world_id, {}).get(rule_id)
+        if transition_id is None:
+            raise ValueError(f"cannot retest {rule_id}: it is not demoted in {world_id}")
+        if rule.source == "retest":
+            raise ValueError(f"cannot retest {rule_id}: it is already a retest")
+        if any(r.source == "retest" and r.revision_of == rule_id for r in self.rules.values()):
+            raise ValueError(f"cannot retest {rule_id}: it already has a retest")
+
+        retest = Rule(
+            id=f"{rule_id.split('@')[0]}.retest@{world_id}",
+            action=copy.deepcopy(rule.action),
+            preconditions=copy.deepcopy(rule.preconditions),
+            effects=copy.deepcopy(rule.effects),
+            status="hypothesis",
+            source="retest",
+            scope=world_id,
+            rank=0,
+            rationale=f"retest of {rule_id}, demoted by {transition_id}",
+            revision_of=rule_id,
+            check=copy.deepcopy(rule.check),
+            epoch=self.current_epoch(epoch_key(world_id, rule.kind, rule.subject)),
+            since_seq=len(self.transitions),
+        )
+        self.add_rule(retest)
+        return retest
+
     def _open_epoch(self, rule: Rule, transition_id: str, world_id: str) -> None:
         """A contradicted rule that had earned trust means the world changed: evidence
         gathered before the contradicting transition no longer speaks for new rules."""
@@ -136,7 +167,7 @@ class SchemaStore:
         for transition in self.transitions:
             if transition.world_id != rule.scope or not applies(rule, transition.action):
                 continue
-            if self.epoch_of(transition) < rule.epoch:
+            if transition.seq < rule.since_seq or self.epoch_of(transition) < rule.epoch:
                 continue
             verdict = evaluate(rule, transition.action, transition.observed)
             if verdict == "confirm":
