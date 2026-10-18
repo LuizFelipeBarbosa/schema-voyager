@@ -19,7 +19,7 @@ const STEP_BLOCKS = 10
 const EXPLORE_TIMEOUT_MS = 30000
 const LEG_BLOCKS = 16
 const DEFAULT_DISTANCE = 32
-const CLIMB_TIMEOUT_MS = 100000 // under the 120 s action timeout; about 50 blocks of rock
+const CLIMB_TIMEOUT_MS = 60000 // a third of a goal clock at most; about 30 blocks of rock
 const STALL_MS = 4000
 const FAIL_FAST = { stallMs: STALL_MS }
 const FALLBACK_BUDGET_MS = 20000
@@ -284,6 +284,6 @@ async function explore (bot, session, body = {}) {
 }
 
 module.exports = {
-  advanceLimit, directionAttempts, explore, firstAttemptThatMoved, hasTimeForAttempt, insideBorder, neighbourDirections,
+  advanceLimit, CLIMB_TIMEOUT_MS, directionAttempts, explore, firstAttemptThatMoved, hasTimeForAttempt, insideBorder, neighbourDirections,
   newSpiral, standableNeighbours, trackWorldBorder
 }

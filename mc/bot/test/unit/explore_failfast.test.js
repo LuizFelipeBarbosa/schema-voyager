@@ -2,7 +2,7 @@ const test = require('node:test')
 const assert = require('node:assert/strict')
 const { Vec3 } = require('vec3')
 const {
-  directionAttempts, explore, firstAttemptThatMoved, hasTimeForAttempt, neighbourDirections, standableNeighbours
+  CLIMB_TIMEOUT_MS, directionAttempts, explore, firstAttemptThatMoved, hasTimeForAttempt, neighbourDirections, standableNeighbours
 } = require('../../lib/explore')
 const { fakeWorldBot } = require('./world_fixture')
 
@@ -113,4 +113,8 @@ test('firstAttemptThatMoved stops when an attempt reports it is out of time', as
   })
   assert.equal(took, null)
   assert.equal(tried.length, 2)
+})
+
+test('the climb is capped at 60 s', () => {
+  assert.equal(CLIMB_TIMEOUT_MS, 60000)
 })
