@@ -52,6 +52,11 @@ def test_fake_kill_refusals():
     assert parse_fake("kill 16 zombies").count == 16
 
 
+@pytest.mark.parametrize("thing", ["boats", "item", "arrow"])
+def test_kill_refuses_things_that_are_not_alive(thing):
+    assert parse_fake(f"kill 3 {thing}") == Unsupported(f"I don't know a creature called {thing}.")
+
+
 def test_live_kill_reads_the_target(monkeypatch):
     result, _ = parse_live(monkeypatch, {"kind": "kill", "target": "zombies", "count": 3})
     assert result == GoalSpec(id="u007", kind="kill", source="user", text="whatever", target="zombie", count=3)
@@ -62,6 +67,8 @@ def test_live_kill_checks(monkeypatch):
     assert (result.target, result.count) == ("cave_spider", 1)
     result, _ = parse_live(monkeypatch, {"kind": "kill", "target": "player", "count": 1})
     assert result == Unsupported("I won't fight players.")
+    result, _ = parse_live(monkeypatch, {"kind": "kill", "target": "boat", "count": 3})
+    assert result == Unsupported("I don't know a creature called boat.")
     result, _ = parse_live(monkeypatch, {"kind": "kill", "target": "zombie", "count": 17})
     assert result == Unsupported("I can kill at most 16 at a time.")
 

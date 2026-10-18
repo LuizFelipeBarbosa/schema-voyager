@@ -225,7 +225,15 @@ function ruleLabel(rule) {
     const tools = rule.preconditions.tool_any || [];
     return `${tools.length ? tools.join(' / ') : 'any tool or bare hand'} → ${formatCounts(rule.effects.drops)}`;
   }
+  if (rule.action.type === 'kill') {
+    return `kill ${rule.action.mob} → ${formatRanges(rule.effects.allowed)}`;
+  }
   return `craft ${rule.action.item} → ${formatCounts(rule.effects.gains)}`;
+}
+
+function formatRanges(ranges) {
+  const entries = Object.entries(ranges || {});
+  return entries.length ? entries.map(([item, [low, high]]) => `${item} ${low}-${high}`).join(', ') : 'nothing';
 }
 
 function isRevision(ruleId) {
