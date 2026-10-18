@@ -109,6 +109,14 @@ class MineflayerBackend:
         self._latest_inventory = observation.inventory
         return observation
 
+    def toss(self, items: dict[str, int]) -> dict[str, int]:
+        if not items:
+            return {}
+        body = self._post("/toss", {"items": items})
+        if "inventory" in body:
+            self._latest_inventory = body["inventory"]
+        return {item: count for item, count in (body.get("tossed") or {}).items() if count > 0}
+
     def status(self, since: int = 0) -> Status:
         body = self._post("/status", {"since": since})
         position = body.get("position") or {"x": 0, "y": 0, "z": 0}
@@ -293,11 +301,13 @@ class MineflayerBackend:
 
 def _observation(body: dict[str, Any]) -> Observation:
     position = body.get("position") or {"x": 0, "y": 0, "z": 0}
+    free_slots = body.get("free_slots")
     return Observation(
         position=(position["x"], position["y"], position["z"]),
         inventory=body.get("inventory") or {},
         nearby={block: info["count"] for block, info in (body.get("nearby_blocks") or {}).items()},
         blocks_walked=body.get("blocks_walked", 0.0),
+        free_slots=free_slots if isinstance(free_slots, int) else None,
     )
 
 
