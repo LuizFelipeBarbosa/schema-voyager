@@ -257,7 +257,7 @@ class MineflayerBackend:
             "max_distance": MINE_MAX_DISTANCE,
             "scaffold": list(SCAFFOLD_BLOCKS),
         }))
-        detail = _detail(body, "position", "target", "block", "tool", "inventory_before_step", "detail")
+        detail = _detail(body, "position", "target", "block", "tool", "inventory_before_step", "detail", "reach")
         if "tool_used" in body:  # null is meaningful: an empty hand
             detail["tool_used"] = body["tool_used"]
         return Outcome(

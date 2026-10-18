@@ -28,6 +28,8 @@ NEW_PLACE_BLOCKS = 8
 # interrupted (v3.2): the bot's guard cut in to fight or flee.
 RETRIED_ERRORS = frozenset({"unreachable", "craft_failed", "dig_failed", "timeout", "interrupted"})
 MAX_RETRIES = 2
+# v3.0g: a natural mine that ran out of time while still getting closer ("approaching") is retried at once, in place.
+MAX_APPROACH_RETRIES = 1
 # v3.4b: place, clear and goto never explore (the site is where it is); a walk or dig that failed or timed out
 # gets one retry in place. Any other error is the build runner's to handle.
 BUILD_KINDS = frozenset({"place", "clear", "goto"})
@@ -110,7 +112,8 @@ class Episode:
     def act(self, action: Action, annotate: Annotator | None = None) -> Outcome:
         """Run one action with the tolerant policy every system shares, within
         the budget: a target out of view gets up to 3 explores, and an error in
-        RETRIED_ERRORS up to 2 more attempts, each after an explore. An
+        RETRIED_ERRORS up to 2 more attempts, each after an explore (a natural mine's `unreachable` explores toward
+        the target; one answering reach "approaching" is first retried at once, MAX_APPROACH_RETRIES time). An
         `interrupted` step (the guard fought) is retried at once, in place and
         without an explore, up to MAX_INTERRUPTS times, apart from those; after
         fleeing badly hurt it first rests (see `_rest_before_retry`). Every
@@ -118,26 +121,19 @@ class Episode:
         (such as the verifier's verdict) to each attempt's step. A BUILD_KINDS action never explores: an
         `interrupted` one is retried as above, `unreachable` and `timeout` once in place, any other error returns."""
         outcome = self._act_once(action, annotate)
-        explores = retries = interrupts = 0
+        explores = retries = interrupts = approach_retries = 0
         building = action.kind in BUILD_KINDS
         went_up = False
         previous_direction: str | None = None
+        natural_mine = self.natural and action.kind == "mine"
         max_explores = MAX_NATURAL_EXPLORES_PER_TARGET if self.natural else MAX_EXPLORES_PER_TARGET
         while not outcome.ok and self.budget_left >= 2 and not self.out_of_time:
             # A natural world's hazard (lava or water next to the target) means "look elsewhere" too.
             searching = not building and (outcome.error == "not_found" or (self.natural and outcome.error == "hazard"))
+            explore_toward_target = False
             if searching and explores < max_explores:
                 explores += 1
-                if self.natural and action.kind == "mine":
-                    toward = self._explore_toward(action.target, not went_up, previous_direction)
-                    if toward is None:
-                        self._search_exhausted = True  # every direction is dead: fail now, not at the deadline
-                        break
-                    explore = toward
-                    went_up = went_up or explore.direction == "up"
-                    previous_direction = explore.direction
-                else:
-                    explore = Action("explore")
+                explore_toward_target = natural_mine
             elif outcome.error == "interrupted":
                 if interrupts >= MAX_INTERRUPTS:
                     break
@@ -152,11 +148,26 @@ class Episode:
                 retries += 1
                 outcome = self._act_once(action, annotate)
                 continue
+            elif natural_mine and _approaching(outcome) and approach_retries < MAX_APPROACH_RETRIES:
+                approach_retries += 1
+                outcome = self._act_once(action, annotate)
+                continue
             elif outcome.error in RETRIED_ERRORS and retries < MAX_RETRIES:
                 retries += 1
-                explore = Action("explore")
+                # Only an unreachable mine heads for the target; a timeout says nothing about where it is.
+                explore_toward_target = natural_mine and outcome.error == "unreachable"
             else:
                 break
+            if explore_toward_target:
+                toward = self._explore_toward(action.target, not went_up, previous_direction)
+                if toward is None:
+                    self._search_exhausted = True  # every direction is dead: fail now, not at the deadline
+                    break
+                explore = toward
+                went_up = went_up or explore.direction == "up"
+                previous_direction = explore.direction
+            else:
+                explore = Action("explore")
             self._remember_explore(explore, self._act_once(explore, None))
             outcome = self._act_once(action, annotate)
         return outcome
@@ -302,6 +313,11 @@ class Episode:
             reached = "Exploration done." if self.task.goal_item == EXPLORE_GOAL else f"Goal reached: {self.task.goal_count} {self.task.goal_item.replace('#', '')}."
             self.backend.say(reached)
         return result
+
+
+def _approaching(outcome: Outcome) -> bool:
+    """An unreachable answer whose bot was still getting closer when the call's time ran out (v3.0g)."""
+    return outcome.error == "unreachable" and (outcome.detail.get("reach") or {}).get("reason") == "approaching"
 
 
 def _opposite(direction: str | None) -> str | None:
