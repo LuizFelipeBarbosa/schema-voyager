@@ -16,7 +16,7 @@ from typing import Any, Literal
 
 from .models import GoalSource, GoalSpec, GoalStatus
 
-InterruptReason = Literal["cancelled", "preempted", "death"]
+InterruptReason = Literal["cancelled", "preempted", "death", "bot"]
 
 _ALLOWED_TRANSITIONS: dict[str, set[str]] = {
     "submitted": {"queued", "awaiting_approval", "unsupported", "cancelled"},

@@ -72,6 +72,8 @@ class LifeConfig:
     keep_going: bool = False  # explore for new blocks instead of stopping on an empty frontier
     mode: Literal["learn", "play"] = "learn"  # play: only queued goals, idle otherwise (v3.1d)
     idle_poll_s: float = 2.0  # play mode, nothing queued: sleep between idle passes
+    bot_wait_s: float = 120.0  # v3.0h: how long a lost bot is waited for before stop_reason "bot_down"
+    bot_poll_s: float = 2.0  # v3.0h: between connected() checks while waiting
 
 
 @dataclass

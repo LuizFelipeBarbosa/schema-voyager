@@ -41,6 +41,11 @@ class LifeBackend(Backend, Protocol):
 
     def status(self, since: int = 0) -> Status: ...
 
+    def connected(self) -> bool:
+        """v3.0h: True when the bot is connected to the server and takes actions. Never raises: an unreachable
+        bot is False. See docs/v3-interfaces.md, v3.0h."""
+        ...
+
     def look(self, blocks: list[str], radius: int = 64) -> LookResult: ...
 
     def probe(self, grid: list[list[str | None]]) -> dict[str, Any]:

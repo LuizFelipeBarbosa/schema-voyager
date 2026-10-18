@@ -162,6 +162,17 @@ call), cut-off blocks remembered as unreachable, deep ore reached only by stairc
 explore blind and never go up. Contract v3.0g. Done when: in two lives no goal has more than 2 `unreachable` ore
 mines in a row, iron goals succeed in at least one, and `node mc/bot/test/v2_iron.js` passes.
 
+### S0.9 Polish (S, added by the orchestrator after S06, S07 and S10; session S14)
+
+Make what's built robust enough to leave running. Musts: a lost bot (a restart, a reset connection, a long `409`)
+interrupts the goal and requeues it instead of ending the life, and the life waits up to 120 s for the bot; the panel
+sends goals to the life that is running (`runs/<life>/live.json`), not to the newest `goals.jsonl`. Then the review
+backlog: no frontier in play mode, "Cancelled" after a late cancel, `!status` reports the queue, `INTERRUPTED` in the
+terminal trace, build `Movements` follow `sprintAllowed`, quiet auto-eat, a flat arena for the guard live test,
+scaffold cleared beside a finished house, door planks of one species; and the README. Contract v3.0h. Done when:
+a play-mode life survives its bot being stopped and restarted mid-goal (the goal `interrupted` with `bot`, requeued,
+then `done`), and a built house leaves no scaffold outside its box (`runs/v3-polish-live`).
+
 ---
 
 ## M1: goals you give it

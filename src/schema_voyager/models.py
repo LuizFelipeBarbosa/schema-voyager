@@ -28,6 +28,8 @@ class Action:
     direction: str | None = None  # explore only: N, NE, E, SE, S, SW, W, NW; None is the v1 spiral
     # v3.4: place, clear and goto only, the cell in world coordinates. place's target is a raw block id.
     pos: tuple[int, int, int] | None = None
+    # v3.0h: place and clear only. False sends "scaffold": [], so the walk places nothing; None sends the usual blocks.
+    scaffold: bool | None = None
 
     def __post_init__(self) -> None:
         if self.pos is not None:  # an action read back from JSON has a list, and Action must stay hashable
@@ -62,7 +64,7 @@ class Action:
         return payload
 
 
-_V2_ACTION_FIELDS = ("fuel", "ingredient", "direction", "pos")
+_V2_ACTION_FIELDS = ("fuel", "ingredient", "direction", "pos", "scaffold")
 
 
 def _cell(pos: tuple[int, int, int] | None) -> str:

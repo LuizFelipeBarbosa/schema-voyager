@@ -355,6 +355,105 @@ test overrides revise to return `[]`.
   is `unreachable`, any reason; explores and other steps between them don't break the run, any other mine outcome
   does. Reported with the reasons from `reach`.
 
+### v3.0h Polish: a lost bot, which life the panel talks to, scaffold, door planks (S14)
+
+Plan S0.9. Lanes: `backend-health`, `life-robust`, `panel-live`, `door-species`, then `life-polish`,
+`trace-interrupted`, `bot-polish`, `build-scaffold`. Reviewed by S14's advisor before the lanes started.
+
+**Losing the bot** (`backend-health`, `life-robust`)
+
+- `LifeBackend.connected() -> bool` (stub on `main`): the bot is connected to the server and takes actions. It never
+  raises. `MineflayerBackend`: `GET /health` with a 5 s timeout, `body["connected"] is True`; any error is `False`.
+  `NaturalWorld`: `True`. (Not `health()`: `NaturalWorld.health` is the bot's health points.)
+- `MineflayerBackend._post` raises `BackendError` for every request that gets no answer, not only `URLError` and
+  `TimeoutError`: also any `OSError` (`ConnectionResetError`, ...), `http.client.HTTPException`
+  (`RemoteDisconnected`: the bot died mid-request) and a body that isn't JSON. It also raises it for a 200 answer
+  `{"ok": false, "error": "not_connected"}`: a disconnected bot (a reconnect, or the seconds after a restart before
+  the spawn) is a lost bot, not a failed step. The 409 `busy` retry is unchanged (`BackendError` after 60 s).
+- `goals.InterruptReason` gains `"bot"`; `LifeConfig.bot_wait_s = 120.0` and `bot_poll_s = 2.0` (stubs on `main`).
+- In the life, a `BackendError` anywhere in a pass of `_Life.run` means the bot is down: the poll on the idle path,
+  priors and repairs, starting a goal (`begin_episode`, the junk toss, `prepare_build`), the goal and its ending.
+  `_wait_for_bot`:
+  - logs `bot_down {"goal_id" | null, "error"}` (the message, at most 200 characters) in `life_events.jsonl` and
+    prints one line;
+  - calls `backend.connected()` every `bot_poll_s` for up to `bot_wait_s`;
+  - when it's back, logs `bot_back {"goal_id" | null, "down_s"}`. The next event poll sees `last_seq` below
+    `bot_seq` after a restart and polls from 0, as today (v3.1d).
+- The before_step hook still only logs a poll error: the step's own action raises if the bot is gone.
+- Mid-goal, `_run_until_interrupted` catches `BackendError` next to `GoalInterrupted`. It waits first, then ends the
+  goal through `_end_goal` (the one ending, v3.1d):
+  - episode log `goal_interrupted {"goal_id", "reason": "bot"}`, `episode.finish(success=False)`,
+    `store.certify()` and `certified`; life record `outcome: "interrupted"`, `interrupt: "bot"`;
+  - queue: a user, system or build goal goes back to `queued` and keeps its `target_count` (like `preempted`); a
+    curriculum goal isn't recorded in the curriculum. If the queue says `cancelled` by then, it ends `cancelled`;
+  - a goal lost 3 times in one session of the life (counted in memory) ends `failed` "lost the bot 3 times";
+  - no chat line for the loss itself.
+- A goal that was marked `running` but lost the bot outside `_run_until_interrupted` (`begin_episode`, the toss,
+  `prepare_build`) is caught by the pass: after the wait, `queue.requeue_running()`, so no goal is left `running`.
+- `Episode.finish` works without the bot: if its `observe()` raises `BackendError`, the final inventory is the
+  episode's last known one. `_Life._say` is best-effort (catches `BackendError`).
+- Not back within `bot_wait_s`: the goal, if any, still ends `interrupted` with `bot` and is requeued, and `run()`
+  returns `stop_reason="bot_down"`. Nothing on the way out needs the bot.
+- Bot-side state the life sets once at its start, if any, is sent again after `bot_back` (`protect` and `keep_out`
+  already go with every request).
+
+**Which life the panel talks to** (`life-robust` writes, `panel-live` reads)
+
+- `run_life` writes `<run_dir>/live.json` `{"pid": <os.getpid()>, "started": "<ISO 8601 local time>", "mode":
+  "learn" | "play"}` before the first pass and removes it in a `finally`, on an exception too. A killed process
+  leaves the file behind; the panel checks the pid.
+- The panel, for a request without `run` (`POST /goals`, `/goals/<id>/cancel|approve|discard`, `GET /goals.json`):
+  the live runs are the run dirs whose `live.json` names a pid that is alive (`os.kill(pid, 0)`, `PermissionError`
+  counts as alive; an unreadable `live.json` counts as not live).
+  - One live run: that run.
+  - Several: `409 {"ok": false, "error": "ambiguous_run", "runs": [<names, newest "started" first>]}`, on
+    `GET /goals.json` too.
+  - None: v3.1f's rule (the newest `goals.jsonl`), so a goal can still be queued for a life about to resume.
+  - An explicit `run` is unchanged.
+- `site/dist/goals.js` shows the run it talks to ("Run: life-20261018-0912", or "No live run"). A `?run=<name>` in the
+  page's URL goes on every GET and POST and wins over the run of the last GET. On `ambiguous_run` it shows "Several
+  lives are running: a, b. Open the panel with ?run=<name>." and keeps the form.
+
+**Small fixes** (`life-polish`, `trace-interrupted`, `bot-polish`)
+
+- Play mode: `_needed_items` leaves the curriculum frontier out, as `_unasked_families` does.
+- A goal whose `mark(id, "done")` is refused because it is `cancelled` says "Cancelled: <label>" (once: not if the
+  chat already said it), not "Done: <label>".
+- `!status` with no goal running and goals queued: "Next: u004: 10 torches. Queued: 2." (`Queued` counts `queued`
+  goals; the "Waiting for approval" part is unchanged). "Idle." only when nothing is queued.
+- The terminal trace: the `episode_end` line of an episode that logged `goal_interrupted` reads
+  `INTERRUPTED (<reason>) actions=N ...` where it read `FAIL actions=N ...`.
+- Bot: `lib/place.js`'s build `Movements` set `allowSprinting = sprintAllowed(bot)`; the `autoeat_error` listener
+  doesn't log "No food found."; `test/v3_guard_live.js` builds its arena at fixed coordinates and teleports the bot
+  onto its floor over RCON before the checks.
+
+**Scaffold left beside a build** (`build-scaffold`)
+
+- Bot: every `travel` gains `placed_cells: [[x, y, z, "dirt"], ...]`, each block the recorded walk placed, in order,
+  from mineflayer's `blockPlaced` (position and the new block's name); `placed` counts are unchanged and
+  `emptyTravel()` has `[]` (`contracts/bot_api.md` v3.0h). Readers use `.get("placed_cells", [])`, as older bots and
+  the simulator omit it. `_merge_travel` concatenates the lists.
+- `Action.scaffold` (stub on `main`): `False` on `place` or `clear` sends `"scaffold": []`, so the walk can't
+  place anything; `None` sends the usual scaffold blocks.
+- `Episode.placed_cells`: every attempt's `travel["placed_cells"]` appended in order, retries included (a failed
+  tower attempt is the usual case).
+- `build_runner`: the cells recorded from the start of the build phase (after gathering) to the final scan. After
+  the final scan matches, each distinct recorded cell outside the site box and every protected box, highest first:
+  a 1-cell `scan`; if it still holds the recorded block, `Action("clear", pos=cell, scaffold=False)`. A failed scan
+  or clear leaves that cell. `build_done` gains `scaffold_cleared` and `scaffold_left`. The cleanup never changes
+  the build's result.
+- Gaps: an earlier attempt's pillars (a build requeued or resumed) aren't known to a later attempt (memory only),
+  and scaffold placed while gathering (trees, ore) is not cleared.
+
+**Door planks of one species** (`door-species`)
+
+- `build_runner.gather_materials`, between the pursuit of the other needs and the door's: when `#door` is needed and
+  no plank species is held 6 times (`DOOR_PLANKS`), pick the species S with the most `planks_S + 4 * logs_S` (ties
+  by name). If that reaches 6, craft `S_planks` directly, `times = ceil((6 - planks_S) / 4)` (an `Episode.act`
+  step, not evidence for a rule, D1). Otherwise pursue 2 more `#log` and check again, at most 2 rounds; then the
+  door is pursued as before and fails with its own reason if it still can't be made.
+- Not covered: an `obtain` goal for a door (outside a build).
+
 ## v3.1 Goals
 
 Written by S05 for S06 (M1: plan steps S1.2–S1.7 and play mode). The bot side is in `contracts/bot_api.md`, v3.1.

@@ -539,6 +539,20 @@ Why: in eight lives about 75% of `unreachable` ore mines were walks cut off whil
   straight below the bot" in "POST /mine (v2 options)"; `GoalBesideBlock` still never ends on top of the target.
   `/explore` with `dig_through` uses the same movements.
 
+## v3.0h: `travel.placed_cells` (S14, lane `build-scaffold`)
+
+- Every `travel` object (in `/mine`, `/explore`, `/place`, `/clear`, `/goto`, `/toss`, and the empty one on
+  `/craft` and `/smelt`) gains `placed_cells`: each block the recorded walk placed, in order, as
+  `[x, y, z, "<block name>"]`, from mineflayer's `blockPlaced` event. `placed` (counts by name) is unchanged.
+  ```json
+  "travel": {"distance": 6.0, "dug": {}, "placed": {"dirt": 2}, "picked_up": {},
+             "placed_cells": [[11, 67, 6, "dirt"], [11, 68, 6, "dirt"]]}
+  ```
+- `/place` and `/clear` with `"scaffold": []` place nothing on their walk (no towers, no bridges). Python sends it for
+  `Action(..., scaffold=False)` (`docs/v3-interfaces.md`, v3.0h).
+- Python also treats a `200 {"ok": false, "error": "not_connected"}` answer as a lost bot (`BackendError`), and reads
+  `GET /health`'s `connected` for `connected()`.
+
 ## v3.1: chat commands (S06, lane `chat-bot`)
 
 - **`BOT_OWNERS`** (env): comma-separated Minecraft usernames, trimmed and compared case-insensitively. Unset or

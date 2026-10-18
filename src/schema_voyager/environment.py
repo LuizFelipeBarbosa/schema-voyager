@@ -414,6 +414,9 @@ class NaturalWorld:
             last_seq=self._seq,
         )
 
+    def connected(self) -> bool:
+        return True
+
     def look(self, blocks: list[str], radius: int = 64) -> LookResult:
         x, _, z = self._cell
         result: LookResult = {direction: {} for direction in DIRECTIONS}
