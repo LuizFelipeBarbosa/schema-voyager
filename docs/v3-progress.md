@@ -36,7 +36,7 @@ pushed to `origin` until the user says so.
 | Session | Status | Instance | Owner notes |
 |---|---|---|---|
 | S01 setup and baseline | done | b | Baseline 342/103/panel; explorefast merged (bot 108); live tests via pre-approved forms; not pushed |
-| S02 fix the stuck loops | in progress | b | v3.0a/b/d contract 7524cfc; tag `v2-final` (local) at 661422f |
+| S02 fix the stuck loops | done | b | v3.0a/b/d/e; 7 lanes merged (pytest 455, bot 126); `runs/v3-baseline` 3 of 4 checks, (a) fails only on exempt `unreachable`; not pushed |
 | S03 retest demoted rules | not started | none | |
 | S04 full inventory | done | a | `/toss`, `free_slots`, `inventory.py`, 36-slot sim, junk tossed before a goal; live `runs/s04-junk`; pytest 445, bot 120; not pushed |
 | S05 contracts for M1 and M2 | done | none | Contracts v3.1/v3.2 and stubs merged 1b80640; plugin pins in v3.2g; prompt changes for S06/S07 in v3.2h |
@@ -160,3 +160,42 @@ pushed to `origin` until the user says so.
   - The held-tool check is unit-tested only: the API can't select a hotbar slot.
   - Seen by the `toss-sim` lane, not fixed: in the simulator, `_candidates` raises `KeyError` when mining `grass_block`
     or `dirt` in a column without that span (seeds 0-7).
+
+## S02 fix the stuck loops (done 2026-10-18)
+
+- Contract: 7524cfc v3.0a (blocked rules), v3.0b (repairs, kept items), v3.0d (explore `took`); b7ca710 v3.0e (`tools_broken`).
+  Local tag `v2-final` at 661422f (not pushed); `test_the_v1_llm_constants_are_unchanged` reads it.
+- Merges: 74732e8 `keep-items`, 7e1b7b2 `repair-dedupe`, ae754d2 `retry-block`, 7c28fa9 `blocked-memory`, 31218b2 `explore-took`,
+  1cd61f1 `wear-verify`, e34d65d `wear-bot`. Existing tests changed: two `test_v2_repair.py` assertions (`skipped`, and the repair id
+  now in `repaired`) and the `test_v2_nav.py` stub signature (`excluded`). Suite: pytest 342 → 455 (S04/S05 merges included), bot 108 → 126, panel pass.
+- `tools_broken` came out of the first baseline life (`runs/v3-baseline-1`). The bot broke its last pickaxe while digging the furnace back up,
+  and `smelt_iron_ingot` was falsely demoted. Advisor: fix it in S02, by measuring the break (not inferring it) and adding it back in the verifier.
+- Live, seed 2024, 30 min (`runs/v3-baseline-1` at 7ebbd68, `runs/v3-baseline` at 8f9fc0b; m4-2024 for comparison):
+
+  | check | v3-baseline | v3-baseline-1 | m4-2024 |
+  |---|---|---|---|
+  | (a) max identical failed steps per goal, literal | 12 (exempt `unreachable`) | 5 (exempt) | 30 |
+  | (a) the same, errors that block (not `not_found`/`unreachable`/`hazard`/`timeout`/`not_connected`) | 0 | 0 | 30 |
+  | (b) contradictions outside fired changes; `change_report` | 0; 3/3 pass | 1 (worn pickaxe); 3/3 pass | 2 (no changes file) |
+  | (c) crafting tables crafted | 1 | 1 | 2 |
+  | (d) `.fix1.fix1` chains | 0 | 0 | 0 (27 repairs) |
+  | goals ok / total, spend | 32/33, $0.19 | 54/55, $0.25 | 28/35, $0.35 |
+
+- **(a) fails as written.** It is met for every error that blocks: no craft or smelt failed at all in either run. The 12 are g020
+  (stick): the bot stood at y=50 under the surface (logs at y=66-76). Each of 12 `mine #log` walks went about 16 blocks and ended where
+  it started, with the inventory unchanged. 8 blind explores in between failed in 0.1 s and moved 0, and Python never asked for
+  `explore up`. That cost about 4 min, which is part of why this run did 33 goals where run 1 did 55. Not caused by S02's changes
+  (travel, `/mine` and `agent.py` are untouched by the wear lanes). **For the orchestrator:** reword S0.7's done-when to "for errors
+  that block", or accept the gap explicitly.
+- Open, for a navigation lane (the `/mine` reach item): underground with no sky, ask for `explore up` before blind explores; blind
+  explores that can't move should fail fast or stop; no cap on `unreachable` retries other than the goal budget. `mine` steps ending
+  `unreachable`: 25 (9 after walking 30 or more blocks) in v3-baseline, 13 (5) in v3-baseline-1, 19 (17) in s01-explorefast.
+- Open, pickup timing: in v3-baseline g017 the furnace dig worked (no warning), but the drop wasn't collected (`furnace_retrieved: false`).
+  g018 crafted a second furnace, and a g019 dig-through walk picked the old one up.
+- Explore recheck (S01 method): v3-baseline-1 had 77 directional explores, all moved on the first try (`took` = the request), 0 zero-move
+  over 25 s, 77/77 moved 2 or more blocks, at most 1 ask for the same direction per goal, none over 35 s. v3-baseline had only 1 directional
+  explore. The precondition (3 or more directional explores that don't move on the first try) is still unmet, so the hop, the neighbour
+  directions and the hole exit haven't run live.
+- Untested live: `rule_blocked` (no goal hit the craft loop, so units only); a `tools_broken` that isn't empty (the bot sends `[]`); the
+  explorefast fallbacks.
+- Instance b is down, with no lock. No `sv2-wt/*` worktrees and no `v3/*` branches are left. Not pushed.
