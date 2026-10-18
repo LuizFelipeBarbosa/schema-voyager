@@ -1,49 +1,47 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
-const { ringBoxes, outsideRect, edibleHeld, pickHungerGoal, killBeforeSmelt, findFoodKillRule } = require('../v3_polish2_live')
+const { enclosureBoxes, outsideRect, edibleHeld, pickHungerGoal, killBeforeSmelt, findFoodKillRule } = require('../v3_polish2_live')
 
-// The x/z cells a list of boxes covers, as "x,z" keys.
+// Every cell a list of boxes covers, as "x,y,z" keys (duplicates kept).
 function cellsOf (boxes) {
   const cells = []
-  for (const { min, max } of boxes) for (let x = min[0]; x <= max[0]; x++) for (let z = min[2]; z <= max[2]; z++) cells.push(`${x},${z}`)
+  for (const { min, max } of boxes) {
+    for (let x = min[0]; x <= max[0]; x++) for (let y = min[1]; y <= max[1]; y++) for (let z = min[2]; z <= max[2]; z++) cells.push(`${x},${y},${z}`)
+  }
   return cells
 }
 
+const CHEST = [10, 64, 14]
 const FAR_HOUSE = { origin: [100, 60, 100], size: [5, 4, 5] }
+const NEAR_HOUSE = { origin: [8, 60, 10], size: [4, 4, 4] } // x 8..11, z 10..13: overlaps the enclosure beside the chest
 
-test('ringBoxes: with no house in the way, a ring of 32 cells at Chebyshev distance 4, 4 high', () => {
-  const boxes = ringBoxes([10, 64, 20], FAR_HOUSE)
-  const cells = cellsOf(boxes)
-  assert.equal(cells.length, 32)
-  assert.equal(new Set(cells).size, 32, 'no cell twice')
-  for (const key of cells) {
-    const [x, z] = key.split(',').map(Number)
-    assert.equal(Math.max(Math.abs(x - 10), Math.abs(z - 20)), 4)
+// The cells the enclosure must cover: the box chest +-4 from y-1 to y+3, without the chest and the footprint.
+function expectedCells (chest, { origin, size }) {
+  const expected = []
+  for (let x = chest[0] - 4; x <= chest[0] + 4; x++) {
+    for (let z = chest[2] - 4; z <= chest[2] + 4; z++) {
+      for (let y = chest[1] - 1; y <= chest[1] + 3; y++) {
+        const inHouse = x >= origin[0] && x < origin[0] + size[0] && z >= origin[2] && z < origin[2] + size[2]
+        if (!inHouse && !(x === chest[0] && y === chest[1] && z === chest[2])) expected.push(`${x},${y},${z}`)
+      }
+    }
   }
-  for (const { min, max } of boxes) {
-    assert.equal(min[1], 63)
-    assert.equal(max[1], 66)
-  }
-})
+  return expected
+}
 
-test('ringBoxes: nothing goes inside the footprint, everything else of the ring stays', () => {
-  const house = { origin: [8, 60, 10], size: [4, 4, 5] } // x 8..11, z 10..14
-  const full = new Set(cellsOf(ringBoxes([10, 64, 14], FAR_HOUSE)))
-  const clipped = cellsOf(ringBoxes([10, 64, 14], house))
-  const inside = (key) => {
-    const [x, z] = key.split(',').map(Number)
-    return x >= 8 && x <= 11 && z >= 10 && z <= 14
-  }
-  assert.ok(clipped.every((key) => !inside(key)))
-  assert.equal(new Set(clipped).size, clipped.length, 'no cell twice')
-  assert.deepEqual([...full].filter((key) => !inside(key)).sort(), [...clipped].sort())
-  assert.ok(clipped.length < full.size)
-})
+for (const [name, house] of [['no house near', FAR_HOUSE], ['a house beside the chest', NEAR_HOUSE]]) {
+  test(`enclosureBoxes (${name}): disjoint, without the chest or footprint, covering every other cell`, () => {
+    const cells = cellsOf(enclosureBoxes(CHEST, house))
+    assert.equal(new Set(cells).size, cells.length, 'no cell twice')
+    assert.ok(!cells.includes(CHEST.join(',')), 'the chest cell is not filled')
+    assert.deepEqual([...cells].sort(), expectedCells(CHEST, house).sort())
+  })
+}
 
-test('ringBoxes: a footprint covering a whole side leaves the other sides', () => {
-  const boxes = ringBoxes([0, 64, 0], { origin: [-10, 60, -10], size: [21, 4, 5] }) // z -10..-6 swallows the north side
-  assert.ok(cellsOf(boxes).every((key) => Number(key.split(',')[1]) > -6))
-  assert.ok(cellsOf(boxes).length > 0)
+test('enclosureBoxes: a footprint swallowing the chest column leaves the rest', () => {
+  const house = { origin: [5, 60, 9], size: [10, 4, 10] } // covers x 5..14, z 9..18, chest column included
+  const cells = cellsOf(enclosureBoxes(CHEST, house))
+  assert.deepEqual([...cells].sort(), expectedCells(CHEST, house).sort())
 })
 
 test('outsideRect: a cut across the middle of a segment leaves its two ends', () => {

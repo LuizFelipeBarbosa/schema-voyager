@@ -25,14 +25,14 @@
 // output is that meat.
 // unreachable = "!goal get me 4 sticks" places the chest in the yard
 // (`home_placed`); the bot is moved 8 blocks south and the chest walled in with
-// a glass ring (Chebyshev distance 4, never inside the home's footprint); with
+// a glass enclosure (the chest's cell +-4, solid from 1 below to 3 above, never inside the home's footprint); with
 // 2 free slots a second goal makes room, the walk to the chest stalls and
 // ends in exactly one `home_unreachable` (station chest, action moved), the
 // cell in `bad_slots`, `moved` has chest, `stations` none; a third goal then
 // attempts no deposit (no `stored`, no `home_unreachable`, the chest unchanged)
 // and is faster to its first plan step than the second.
 //
-// At the end (always) it removes the glass ring, kills the cows it summoned,
+// At the end (always) it removes the glass enclosure, kills the cows it summoned,
 // clears the effects it gave, removes the forceload and disconnects Tester.
 //
 // Usage: node mc/bot/test/v3_polish2_live.js [--checks hunger,unreachable] [--run v3-polish2-live]
@@ -77,12 +77,12 @@ const EDIBLE = [
   'pufferfish', 'rotten_flesh', 'spider_eye', 'suspicious_stew', 'sweet_berries', 'glow_berries', 'cake'
 ]
 
-// The ring of glass around the chest (every block in it replaced): Chebyshev distance 4, from one block below the chest's cell to two above it,
-// so the bot can neither step nor jump over it.
-const RING_RADIUS = 4
-const RING_BELOW = 1
-const RING_ABOVE = 2
-const BOT_SOUTH_OF_CHEST = 8
+// The glass enclosure around the chest (every block in it replaced): the chest's cell +-4 in x and z, from one block below
+// the chest's cell to three above it, so the bot can neither step, jump nor fall into it from trees or higher terrain.
+const ENCLOSURE_RADIUS = 4
+const ENCLOSURE_BELOW = 1
+const ENCLOSURE_ABOVE = 3
+const BOT_BEYOND_ENCLOSURE = 3 // blocks past the enclosure's south edge where the bot and Tester wait
 
 // Items no rule names, by stack size; the check gives at most MAX_JUNK_STACKS of them.
 const MAX_JUNK_STACKS = 18
@@ -98,21 +98,24 @@ const short = (value) => JSON.stringify(value)
 
 // --- Pure helpers (unit-tested in unit/polish2_live.test.js) ---
 
-// The boxes ({min: [x, y, z], max: [x, y, z]}, inclusive) of the glass ring around `chest` ([x, y, z]), with the
-// part inside the home's footprint (`origin`, `size`: x/z cells origin..origin+size-1) cut out.
-function ringBoxes (chest, { origin, size }) {
+// The boxes ({min: [x, y, z], max: [x, y, z]}, inclusive) of the glass enclosure around `chest` ([x, y, z]): every cell
+// of the chest +-4 in x and z, from chest.y - 1 to chest.y + 3, except the chest's own cell and the home's footprint
+// (`origin`, `size`: x/z cells origin..origin+size-1, all y). The boxes are disjoint.
+function enclosureBoxes (chest, { origin, size }) {
   const [cx, cy, cz] = chest
-  const yMin = cy - RING_BELOW
-  const yMax = cy + RING_ABOVE
-  const r = RING_RADIUS
-  const sides = [
-    { x1: cx - r, x2: cx + r, z1: cz - r, z2: cz - r }, // north
-    { x1: cx - r, x2: cx + r, z1: cz + r, z2: cz + r }, // south
-    { x1: cx - r, x2: cx - r, z1: cz - r + 1, z2: cz + r - 1 }, // west, without the corners
-    { x1: cx + r, x2: cx + r, z1: cz - r + 1, z2: cz + r - 1 } // east
-  ]
+  const r = ENCLOSURE_RADIUS
+  const yMin = cy - ENCLOSURE_BELOW
+  const yMax = cy + ENCLOSURE_ABOVE
   const house = { x1: origin[0], x2: origin[0] + size[0] - 1, z1: origin[2], z2: origin[2] + size[2] - 1 }
-  return sides.flatMap((side) => outsideRect(side, house)).map((rect) => ({ min: [rect.x1, yMin, rect.z1], max: [rect.x2, yMax, rect.z2] }))
+  const column = { x1: cx, x2: cx, z1: cz, z2: cz }
+  const inHouse = cx >= house.x1 && cx <= house.x2 && cz >= house.z1 && cz <= house.z2
+  const full = { x1: cx - r, x2: cx + r, z1: cz - r, z2: cz + r }
+  const walls = outsideRect(full, house).flatMap((rect) => outsideRect(rect, column))
+  const boxes = walls.map((rect) => ({ min: [rect.x1, yMin, rect.z1], max: [rect.x2, yMax, rect.z2] }))
+  if (!inHouse) { // the chest's column: glass under the chest and above it, not the chest
+    boxes.push({ min: [cx, yMin, cz], max: [cx, cy - 1, cz] }, { min: [cx, cy + 1, cz], max: [cx, yMax, cz] })
+  }
+  return boxes
 }
 
 // The parts of rectangle `rect` ({x1, x2, z1, z2}, inclusive) that lie outside rectangle `cut`: up to four rectangles.
@@ -419,7 +422,7 @@ async function main () {
   }
 
   let forceloaded = null // [x, z] of the chunk kept loaded around the bot
-  let placedRing = []
+  let placedBoxes = []
 
   // Teleports the bot to the ground at x, z and Tester next to it; returns the bot's position.
   async function standAt (x, z) {
@@ -486,12 +489,13 @@ async function main () {
     const chestCell = placed.pos
     console.log(`  ${first.goal.id} done; chest placed at ${short(chestCell)}`)
 
-    // 2. Further south, behind a glass ring around the chest.
-    await standAt(yard[0], Math.max(yard[1], chestCell[2]) + BOT_SOUTH_OF_CHEST)
-    placedRing = ringBoxes(chestCell, footprint)
+    // 2. Bot and Tester wait outside, south of a solid glass enclosure around the chest.
+    await standAt(yard[0], chestCell[2] + ENCLOSURE_RADIUS + BOT_BEYOND_ENCLOSURE)
+    console.log(`  bot at ${short((await observeBot()).position)}, Tester at ${short(tester.entity.position)}`)
+    placedBoxes = enclosureBoxes(chestCell, footprint)
     // every block, not only air: short grass and flowers in the yard are walkable and would leave gaps
-    for (const { min, max } of placedRing) console.log(`  fill ${min.join(' ')} ${max.join(' ')}: ${await rcon.exec(`fill ${min.join(' ')} ${max.join(' ')} minecraft:glass`)}`)
-    console.log(`  glass ring around ${short(chestCell)}: ${placedRing.length} boxes, outside the footprint ${short(footprint)}`)
+    for (const { min, max } of placedBoxes) console.log(`  fill ${min.join(' ')} ${max.join(' ')}: ${await rcon.exec(`fill ${min.join(' ')} ${max.join(' ')} minecraft:glass`)}`)
+    console.log(`  glass enclosure around ${short(chestCell)}: ${placedBoxes.length} boxes, outside the footprint ${short(footprint)}`)
     const chestBefore = await readChest(chestCell)
 
     // 3. The second goal stalls once and moves the chest.
@@ -534,7 +538,7 @@ async function main () {
     console.log(`FAIL setup: ${err.message}`)
   } finally {
     if (tester) await say('!stop').catch(() => {}) // the goals left open
-    for (const { min, max } of placedRing) await rcon.exec(`fill ${min.join(' ')} ${max.join(' ')} minecraft:air replace minecraft:glass`).catch(() => {})
+    for (const { min, max } of placedBoxes) console.log(`  clean up fill ${min.join(' ')} ${max.join(' ')}: ${await rcon.exec(`fill ${min.join(' ')} ${max.join(' ')} minecraft:air replace minecraft:glass`).catch((err) => err.message)}`)
     await rcon.exec(`kill @e[type=cow,tag=${COW_TAG}]`).catch(() => {})
     if (forceloaded) await rcon.exec(`forceload remove ${forceloaded[0]} ${forceloaded[1]}`).catch(() => {})
     await rcon.exec(`effect clear ${voyagerName} minecraft:hunger`).catch(() => {})
@@ -547,7 +551,7 @@ async function main () {
   process.exit(failures === 0 ? 0 : 1)
 }
 
-module.exports = { ringBoxes, outsideRect, edibleHeld, pickHungerGoal, killBeforeSmelt, findFoodKillRule, COOKED_MEATS }
+module.exports = { enclosureBoxes, outsideRect, edibleHeld, pickHungerGoal, killBeforeSmelt, findFoodKillRule, COOKED_MEATS }
 
 if (require.main === module) {
   main().catch((err) => {
