@@ -4,9 +4,11 @@
 #   v2-change.sh enable r2|stick2   switch a rule change on
 #   v2-change.sh disable r2|stick2  switch it off
 #   v2-change.sh status             which v2 packs are enabled / available
+# install, enable and disable take the instance lock; status does not.
 set -euo pipefail
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/v2-env.sh"
 sv2_check_settings
+case "${1:-}" in install|enable|disable) sv2_lock_acquire "change-$1" ;; esac
 
 pack_for() {
   case "$1" in

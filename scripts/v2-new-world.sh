@@ -7,6 +7,7 @@
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/v2-env.sh"
 sv2_check_settings
+sv2_lock_acquire new-world
 
 seed="${1:?usage: v2-new-world.sh <seed>}"
 [[ "$seed" =~ ^-?[0-9]+$ ]] || die "seed must be an integer, got '$seed'"

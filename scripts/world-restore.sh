@@ -4,6 +4,7 @@
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/v2-env.sh"
 sv2_check_settings
+sv2_lock_acquire world-restore
 name="${1:?usage: world-restore.sh <name>}"
 
 snapshot="$SERVER_DIR/snapshots/$name"

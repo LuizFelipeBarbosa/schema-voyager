@@ -242,6 +242,20 @@ def check_instance_ports(env: Mapping[str, str] = os.environ) -> tuple[int, int]
 
 
 def run_life_command(args: argparse.Namespace) -> None:
+    """Runs one life; a mc life owns its instance's lock (instance_lock) for the whole life."""
+    if args.backend != "mc":
+        _run_life(args)
+        return
+    from .instance_lock import LockHeld, hold
+
+    try:
+        with hold(os.environ.get("SV2_INSTANCE") or "a", "life"):
+            _run_life(args)
+    except LockHeld as error:
+        sys.exit(str(error))
+
+
+def _run_life(args: argparse.Namespace) -> None:
     change = args.change or os.environ.get("SV2_M3_CHANGE") or None
     if change is not None and change not in CHANGE_STEPS:
         sys.exit(f"unknown change {change!r}; use one of {', '.join(CHANGE_STEPS)}.")

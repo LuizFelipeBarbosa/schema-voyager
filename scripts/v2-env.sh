@@ -58,6 +58,48 @@ sv2_check_settings() {
   mkdir -p "$RUN_DIR" "$LOG_DIR" "$SERVER_DIR"
 }
 
+# The instance lock (docs/v2-interfaces.md, "v2.3: the instance lock"): one JSON line
+# {pid, session, purpose, started} in run/lock-<instance>.
+SV2_LOCK_FILE="$RUN_DIR/lock-$SV2_INSTANCE"
+
+# Prints one field of the lock file ("" when there is no lock or no such field).
+_lock_field() {
+  local line; line=$(head -n 1 "$SV2_LOCK_FILE" 2>/dev/null) || return 0
+  case "$1" in
+    pid) echo "$line" | sed -n 's/.*"pid": *\([0-9][0-9]*\).*/\1/p' ;;
+    *)   echo "$line" | sed -n "s/.*\"$1\": *\"\([^\"]*\)\".*/\1/p" ;;
+  esac
+}
+
+# Usage: sv2_lock_acquire <purpose>. Takes the lock or dies naming the holder. A holder with
+# a dead pid is stale and taken over; one with our SV2_LOCK_SESSION is a hand-over, and this
+# script then passes through (it neither writes nor removes the lock).
+sv2_lock_acquire() {
+  local purpose="${1:?usage: sv2_lock_acquire <purpose>}" holder_pid holder_session
+  holder_pid=$(_lock_field pid); holder_session=$(_lock_field session)
+  if [ -n "$holder_pid" ] && [ "$holder_pid" != "$$" ] && pid_alive "$holder_pid"; then
+    if [ -n "${SV2_LOCK_SESSION:-}" ] && [ "$holder_session" = "$SV2_LOCK_SESSION" ]; then
+      return 0
+    fi
+    die "instance '$SV2_INSTANCE' is locked by pid $holder_pid (session $holder_session, purpose $(_lock_field purpose), since $(_lock_field started)); $SV2_LOCK_FILE"
+  fi
+  [ -n "$holder_pid" ] && [ "$holder_pid" != "$$" ] && echo "warning: taking over the stale lock of dead pid $holder_pid" >&2
+  export SV2_LOCK_SESSION="${SV2_LOCK_SESSION:-$$-$purpose}"
+  mkdir -p "$RUN_DIR"
+  printf '{"pid": %s, "session": "%s", "purpose": "%s", "started": "%s"}\n' \
+    "$$" "$SV2_LOCK_SESSION" "$purpose" "$(date +%Y-%m-%dT%H:%M:%S)" > "$SV2_LOCK_FILE.$$.tmp"
+  mv "$SV2_LOCK_FILE.$$.tmp" "$SV2_LOCK_FILE"
+  trap sv2_lock_release EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+}
+
+# Removes the lock only if this shell's session holds it and its pid is this shell's.
+sv2_lock_release() {
+  [ "$(_lock_field pid)" = "$$" ] && [ "$(_lock_field session)" = "${SV2_LOCK_SESSION:-}" ] || return 0
+  rm -f "$SV2_LOCK_FILE"
+}
+
 listener_pids() { lsof -nP -iTCP:"$1" -sTCP:LISTEN -t 2>/dev/null | sort -u || true; }
 
 pid_alive() { [ -n "${1:-}" ] && kill -0 "$1" 2>/dev/null; }
