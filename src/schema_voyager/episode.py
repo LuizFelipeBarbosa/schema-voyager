@@ -213,8 +213,9 @@ class Episode:
         )
         return outcome
 
-    def finish(self, success: bool | None = None) -> EpisodeResult:
-        """`success` overrides the goal check, for a goal that isn't an item to hold."""
+    def finish(self, success: bool | None = None, announce: bool = True) -> EpisodeResult:
+        """`success` overrides the goal check, for a goal that isn't an item to hold. `announce=False` skips the
+        "Goal reached" chat line (a user goal's life says "Done: ..." instead, v3.1h)."""
         final = self.backend.observe()
         self.inventory = final.inventory
         events = self.log.events
@@ -237,7 +238,7 @@ class Episode:
             used_skills=self.used_skills,
         )
         self.log.event("episode_end", **result.to_dict())
-        if result.success:
+        if result.success and announce:
             reached = "Exploration done." if self.task.goal_item == EXPLORE_GOAL else f"Goal reached: {self.task.goal_count} {self.task.goal_item.replace('#', '')}."
             self.backend.say(reached)
         return result

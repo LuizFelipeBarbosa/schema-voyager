@@ -83,3 +83,9 @@ class GoalQueue:
     def requeue_running(self) -> list[str]:
         """On --resume: every running goal goes back to queued. Returns their ids."""
         raise NotImplementedError
+
+
+def goal_label(spec: GoalSpec | None, fallback: str = "") -> str:
+    """What chat calls a goal: "10 torches", "1 plank", "3 coal" for an obtain goal; else `fallback` or the
+    spec's text (v3.1c)."""
+    raise NotImplementedError

@@ -13,7 +13,7 @@ from typing import Callable
 from . import normalize
 from .episode import Episode
 from .llm import LLM, LLMError
-from .models import Action, EpisodeResult, Outcome, Rule, Skill
+from .models import Action, EpisodeResult, GoalSpec, Outcome, Rule, Skill
 from .planner import PlanningError, PlanStep, make_plan
 from .schema_store import MIN_CONFIRMATIONS, MIN_EPISODES, SchemaStore, Transition, applies
 from .tasks import CRAFTABLE_ITEMS, MINEABLE_BLOCKS
@@ -40,7 +40,8 @@ _NEVER_BLOCKED_ERRORS = frozenset({"not_found", "unreachable", "hazard", "timeou
 
 
 def run_schemavoyager(
-    episode: Episode, store: SchemaStore, before_step: BeforeStep | None = None, excluded: frozenset[str] = frozenset()
+    episode: Episode, store: SchemaStore, before_step: BeforeStep | None = None, excluded: frozenset[str] = frozenset(),
+    goal: GoalSpec | None = None,
 ) -> EpisodeResult:
     """Run one episode, replanning from the current state after any step that fails or surprises.
 
@@ -56,6 +57,8 @@ def run_schemavoyager(
 
     A rule whose step fails twice the same way (same error, same inventory) is blocked for the rest
     of the goal, and rules in `excluded` are left out: neither is planned.
+
+    `goal` is a user or system goal's spec (None for a curriculum goal), for its narration (v3.1h).
     """
     task = episode.task
     episode.log.event(

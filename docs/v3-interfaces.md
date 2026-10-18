@@ -170,6 +170,9 @@ Curriculum goals become a `GoalSpec` with `source="curriculum"` and the life's g
 into the queue file, and their `Task` is built exactly as in v2 (`goal_count` is the curriculum's count), so learn
 mode and its tests don't change.
 
+`count` means two things (S06): for a curriculum goal it is the count to hold (v2's held + 1); for a user or
+system `obtain` goal it is how many more (D5), and the count to hold is the entry's `target_count`.
+
 Statuses and the transitions `GoalQueue` allows (anything else is refused):
 
 | From | To |
@@ -238,8 +241,16 @@ class GoalQueue:
     def get(self, goal_id: str) -> GoalEntry | None
     def goals(self) -> list[GoalEntry]             # every goal, in submission order
     def requeue_running(self) -> list[str]         # --resume: every running goal goes back to queued
+
+def goal_label(spec: GoalSpec | None, fallback: str = "") -> str   # S06: what chat calls a goal
 ```
 
+- `goal_label` (S06): for an `obtain` spec, the count and the item's display name: "10 torches", "4 sticks",
+  "1 iron ingot", "2 iron ingots", "4 planks", "1 plank", "3 coal", "2 glass", "1 shears". The name drops `#` and
+  turns `_` into spaces. A count above 1 takes the plural (`+es` after `ch`, `sh`, `x`; nothing after a final `s`;
+  nothing for a few uncountable names such as coal, charcoal, redstone, glass, sand, gravel, dirt, cobblestone,
+  stone, flint; else `+s`), and a count of 1 takes the singular (a group name loses its final `s`: `#planks` →
+  "plank"). For no spec, or a kind other than `obtain`, it is `fallback` (the typed text) or else `spec.text`.
 - `mark` and `cancel` return `False`, and write nothing, for an unknown id or a transition the table refuses (a goal
   the panel cancelled stays cancelled when the life later tries to mark it `done`). `mark` takes only the fields
   `reason`, `target_count` and `deaths`; any other name raises `ValueError`.
@@ -254,35 +265,65 @@ class GoalQueue:
 - `_Life` holds `self.queue = GoalQueue(run_dir / "goals.jsonl")`. On `--resume` it calls `requeue_running()`.
 - Each pass of `_Life.run`, after the existing stop checks:
   1. poll the bot's events (below) and handle chat commands (v3.1g);
-  2. parse every `pending()` goal with `llm.parse_goal` (v3.1e): `accept` it, or `mark(id, "unsupported",
-     reason=reply)` and say the reply. A parse that raises `LLMError` (`SpendCapReached` is one) leaves the goal
-     `submitted` and the pass goes on; the stop checks then see `spend_cap_hit`;
-  3. `_learn_priors()` and `_repair_dead_ingredients()` as now;
-  4. pick the goal: `queue.next()` (system, then user), else in learn mode the curriculum as now, else idle: poll
-     the queue and the bot every 2 s (steps 1–2 and, from M2, the hunger check), stand still, and keep checking
-     the wall clock and the spend cap.
-- `_run_goal(spec)`. For a queued goal it first does `mark(id, "running")`. For `obtain`, the `Task` is the v2 one
-  with `goal_count = target_count`. The first time a goal runs, `target_count = held + spec.count` (D5), held being
-  `normalize.counts` of the current inventory, and it is saved with `mark(id, "running", target_count=...)`. A
-  goal that runs again (after a preemption or a resume) keeps its `target_count`.
-- When it ends: `done` on success; `failed` with a `reason` (at most 80 characters: "no plan", "out of time",
-  "not found: iron ore", ...). A failed user goal isn't skipped for the rest of the life. User and system goals
-  never feed `Curriculum.record`.
+  2. parse every `pending()` goal with `llm.parse_goal` (v3.1e), with `known_items=vanilla_items()` and the last
+     inventory the life saw: `accept` it, or `mark(id, "unsupported", reason=reply)` and say the reply. Say
+     "Queued u003: 10 torches" only if `accept` returned `True` (the panel may have cancelled it meanwhile). A
+     parse that raises `LLMError` (`SpendCapReached` is one) leaves the goal `submitted` and the pass goes on; the
+     stop checks then see `spend_cap_hit`;
+  3. pick the goal: `queue.next()` (system, then user), else in learn mode the curriculum as now. When there is a
+     goal to run (or in learn mode), `_learn_priors()` and `_repair_dead_ingredients()` run first as now;
+  4. otherwise (play mode, nothing queued) idle: sleep `LifeConfig.idle_poll_s` (2.0) and start the next pass. An
+     idle pass calls only `backend.status()` and reads the queue (steps 1–2 and, from M2, the hunger check). It
+     never calls `observe` (that takes the bot's lock), and it keeps checking the wall clock and the spend cap.
+- `_run_goal(spec)`. Every source gets a curriculum `Goal` next to its spec, because `_goal_record` and
+  `Curriculum.record` read `plan_length` and `reason`; a user or system goal's `Goal` is built by the life. For a
+  queued goal, after `begin_episode` and the junk toss, it does one `mark`: the first time the goal runs,
+  `mark(id, "running", target_count=held + spec.count)` (D5), held being `normalize.counts` of that observation;
+  a goal that runs again (after a preemption or a resume) keeps its `target_count` and does `mark(id, "running")`.
+  If `mark` returns `False` (cancelled meanwhile), the goal doesn't run and uses no goal index.
+- A user or system `obtain` goal's `Task` is the v2 one with `goal_count = target_count`. Its plan (for the budget
+  and the clock) is `make_plan(item, target_count, held, usable rules minus _excluded_rules(), store.skill_for,
+  visible=nearby)`, and `run_schemavoyager` gets the same `excluded` and `goal=spec`. Budget:
+  `max(MIN_GOAL_BUDGET, BUDGET_PER_PLAN_STEP * plan_length)`. Goal clock: `max(goal_wall_clock_s,
+  GOAL_SECONDS_PER_PLAN_STEP * plan_length)` with `GOAL_SECONDS_PER_PLAN_STEP = 30`, capped by the life's remaining
+  time; `life_clock_limits_goal` compares the remaining time with this clock. On `PlanningError` the episode still
+  runs (plan length 0) so the trace shows `plan_failed`, and the goal ends `failed` "no plan".
+- When it ends: `done` on success; `failed` with a `reason` (at most 80 characters), the first that applies:
+  1. "no plan": the last event before `episode_end` is `plan_failed` (a failed revision also logs `plan_failed`,
+     but the loop goes on after it);
+  2. the last step failed with `not_found`, `unreachable` or `hazard`: "<error>: <target>" in words ("not found:
+     iron ore");
+  3. "out of time" (the episode's `out_of_time`, read when the loop ends), then "out of steps" (no budget left);
+  4. the last failed step's "<error>: <target>"; else "failed".
+
+  A failed user goal isn't skipped for the rest of the life. User and system goals never feed `Curriculum.record`.
+  A user goal cut short by the life's own clock (v2's `interrupted`) goes back to `queued`, with `interrupt:
+  "wall_clock"` in the record, so `--resume` runs it again and the panel doesn't show it `running` after the life.
+- **One ending.** A goal ends one of six ways: done, failed, no plan, cancelled, preempted, cut short by the life's
+  clock (S07 adds a death). Each does exactly once, in one place (`_end_goal`): the queue mark, the life record
+  (with `interrupt` for an interrupted goal), `goals_done`, the `blocked` count (not for an interrupted goal),
+  `Curriculum.record` (curriculum goals only, not interrupted) and the chat line (v3.1h).
+- In play mode there are no exploration rounds, after any goal.
 - `_unasked_families()` also returns the items of `queued` and `running` obtain goals (minus `self.asked`), so the
   life asks Claude for prior rules about an item it has never seen. In play mode the curriculum frontier part is
   left out.
 - The junk toss at the start of a goal (v3.0c) gets as `wanted` the running goal's item plus the items of every
-  `queued` obtain goal, so the bot never drops what a queued goal asks for. From M2 (S07 `death-handling`), `wanted`
+  `queued` obtain goal and every `done` user obtain goal, so the bot never drops what a queued goal asks for or
+  what the user already asked for (S06, orchestrator: torches made for the user aren't junk the next time the bot
+  is nearly full). `wanted` grows over the life, so a toss may then free fewer than `min_free` slots. From M2 (S07 `death-handling`), `wanted`
   also holds every edible food (v3.2e), so the toss never drops what auto-eat needs.
 - **Cancel and preemption.** `_Life` composes its own check in front of `hooks.before_step`. Before each step it:
-  1. polls the bot's events and handles chat commands, then parses pending goals, catching `LLMError` as in the
-     pass above (so `!cancel` and a new goal are seen mid-goal);
+  1. polls the bot's events and handles chat commands, then parses pending goals, catching `LLMError` and
+     `BackendError` as in the pass above (so `!cancel` and a new goal are seen mid-goal);
   2. raises `GoalInterrupted(id, "cancelled")` if the running goal's status is now `cancelled`;
   3. raises `GoalInterrupted(id, "death")` if the bot died since the goal started (v3.2d);
   4. raises `GoalInterrupted(id, "preempted")` if a queued goal outranks the running one (system over user, user
      over curriculum);
   5. then calls the original `hooks.before_step` (the `ChangeTrigger`). It runs last, so a hidden change is never
      switched on for a step that doesn't run.
+
+  The hook runs only between plan steps. One step (an explore, a walk, `Episode.act`'s retries) can take a minute
+  or more live, so a cancel takes effect when the current step ends.
 - `_run_goal` catches `GoalInterrupted` (`run_schemavoyager` doesn't, and `agent.py` isn't changed for it):
   - the episode log gets `goal_interrupted {"goal_id", "reason"}`;
   - it then does what `run_schemavoyager` does at a normal end: `episode.finish(success=False)`, `store.certify()`
@@ -295,12 +336,14 @@ class GoalQueue:
   from before the life are skipped. A poll is `backend.status(since=self.bot_seq)`, then
   `self.bot_seq = status.last_seq`. If `status.last_seq < self.bot_seq` the bot restarted: poll again with
   `since=0`. Events are handled in seq order: `chat_command` (v3.1g) and, from M2, `death` (v3.2d); others are
-  ignored. A `chat_command` is handled only from this poll, never from an action response's `events`, so it is
+  ignored. Outside a bot restart, an event with `seq <= self.bot_seq` is skipped. A `chat_command` is handled only from this poll, never from an action response's `events`, so it is
   never handled twice. A `BackendError` from the poll is logged and the pass goes on.
 - Stop reasons: `max_goals` (counts every goal run, whatever its source), `spend_cap`, `wall_clock`,
   `empty_frontier` (learn mode only), and `deaths` (v3.2d).
-- Tests use `--llm fake` in the simulator. They inject `chat_command` events with a test double around
-  `NaturalWorld.status`; S06 doesn't edit `environment.py` (S07's `sim-threats` lane owns it).
+- Tests use `--llm fake` in the simulator. They inject `chat_command` events through the simulator's own
+  `world._emit({...})` (from a test double around `NaturalWorld.status` or a hook), so seqs stay consecutive; a
+  made-up seq above the world's would look like a bot restart. S06 doesn't edit `environment.py` (S07's
+  `sim-threats` lane owns it).
 
 ### v3.1e Parsing a goal (`llm.py`, `data/items_1_21_1.json`)
 
@@ -400,7 +443,9 @@ The life logs each one as `chat_command` in `life_events.jsonl` (v3.1h). M4 adds
 ### v3.1h Trace, records and narration
 
 - Episode log: the `goal` event gains `goal_id`, `source`, `text` and `goal_kind` (`kind` is already the record's
-  own key). New event `goal_interrupted {"goal_id", "reason"}`, where reason is `cancelled`, `preempted` or `death`.
+  own key). Its `count` is the count to hold (the Task's `goal_count`); a user or system goal's event also has
+  `asked`, its `spec.count` (how many more). New event `goal_interrupted {"goal_id", "reason"}`, where reason is
+  `cancelled`, `preempted` or `death`.
 - `life.jsonl` records gain `goal_id`, `source`, `text` and `goal_kind`. An `interrupted` record also has
   `interrupt`: `wall_clock` (v2's case), `cancelled`, `preempted` or `death`. Readers treat a record without
   `source` as a curriculum goal.
@@ -409,10 +454,15 @@ The life logs each one as `chat_command` in `life_events.jsonl` (v3.1h). M4 adds
   it opens it, so the life writes this one with its own small appender. Kinds: `chat_command {"player", "command", "args"}`, `goal_parsed {"goal_id",
   "goal_kind", "item", "count", "target"}`, `goal_unsupported {"goal_id", "reply"}`, and from M2 `death` and
   `hungry` (v3.2). The panel doesn't serve it.
-- Chat, at most 3 messages of 240 characters with no `#` (display names drop `#` and `_`):
-  - when a user goal's first plan is made: "On it: 10 torches (7 steps)";
-  - "Done: 10 torches", "Couldn't get torches: <reason>", "Cancelled: 10 torches";
-  - a preemption: "Pausing 10 torches for hunger: 4 bread".
+- Chat, at most 3 messages of 240 characters with no `#` (display names drop `#` and `_`), with `goal_label`
+  (v3.1c) for the goal:
+  - `agent.py` (S06 `goal-narration`), when a user goal's first plan is made: "On it: 10 torches (7 steps)", in
+    place of v2's "Goal: 28 torch (...)". `run_schemavoyager(..., goal: GoalSpec | None = None)` gets the spec from
+    the life (`None` for curriculum goals, which narrate as in v2);
+  - `life.py` (S06 `life-queue`), when the goal ends: "Done: 10 torches", "Couldn't get 10 torches: <reason>",
+    "Cancelled: 10 torches", and a preemption: "Pausing 10 torches for hunger: 4 bread";
+  - `Episode.finish(success=None, announce=True)` (stub on `main`, S06): `announce=False` skips v2's "Goal reached:
+    28 torch." `run_schemavoyager` passes `announce=goal is None`, so a user goal says "Done: 10 torches" once.
 - The panel's goal card shows "Your goal: get me 10 torches" for `source: user`.
 
 ### v3.1i Who owns what (S06 and S07 run at the same time)
@@ -423,8 +473,8 @@ The life logs each one as `chat_command` in `life_events.jsonl` (v3.1h). M4 adds
 | `goals.py` | S06 `goal-queue` | S07 only calls `submit`, `accept`, `mark` and `GoalInterrupted` |
 | `llm.py`, `data/items_1_21_1.json`, `scripts/export-items.js` | S06 `goal-parse` | S07 reads `foods` |
 | `life.py` | S06 `life-queue`, then S07 `death-handling` | One after the other: `death-handling` starts after `life-queue` is merged |
-| `agent.py` | S06 `goal-narration` | The `interrupted` line in `_NEVER_BLOCKED_ERRORS` is S05's stub |
-| `episode.py` | S05 stub, then S07 `python-survival` | The stub adds `interrupted` to `RETRIED_ERRORS`; S07 makes that retry skip the explore (v3.2b) |
+| `agent.py` | S06 `goal-narration` | The `interrupted` line in `_NEVER_BLOCKED_ERRORS` is S05's stub; the `goal` keyword of `run_schemavoyager` is S06's stub |
+| `episode.py` | S05 stub, then S07 `python-survival` | The stub adds `interrupted` to `RETRIED_ERRORS`; S07 makes that retry skip the explore (v3.2b). S06's stub adds `finish(announce=)`, far from S07's edits in `act` |
 | `panel.py`, `trace.py`, `site/dist/*` | S06 | |
 | `mineflayer_backend.py`, `environment.py`, `curriculum.py` | S07 | S06 uses the existing `status(since)` |
 | `mc/bot/server.js` | both, in separate places | S06 adds one line, `attachChatCommands(current, eventLog)`, right after the `current.on('error', ...)` listener in `connect()`. S07 adds its plugin loading right after `current.loadPlugin(pathfinder)`, the pvp movements inside `once('spawn')`, and everything else. Neither touches the `config` block: each lib module reads its own env var |
