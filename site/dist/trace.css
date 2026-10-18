@@ -53,6 +53,7 @@ select { background: var(--panel); border: 1px solid var(--line); border-radius:
 .status { flex: none; font-family: var(--mono); font-size: 12px; letter-spacing: .1em; padding: 4px 9px; border-radius: 3px; border: 1px solid var(--line); color: var(--muted); }
 .status.running { color: var(--amber); border-color: rgba(233, 185, 73, .4); }
 .status.success { color: var(--bg); background: var(--mint); border-color: var(--mint); }
+.status.neutral { color: var(--muted); }
 .status.fail { color: var(--bg); background: var(--red); border-color: var(--red); }
 .goal { margin: 10px 0 0; font-size: 15px; }
 .hidden-rule { margin: 6px 0 0; color: var(--muted); font-size: 13px; }
@@ -115,7 +116,9 @@ select { background: var(--panel); border: 1px solid var(--line); border-radius:
 .verdict { margin-top: 8px; font-family: var(--mono); font-size: 13px; }
 .verdict.match { color: var(--mint); }
 .verdict.mismatch { color: var(--red); font-size: 15px; font-weight: 500; }
-.verdict.failed, .verdict.unchecked { color: var(--amber); }
+.verdict.failed, .verdict.unchecked, .verdict.quarantined { color: var(--amber); }
+.verdict.stochastic { color: var(--muted); }
+.step-action ~ .travel { margin: 4px 0 0; color: var(--dim); font-size: 12px; }
 .verdict small { display: block; color: var(--muted); font-weight: 400; font-size: 12px; }
 
 /* Store changes and feedback */
@@ -151,6 +154,8 @@ select { background: var(--panel); border: 1px solid var(--line); border-radius:
 .log li.good { color: var(--mint); }
 .log li.llm { color: var(--violet); }
 .log li.warn { color: var(--amber); }
+.log li.dim { color: var(--dim); }
+.log li.change { color: var(--amber); font-weight: 600; }
 
 /* Playback */
 .controls { display: flex; align-items: center; gap: 6px; padding: 8px 14px; border-top: 1px solid var(--line); background: var(--panel); }
