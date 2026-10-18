@@ -1164,8 +1164,13 @@ Recorded exactly once for every duel that started, the bot's death included, wit
   physics tick: face the target, walk in (sprinting) when farther than 2.5 blocks, stand closer than that. Past 5
   blocks pvp's `GoalFollow` takes over again. The pathfinder's stop at each path end clears the controls and the
   horizontal velocity, which would cancel jumps, strafes and knockback; the mover is there to avoid that.
-- The mover never steps where the next position has no floor within 1 block down, or has lava, fire, magma, water,
-  cactus, a sweet berry bush or powder snow. It stands still instead.
+- The mover never steps where the next position has no floor within 1 block down, a feet or head cell that isn't
+  passable, or lava, fire, magma, water, cactus, a sweet berry bush or powder snow. It stands still instead.
+- **The line gate** (S11 advisor, for guard fights in the wild): the mover takes over only when the straight line to
+  the target is clear (sampled every 0.5 blocks: feet and head passable, a floor at the same height or one down, no
+  hazard) and the bot isn't in a liquid, 3 ticks in a row; 3 failing ticks in a row hand the chase back to
+  `GoalFollow`. A mover pressing forward that hasn't moved 0.2 blocks in 10 ticks hands back too and stays out for 40
+  ticks. Steps, walls, trees, ledges and water are left to pathfinder, as before S11.
 
 Each tactic is one entry of `TACTICS`, behind its flag, added by its own lane and measured before the next:
 
@@ -1175,12 +1180,21 @@ Each tactic is one entry of `TACTICS`, behind its flag, added by its own lane an
    carries a fresh sprint and its extra knockback.
 3. `strafe`: in reach, circle the opponent, holding left or right and switching sides now and then.
 4. `shield`: replaces pvp's shield routine. Shield up when the opponent's next strike is due (its last swing plus its
-   weapon's cooldown) within the shield's 5-tick warm-up, down for the bot's own strike.
+   weapon's cooldown; 20 ticks for a mob, the vanilla melee interval) within the shield's 5-tick warm-up, down for
+   the bot's own strike, which waits up to 8 ticks to block first. Up while closing in on a skeleton, stray, bogged
+   or pillager.
 5. `disengage`: below 6 health, run, eat a golden apple (the guard's banned-food list doesn't apply here), and come
    back once it's eaten or the opponent is in reach.
 
-`DEFAULT_TACTICS` is the set guard fights use: `[]` until S11 has measured the best set, then that set. Each
-tactic's measured result is logged in `docs/v3-progress.md`.
+`DEFAULT_TACTICS` is the set guard fights use: the measured best, `['crit', 'shield']` (`runs/v3-duel-crit`,
+`runs/v3-duel-shield`; wtap, strafe and disengage were dropped). Each tactic's measured result is logged in
+`docs/v3-progress.md`.
+
+### `POST /guard` takes `tactics`
+
+`{"mode": "defend", "tactics": ["crit", "shield"]}`: both fields optional, at least one; `tactics` is validated like
+`/duel`'s and sets the set the guard's later fights use (it outlives reconnects, like the mode). The answer and
+`/status`'s `guard` gain `tactics`. Without it the guard uses `DEFAULT_TACTICS`.
 
 ### `fight()` (`lib/guard.js`)
 
