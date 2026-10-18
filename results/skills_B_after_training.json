@@ -1,0 +1,203 @@
+[
+  {
+    "name": "obtain_wooden_pickaxe",
+    "description": "From an empty inventory, craft a wooden pickaxe.",
+    "goal_item": "wooden_pickaxe",
+    "actions": [
+      {
+        "kind": "mine",
+        "target": "oak_log",
+        "tool": null,
+        "times": 1
+      },
+      {
+        "kind": "mine",
+        "target": "oak_log",
+        "tool": null,
+        "times": 1
+      },
+      {
+        "kind": "mine",
+        "target": "oak_log",
+        "tool": null,
+        "times": 1
+      },
+      {
+        "kind": "craft",
+        "target": "oak_planks",
+        "tool": null,
+        "times": 3
+      },
+      {
+        "kind": "craft",
+        "target": "crafting_table",
+        "tool": null,
+        "times": 1
+      },
+      {
+        "kind": "craft",
+        "target": "stick",
+        "tool": null,
+        "times": 1
+      },
+      {
+        "kind": "craft",
+        "target": "wooden_pickaxe",
+        "tool": null,
+        "times": 1
+      }
+    ]
+  },
+  {
+    "name": "obtain_stone_pickaxe",
+    "description": "From an empty inventory, craft a stone pickaxe.",
+    "goal_item": "stone_pickaxe",
+    "actions": [
+      {
+        "kind": "mine",
+        "target": "oak_log",
+        "tool": null,
+        "times": 1
+      },
+      {
+        "kind": "mine",
+        "target": "oak_log",
+        "tool": null,
+        "times": 1
+      },
+      {
+        "kind": "mine",
+        "target": "oak_log",
+        "tool": null,
+        "times": 1
+      },
+      {
+        "kind": "mine",
+        "target": "oak_log",
+        "tool": null,
+        "times": 1
+      },
+      {
+        "kind": "mine",
+        "target": "oak_log",
+        "tool": null,
+        "times": 1
+      },
+      {
+        "kind": "craft",
+        "target": "oak_planks",
+        "tool": null,
+        "times": 3
+      },
+      {
+        "kind": "craft",
+        "target": "crafting_table",
+        "tool": null,
+        "times": 1
+      },
+      {
+        "kind": "craft",
+        "target": "stick",
+        "tool": null,
+        "times": 1
+      },
+      {
+        "kind": "craft",
+        "target": "wooden_pickaxe",
+        "tool": null,
+        "times": 1
+      },
+      {
+        "kind": "mine",
+        "target": "stone",
+        "tool": "wooden_pickaxe",
+        "times": 1
+      },
+      {
+        "kind": "craft",
+        "target": "stick",
+        "tool": null,
+        "times": 1
+      },
+      {
+        "kind": "mine",
+        "target": "stone",
+        "tool": "wooden_pickaxe",
+        "times": 1
+      },
+      {
+        "kind": "mine",
+        "target": "stone",
+        "tool": "wooden_pickaxe",
+        "times": 1
+      },
+      {
+        "kind": "craft",
+        "target": "stone_pickaxe",
+        "tool": null,
+        "times": 1
+      }
+    ]
+  },
+  {
+    "name": "obtain_torch",
+    "description": "From an empty inventory, craft 4 torches.",
+    "goal_item": "torch",
+    "actions": [
+      {
+        "kind": "mine",
+        "target": "oak_log",
+        "tool": null,
+        "times": 1
+      },
+      {
+        "kind": "mine",
+        "target": "oak_log",
+        "tool": null,
+        "times": 1
+      },
+      {
+        "kind": "mine",
+        "target": "oak_log",
+        "tool": null,
+        "times": 1
+      },
+      {
+        "kind": "craft",
+        "target": "oak_planks",
+        "tool": null,
+        "times": 3
+      },
+      {
+        "kind": "craft",
+        "target": "crafting_table",
+        "tool": null,
+        "times": 1
+      },
+      {
+        "kind": "craft",
+        "target": "stick",
+        "tool": null,
+        "times": 1
+      },
+      {
+        "kind": "craft",
+        "target": "wooden_pickaxe",
+        "tool": null,
+        "times": 1
+      },
+      {
+        "kind": "mine",
+        "target": "coal_ore",
+        "tool": "wooden_pickaxe",
+        "times": 1
+      },
+      {
+        "kind": "craft",
+        "target": "torch",
+        "tool": null,
+        "times": 1
+      }
+    ]
+  }
+]

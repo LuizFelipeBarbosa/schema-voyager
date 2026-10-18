@@ -20,34 +20,32 @@
           <a href="#schema">schema</a>
           <a href="#evaluation">evaluation</a>
         </nav>
-        <a class="repo-link" href="#architecture">source map <span>↓</span></a>
+        <a class="repo-link" href="trace.html">trace panel <span>↗</span></a>
       </header>
 
       <main>
         <section class="hero" id="top">
           <div class="hero-copy reveal">
-            <div class="eyebrow"><span class="pulse-dot"></span> VERSION N+1 / MINECRAFT AGENT STUDY</div>
+            <div class="eyebrow"><span class="pulse-dot"></span> VANILLA 1.21.1 SERVER / MINEFLAYER BOT</div>
             <h1>Teach an agent<br /><em>what Minecraft means.</em></h1>
-            <p class="lede">Voyager learns <strong>how</strong> to act. Schema records <strong>why</strong> those actions should work. SchemaVoyager joins them into a compact, testable memory.</p>
+            <p class="lede">Voyager learns <strong>how</strong> to act. Schema records <strong>why</strong> those actions should work. SchemaVoyager joins them into a compact, testable memory, and notices the moment the world stops keeping its promises.</p>
             <div class="hero-actions">
               <a class="button button-primary" href="#loop">Trace the loop <span>↓</span></a>
               <a class="button button-quiet" href="#demo">Jump to the demo <span>↗</span></a>
             </div>
           </div>
-          <div class="hero-console reveal reveal-delay-1" aria-label="Agent status console">
-            <div class="console-head"><span>RUN / HOLDOUT_03</span><span class="status"><i></i> LIVE TRACE</span></div>
+          <div class="hero-console reveal reveal-delay-1" aria-label="A real holdout episode">
+            <div class="console-head"><span id="console-title">RUN / HOLDOUT H3</span><span class="status"><i></i> REAL SERVER TRACE</span></div>
             <div class="console-body">
-              <div class="console-row muted"><span>goal</span><b>craft furnace</b></div>
-              <div class="console-row"><span>skill</span><b class="amber">skill_furnace v1</b></div>
-              <div class="console-row"><span>precondition</span><b>stone_pickaxe = 1</b></div>
+              <div class="console-row muted"><span>goal</span><b>craft 4 torches</b></div>
+              <div class="console-row"><span>hidden rule</span><b class="amber">coal needs a stone pickaxe</b></div>
+              <div class="console-row"><span>agent told</span><b>nothing</b></div>
               <div class="console-divider"></div>
-              <div class="trace-line"><span>01</span><b>move → stone field</b><i>verified</i></div>
-              <div class="trace-line"><span>02</span><b>mine × 8 cobblestone</b><i>verified</i></div>
-              <div class="trace-line"><span>03</span><b>craft → furnace</b><i>goal met</i></div>
+              <div id="console-trace"><div class="trace-line"><span>--</span><b>run `schema-voyager export` to load a trace</b><i></i></div></div>
               <div class="console-divider"></div>
-              <div class="console-total"><span>episode cost</span><strong>54 <small>tok est.</small></strong></div>
+              <div class="console-total"><span>Claude calls in this episode</span><strong id="console-cost">– <small>tokens</small></strong></div>
             </div>
-            <div class="console-foot"><span>schema_store / episodes.json</span><span>● saved</span></div>
+            <div class="console-foot"><span id="console-source">results / episodes</span><span>● goal met</span></div>
           </div>
           <div class="hero-index"><span>01</span><span>FIELD NOTES / 2026</span><span>SCROLL TO READ</span></div>
         </section>
@@ -58,7 +56,7 @@
             <p class="big-statement">A skill is a <span>procedure.</span><br />A schema is a <span>promise.</span></p>
             <div class="thesis-columns">
               <p>Voyager turns successful Minecraft behavior into reusable, executable skills. That is powerful, but a skill alone can be brittle: it knows what to replay, not which assumptions made it safe.</p>
-              <p>SchemaVoyager adds an explicit world model. Every recipe or mining mechanic carries preconditions, predicted effects, and evidence from a verified episode. The agent can plan with those promises, then roll them back when reality disagrees.</p>
+              <p>SchemaVoyager adds an explicit world model. Every mining and crafting rule carries preconditions, an exact predicted effect, and evidence from logged steps. The agent plans with those promises, checks each one as it acts, and demotes the one that breaks.</p>
             </div>
           </div>
         </section>
@@ -67,28 +65,24 @@
           <div class="section-intro reveal">
             <div class="section-label"><span>02</span><span>THE LOOP</span></div>
             <h2>From observation<br /><em>to reusable behavior.</em></h2>
-            <p>Click through one episode. The agent does not just remember a transcript; it promotes a successful interaction into a compact object it can replay and check.</p>
+            <p>Click through one episode. The agent does not just remember a transcript; it keeps rules it can check and skills that say which rules they rely on.</p>
           </div>
           <div class="loop-workbench reveal reveal-delay-1">
             <div class="loop-steps" role="tablist" aria-label="Skill loop steps">
               <button class="loop-step active" role="tab" aria-selected="true" data-step="0"><span>01</span><b>observe</b><i>→</i></button>
               <button class="loop-step" role="tab" aria-selected="false" data-step="1"><span>02</span><b>model</b><i>→</i></button>
               <button class="loop-step" role="tab" aria-selected="false" data-step="2"><span>03</span><b>plan</b><i>→</i></button>
-              <button class="loop-step" role="tab" aria-selected="false" data-step="3"><span>04</span><b>execute</b><i>→</i></button>
+              <button class="loop-step" role="tab" aria-selected="false" data-step="3"><span>04</span><b>verify</b><i>→</i></button>
               <button class="loop-step" role="tab" aria-selected="false" data-step="4"><span>05</span><b>compile</b><i>↗</i></button>
             </div>
             <div class="loop-panel">
               <div class="loop-panel-copy">
-                <div class="mini-label" id="loop-kicker">CURRENT STATE</div>
-                <h3 id="loop-title">See what the world gives you.</h3>
-                <p id="loop-copy">The environment emits a compact observation: position, nearby blocks, inventory, action budget, and the goal. The agent starts with facts, not a long replay.</p>
+                <div class="mini-label" id="loop-kicker"></div>
+                <h3 id="loop-title"></h3>
+                <p id="loop-copy"></p>
                 <div class="progress-track"><span id="loop-progress"></span></div>
               </div>
-              <pre class="loop-code" id="loop-code"><span class="code-key">observation</span> = {
-  <span class="code-key">goal</span>: <span class="code-string">"wooden_pickaxe"</span>,
-  <span class="code-key">inventory</span>: {},
-  <span class="code-key">visible_blocks</span>: {<span class="code-string">"log"</span>: 2}
-}</pre>
+              <pre class="loop-code" id="loop-code"></pre>
             </div>
           </div>
         </section>
@@ -98,19 +92,19 @@
           <div class="architecture-content">
             <div class="arch-heading">
               <h2>One agent.<br /><em>Two memories.</em></h2>
-              <p>The environment stays replaceable. The learned state stays inspectable. That separation lets the same loop run against the deterministic starter world today and MineDojo or Mineflayer tomorrow.</p>
+              <p>A Mineflayer bot on a vanilla 1.21.1 server does the acting; a simulator built from the same layouts is the labelled fallback. Claude is called only to propose the first rules and to revise one that a step contradicted.</p>
             </div>
             <div class="arch-diagram" aria-label="SchemaVoyager architecture diagram">
-              <div class="arch-node env-node"><small>WORLD</small><strong>Minecraft<br />adapter</strong><span>observe / step</span></div>
+              <div class="arch-node env-node"><small>WORLD</small><strong>Minecraft<br />server</strong><span>mine / craft / explore</span></div>
               <div class="arch-arrow arrow-a">→</div>
-              <div class="arch-node loop-node"><small>CONTROL</small><strong>Skill<br />Loop</strong><span>plan / verify</span></div>
+              <div class="arch-node loop-node"><small>CONTROL</small><strong>Plan<br />+ verify</strong><span>exact step checks</span></div>
               <div class="arch-arrow arrow-b">↔</div>
               <div class="arch-stack">
                 <div class="arch-node schema-node"><small>MEMORY A</small><strong>World<br />schema</strong><span>rules + evidence</span></div>
-                <div class="arch-node skill-node"><small>MEMORY B</small><strong>Skill<br />library</strong><span>procedures + versions</span></div>
+                <div class="arch-node skill-node"><small>MEMORY B</small><strong>Skill<br />library</strong><span>plans + rule ids</span></div>
               </div>
               <div class="arch-arrow arrow-c">↓</div>
-              <div class="arch-node eval-node"><small>JUDGE</small><strong>Evaluator</strong><span>success / cost / reuse</span></div>
+              <div class="arch-node eval-node"><small>JUDGE</small><strong>Evaluator</strong><span>success / tokens / repeats</span></div>
             </div>
           </div>
         </section>
@@ -119,35 +113,20 @@
           <div class="section-intro reveal">
             <div class="section-label"><span>04</span><span>THE MEMORY FORMAT</span></div>
             <h2>Rules make skills<br /><em>accountable.</em></h2>
-            <p>Both objects are plain data. That makes the agent's improvement visible in a code review, replayable in a test, and easy to replace with an LLM-backed induction step.</p>
+            <p>Both objects are plain data, shown here as they were saved by the run: the rule after training, and the skill after the holdout broke the rule it cites.</p>
           </div>
           <div class="memory-grid reveal reveal-delay-1">
             <article class="memory-card rule-card">
-              <div class="card-top"><span class="card-index">A / WORLD RULE</span><span class="card-status">CERTIFIED</span></div>
-              <h3>craft:wooden_pickaxe</h3>
-              <pre><span class="json-key">"preconditions"</span>: [
-  <span class="json-string">"inventory[planks] &gt;= 3"</span>,
-  <span class="json-string">"inventory[sticks] &gt;= 2"</span>
-],
-<span class="json-key">"predicted_effects"</span>: [
-  <span class="json-string">"inventory[wooden_pickaxe] += 1"</span>
-],
-<span class="json-key">"evidence"</span>: [<span class="json-string">"t1_wooden_pickaxe"</span>]</pre>
-              <div class="card-foot"><span>confidence</span><strong>02 / 05</strong></div>
+              <div class="card-top"><span class="card-index">A / WORLD RULE</span><span class="card-status" id="rule-status">–</span></div>
+              <h3 id="rule-id">mine_coal_ore</h3>
+              <pre id="rule-body"></pre>
+              <div class="card-foot"><span>evidence</span><strong id="rule-evidence">–</strong></div>
             </article>
             <article class="memory-card skill-card">
-              <div class="card-top"><span class="card-index">B / EXECUTABLE SKILL</span><span class="card-status">REPLAYABLE</span></div>
-              <h3>skill_wooden_pickaxe</h3>
-              <pre><span class="json-key">"steps"</span>: [
-  <span class="json-string">"move"</span>,
-  <span class="json-string">"mine"</span>,
-  <span class="json-string">"craft"</span>
-],
-<span class="json-key">"postconditions"</span>: [
-  <span class="json-string">"inventory[wooden_pickaxe] &gt;= 1"</span>
-],
-<span class="json-key">"validator"</span>: <span class="json-string">"replay + check"</span></pre>
-              <div class="card-foot"><span>version</span><strong>01 / 01</strong></div>
+              <div class="card-top"><span class="card-index">B / EXECUTABLE SKILL</span><span class="card-status" id="skill-status">–</span></div>
+              <h3 id="skill-id">skill_torch</h3>
+              <pre id="skill-body"></pre>
+              <div class="card-foot"><span>compiled from</span><strong id="skill-evidence">–</strong></div>
             </article>
           </div>
         </section>
@@ -155,15 +134,13 @@
         <section class="tasks-section section-grid reveal" id="tasks">
           <div class="section-label"><span>05</span><span>THE CURRICULUM</span></div>
           <div class="tasks-content">
-            <div class="tasks-heading"><h2>Small world.<br /><em>Real transfer.</em></h2><p>Three training episodes teach the progression. Three holdouts move the spawn, stretch the distance, or hand over a partial inventory. The goal is to prove reuse before adding complexity.</p></div>
+            <div class="tasks-heading"><h2>Small world.<br /><em>Changed rules.</em></h2><p>Every task starts from an empty inventory in a walled arena with three oak trees and a stone patch with exposed coal. Training runs on layouts 1 and 2; the holdout runs on layouts 6 to 8 with one loot table changed by a datapack the client can never see.</p></div>
             <div class="task-table">
               <div class="task-row task-header"><span>ID</span><span>MISSION</span><span>WHAT CHANGES</span><span>STATUS</span></div>
-              <div class="task-row"><span class="task-id">T1</span><strong>wooden pickaxe</strong><span>two nearby logs</span><span class="tag train">TRAIN</span></div>
-              <div class="task-row"><span class="task-id">T2</span><strong>stone pickaxe</strong><span>wooden pickaxe + sticks</span><span class="tag train">TRAIN</span></div>
-              <div class="task-row"><span class="task-id">T3</span><strong>furnace</strong><span>eight stone blocks</span><span class="tag train">TRAIN</span></div>
-              <div class="task-row holdout-row"><span class="task-id">H1</span><strong>wooden pickaxe</strong><span>new spawn coordinates</span><span class="tag holdout">HOLDOUT</span></div>
-              <div class="task-row holdout-row"><span class="task-id">H2</span><strong>stone pickaxe</strong><span>distant stone + partial kit</span><span class="tag holdout">HOLDOUT</span></div>
-              <div class="task-row holdout-row"><span class="task-id">H3</span><strong>furnace</strong><span>wide field + new spawn</span><span class="tag holdout">HOLDOUT</span></div>
+              <div class="task-row"><span class="task-id">T1</span><strong>wooden pickaxe</strong><span>vanilla rules</span><span class="tag train">TRAIN</span></div>
+              <div class="task-row"><span class="task-id">T2</span><strong>stone pickaxe</strong><span>vanilla rules</span><span class="tag train">TRAIN</span></div>
+              <div class="task-row"><span class="task-id">T3</span><strong>4 torches</strong><span>vanilla rules</span><span class="tag train">TRAIN</span></div>
+              <div class="task-row holdout-row"><span class="task-id">H3</span><strong>4 torches</strong><span>coal ore drops coal only for a stone-tier pickaxe</span><span class="tag holdout">HOLDOUT</span></div>
             </div>
           </div>
         </section>
@@ -172,43 +149,36 @@
           <div class="section-intro reveal">
             <div class="section-label"><span>06</span><span>THE SCOREBOARD</span></div>
             <h2>Done means done.<br /><em>Efficient means learned.</em></h2>
-            <p>Success is the gate. Actions, estimated output tokens, and skill reuse show whether the agent actually improved after training.</p>
+            <p>The holdout H3, same model (Claude Sonnet 5.5) and same actions for every system. B is a Voyager-style skill-only baseline that has Claude plan and replan; B+ also tells Claude each action's inventory change.</p>
           </div>
           <div class="scoreboard reveal reveal-delay-1">
-            <div class="score-controls" role="tablist" aria-label="Evaluation mode">
-              <button class="score-tab active" data-mode="hybrid">HYBRID / SCHEMAVOYAGER</button>
-              <button class="score-tab" data-mode="baseline">BASELINE / PROBE</button>
+            <div class="score-controls" role="tablist" aria-label="System">
+              <button class="score-tab active" data-system="D">D / SCHEMAVOYAGER</button>
+              <button class="score-tab" data-system="B">B / SKILL-ONLY</button>
+              <button class="score-tab" data-system="B+">B+ / WITH EFFECT FEEDBACK</button>
             </div>
             <div class="score-main">
-              <div class="big-score"><span id="score-rate">100</span><small>% holdout success</small></div>
+              <div class="big-score"><span id="score-rate">–</span><small id="score-rate-note">% holdout success</small></div>
               <div class="metric-grid">
-                <div class="metric"><span>AVG ACTIONS</span><strong id="score-actions">13.00</strong><i id="score-actions-note">−40% vs baseline</i></div>
-                <div class="metric"><span>EST. TOKENS</span><strong id="score-tokens">39</strong><i id="score-tokens-note">−64% vs baseline</i></div>
-                <div class="metric"><span>SKILL REUSE</span><strong id="score-reuse">100%</strong><i>trained skills used</i></div>
-                <div class="metric"><span>FAILED ACTIONS</span><strong id="score-failures">0</strong><i>verified transitions</i></div>
+                <div class="metric"><span>LLM TOKENS / EPISODE</span><strong id="score-tokens">–</strong><i id="score-tokens-note"></i></div>
+                <div class="metric"><span>CLAUDE CALLS / EPISODE</span><strong id="score-calls">–</strong><i id="score-calls-note"></i></div>
+                <div class="metric"><span>REPEATED FAILURES</span><strong id="score-repeats">–</strong><i>same failing action again</i></div>
+                <div class="metric"><span>ACTIONS AFTER SURPRISE</span><strong id="score-after">–</strong><i>before the next plan</i></div>
               </div>
             </div>
-            <div class="bar-chart" aria-label="Average action comparison">
-              <div class="bar-label"><span>baseline</span><b>21.67</b></div><div class="bar-track"><span class="bar baseline-bar"></span></div>
-              <div class="bar-label"><span>hybrid</span><b>13.00</b></div><div class="bar-track"><span class="bar hybrid-bar"></span></div>
-            </div>
+            <div class="bar-chart" id="token-bars" aria-label="LLM tokens per holdout episode"></div>
+            <div class="bar-chart score-source" id="score-source"></div>
           </div>
         </section>
 
         <section class="demo-section section-grid reveal" id="demo">
           <div class="section-label"><span>07</span><span>THE DEMO</span></div>
           <div class="demo-content">
-            <div class="demo-copy"><h2>Watch the memory<br /><em>change the run.</em></h2><p>Start with a clean store. Train on T1–T3. Then send the same control loop into H1–H3. The trace below is the moment a recipe stops being a guess and becomes a reusable promise.</p><button class="button button-primary" id="replay-button">Replay episode <span>↻</span></button></div>
+            <div class="demo-copy"><h2>Watch the memory<br /><em>change the run.</em></h2><p>Train on T1–T3 until the rules are certified. Then drop the agent into H3. The replay is D's real episode: the step that breaks a promise, the demotion, Claude's ranked guesses, and the test that confirms one.</p><button class="button button-primary" id="replay-button">Replay episode <span>↻</span></button> <a class="button button-quiet" id="trace-link" href="trace.html">Full trace <span>↗</span></a></div>
             <div class="replay-panel">
-              <div class="replay-head"><span>H3 / STARTER_KIT</span><span id="replay-state">READY</span></div>
-              <div class="replay-track" id="replay-track">
-                <div class="replay-item" data-replay="0"><span>00</span><b>load skill_furnace v1</b><i>waiting</i></div>
-                <div class="replay-item" data-replay="1"><span>01</span><b>observe stone field</b><i>waiting</i></div>
-                <div class="replay-item" data-replay="2"><span>02</span><b>mine cobblestone × 8</b><i>waiting</i></div>
-                <div class="replay-item" data-replay="3"><span>03</span><b>craft furnace</b><i>waiting</i></div>
-                <div class="replay-item" data-replay="4"><span>04</span><b>verify postcondition</b><i>waiting</i></div>
-              </div>
-              <div class="replay-foot"><span id="replay-message">Ready when you are.</span><strong id="replay-cost">0 / 54 tok</strong></div>
+              <div class="replay-head"><span id="replay-title">H3 / D</span><span id="replay-state">READY</span></div>
+              <div class="replay-track" id="replay-track"></div>
+              <div class="replay-foot"><span id="replay-message">Ready when you are.</span><strong id="replay-cost">0 tokens</strong></div>
             </div>
           </div>
         </section>
@@ -216,12 +186,13 @@
         <section class="closing-section reveal">
           <div class="closing-mark"><span></span><span></span><span></span></div>
           <p>Make the agent's memory<br /><em>small enough to inspect.</em></p>
-          <div class="closing-meta"><span>SCHEMAVOYAGER / FIELD GUIDE</span><span>BUILD 01 · STATIC EXPLAINER</span></div>
+          <div class="closing-meta"><span>SCHEMAVOYAGER / FIELD GUIDE</span><span id="closing-run">BUILD 02 · REAL SERVER RESULTS</span></div>
         </section>
       </main>
 
-      <footer class="footer"><span>SchemaVoyager</span><span>Built around a deterministic Minecraft-like adapter.</span><a href="#top">back to top ↑</a></footer>
+      <footer class="footer"><span>SchemaVoyager</span><span>Runs on a vanilla 1.21.1 server through a Mineflayer bot.</span><a href="#top">back to top ↑</a></footer>
     </div>
+    <script src="results.js"></script>
     <script src="app.js"></script>
   </body>
 </html>

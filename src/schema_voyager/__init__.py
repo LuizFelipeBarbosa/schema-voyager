@@ -1,17 +1,8 @@
-"""SchemaVoyager starter package."""
+"""SchemaVoyager: a Minecraft agent that stores verified rules alongside its skills."""
 
-from .adapter import MinecraftAdapter
-from .environment import MinecraftLikeEnv
-from .evaluator import EvaluationReport, evaluate
-from .loop import run_task
-from .tasks import all_tasks, holdout_tasks, training_tasks
+from .agent import run_schemavoyager
+from .baseline import run_skill_only
+from .environment import SimulatedWorld
+from .schema_store import SchemaStore
 
-__all__ = [
-    "EvaluationReport",
-    "MinecraftAdapter",
-    "MinecraftLikeEnv",
-    "all_tasks",
-    "evaluate",
-    "holdout_tasks",
-    "training_tasks",
-]
+__all__ = ["SchemaStore", "SimulatedWorld", "run_schemavoyager", "run_skill_only"]

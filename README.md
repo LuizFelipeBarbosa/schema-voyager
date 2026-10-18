@@ -1,168 +1,129 @@
 # SchemaVoyager
 
-SchemaVoyager is a one-day starter repo for the Version N+1 track: a small
-Voyager-style Minecraft agent that learns executable skills and stores the
-world rules that justify those skills.
+A Minecraft agent that discovers rules it doesn't already know, stores them as
+verified schemas, and uses them to reuse skills safely in changed worlds.
 
-The repository is deliberately runnable without a Minecraft installation. It
-uses a deterministic Minecraft-like grid so the loop, schema files, evaluator,
-and demo can be tested in seconds. `MinecraftLikeEnv` is the adapter boundary
-for replacing the grid with MineDojo, Mineflayer, or a Voyager runtime later.
+The demo runs on a real vanilla 1.21.1 server with a Mineflayer bot. The agent
+trains on three tasks, certifies the rules it relied on, and is then dropped
+into a world where **coal ore only drops coal when mined with a stone-tier
+pickaxe** (a loot-table datapack the client can never see). SchemaVoyager (D)
+catches the missing drop at the mine step, demotes the rule, asks Claude for
+ranked alternatives, tests "needs a stone pickaxe", and finishes the task. A
+Voyager-style skill-only baseline (B) with the same model, actions and hint
+replays its torch skill and keeps mining coal with a wooden pickaxe; it works
+the change out only some of the time, after several replans.
 
-## Run the demo
+## Quick start
 
-From this directory:
+Prerequisites: Docker (Colima on macOS), Node 20+, Python 3.11+ with `uv`.
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install -e .
-schema-voyager-demo
+# 1. Minecraft server (vanilla 1.21.1, superflat, peaceful, RCON on)
+scripts/up.sh
+
+# 2. Bot server: HTTP API on :3000, 3D viewer on http://localhost:3007
+npm --prefix mc/bot install      # first time only
+npm --prefix mc/bot start        # leave running in its own terminal
+
+# 3. Python agent
+uv venv --python 3.12 .venv && uv pip install --python .venv/bin/python -e '.[dev]'
+cp .env.example .env             # then put your ANTHROPIC_API_KEY in .env
+
+# 4. The demo: train D and B on T1-T3, then H3 in the changed world
+.venv/bin/schema-voyager demo --backend mc
 ```
 
-The demo trains on three tasks, evaluates a baseline against three held-out
-tasks, and evaluates the hybrid agent on the same holdout. It writes the
-learned state to `.demo_artifacts/`:
+Watch it in the browser viewer at http://localhost:3007, or join `localhost`
+from a Minecraft **1.21.1** client (offline-mode server) and run
+`.venv/bin/schema-voyager spectate <your-name>`. The bot narrates its plan,
+mismatches and hypotheses in chat.
+
+No server? `schema-voyager demo --backend sim` runs the same code against the
+simulator (label it as such). `--llm fake` needs no API key; `--llm replay`
+reuses recorded Claude responses from `runs/llm_cache.jsonl`.
+
+## Commands
+
+| Command | What it does |
+| --- | --- |
+| `schema-voyager demo [--backend mc\|sim] [--llm live\|replay\|fake] [--systems D,B]` | Full sweep: prior rules, training, H3 holdouts, results table |
+| `schema-voyager demo --from runs/<run> --second-visit --systems D,B,B+` | Reuse that run's training (copied into the new run), run H3 again, then D once more in layout 6's world |
+| `schema-voyager episode --system D --task h3 --layout 6 --store runs/<run>/store_D_2_after_training.json` | One episode from a saved store, e.g. to record footage |
+| `schema-voyager episode --system B --task h3 --layout 6 --skills runs/<run>/skills_B_after_training.json` | Same for the baseline |
+| `schema-voyager episode --system D --task h3 --layout 6 --store <store> --world <world id>` | Revisit a holdout world as `visit2`, `visit3`, ... with the store D left there |
+| `schema-voyager arena --layout 6 --task h3` | Build a layout on the server and switch its world rules |
+| `schema-voyager spectate <player>` | Spectator mode above the arena |
+| `schema-voyager report runs/<run>` | Print a run's results table |
+| `schema-voyager panel` | Trace panel on http://127.0.0.1:8765: replays an episode trace, or follows the newest one live (`?viewer=1` embeds the 3D viewer) |
+| `schema-voyager export runs/<run> [--note ...]` | Copy a finished run to the tracked `results/` folder and update the field guide's numbers |
+| `python scripts/eval_revision.py --n 5` | Live check that Claude ranks the stone-tier rule in its top 3 |
+
+The talk, mapped to exact commands with fallbacks, is in [RUNBOOK.md](RUNBOOK.md).
+The final results, with every trace and store snapshot, are in [results/](results/).
+
+Each run writes to `runs/<run>/`: `COMMIT` (the code it ran), `episodes/*.jsonl` (every plan, step,
+prediction, observation, contradiction and revision), store snapshots
+(`store_D_0_prior.json`, `_1_after_first_episode`, `_2_after_training`,
+`_3_after_holdout`), the baseline's skill library, and `results.md`.
+
+## How it works
 
 ```text
-.demo_artifacts/
-  episodes.json       # action traces and observations
-  skills.json         # compiled executable skill summaries
-  world_model.json    # certified recipe rules and evidence
+            prior rules (Claude)            ranked revisions (Claude)
+                    |                                 ^
+                    v                                 | counterexample
+ task --> planner over rules --> step --> bot --> verifier --exact match--> next step
+               ^                                      |
+               |                     mismatch: demote rule in this world,
+          schema store <---------------------- flag skills that cite it
+   rules + evidence + skills
 ```
 
-The starter run should show equal success on both systems, with the hybrid
-using fewer actions and estimated output tokens because it does not repeat the
-baseline's exploratory `inspect` calls. The token number is an inexpensive
-proxy for the demo; replace it with provider usage data for a serious result.
+- **Rules** are STRIPS-style operators (`mine coal_ore` with `tool_any`, drops
+  `{coal: 1}`), each with a status: hypothesis, certified or demoted.
+- **Certification** replays the logged transitions in the rule's scope: zero
+  contradictions, at least 2 confirmations, from at least 2 episodes. After one
+  episode nothing is certified; after training on two layouts everything the
+  holdout relies on is.
+- **Verification** is per step and only on effects the server decides: a mined
+  block was removed, which item entities it dropped (read from entity metadata,
+  separately from pickup), and a craft's inventory change (read after the
+  server resyncs). Pickup and pathing are tolerant and never revise a rule.
+- **World scoping**: each holdout episode gets a fresh, opaque world id. A
+  contradiction there demotes the rule only in that world; holdout transitions
+  never count as evidence for training rules.
+- **Skills** are compiled plans tagged with the rule ids they depend on;
+  demoting a rule flags them.
+- **LLM use**: D calls Claude only to propose prior rules (once) and to revise
+  a contradicted rule. B calls it to write every plan and replan.
+- **Same hint for every system**: D's revision prompt and B's replan prompt
+  both say "This world's rules may differ from vanilla Minecraft" (one shared
+  constant in `llm.py`), so B is not missing a clue D gets.
 
-## The exact task set
+Model: `claude-sonnet-5-5` for every system (override with
+`SCHEMA_VOYAGER_MODEL`). Token counts come from API usage.
 
-Training tasks teach the core progression:
-
-| ID | Goal | Starting state |
-| --- | --- | --- |
-| `t1_wooden_pickaxe` | craft a wooden pickaxe | empty inventory, two nearby logs |
-| `t2_stone_pickaxe` | craft a stone pickaxe | wooden pickaxe and sticks, stone two blocks away |
-| `t3_furnace` | craft a furnace | stone pickaxe, eight stone blocks |
-
-Holdout tasks vary spawn location, distance, and partial inventory:
-
-| ID | Goal | Variation |
-| --- | --- | --- |
-| `h1_wooden_pickaxe_new_spawn` | wooden pickaxe | new spawn coordinates |
-| `h2_stone_pickaxe_hidden_resource` | stone pickaxe | distant stone, one log and one stick already held |
-| `h3_starter_kit` | furnace | new spawn and a wider stone field |
-
-The action space is intentionally small: `move`, `mine`, `craft`, and
-`inspect`. Recipes and mining prerequisites are in
-`src/schema_voyager/environment.py`.
-
-## Architecture
+## Layout
 
 ```text
-TaskSpec
-   |
-   v
-MinecraftLikeEnv ---- observe() / step(Action) ----> SkillLoop
-                                                        |
-                         +------------------------------+------------------+
-                         |                                                 |
-                   SchemaStore                                      verifier
-             rules + skills + evidence                     predicted vs observed effects
-                         |
-                         v
-                   compiled skill
-```
-
-`SkillLoop` is the control loop:
-
-1. Inspect the current inventory and task goal.
-2. Recursively satisfy recipe ingredients, locating and mining raw resources.
-3. Execute each action through the environment boundary.
-4. Record predicted effects and verify them against the next observation.
-5. On a successful training episode, compile a skill and promote the observed
-   recipe transitions into evidence-backed rules.
-
-`SchemaStore` keeps the world model and skill library separate. A skill says
-which action families achieved a goal. A rule records a precondition, a
-predicted effect, and the task IDs that supplied evidence for it.
-
-## Schema format
-
-The in-memory format is represented by `WorldRule` and `Skill` dataclasses and
-is saved as JSON. A typical learned rule looks like:
-
-```json
-{
-  "rule_id": "craft:wooden_pickaxe",
-  "preconditions": ["inventory[planks] >= 3", "inventory[sticks] >= 2"],
-  "predicted_effects": ["inventory[wooden_pickaxe] += 1"],
-  "evidence": ["t1_wooden_pickaxe", "h1_wooden_pickaxe_new_spawn"],
-  "confidence": 2
-}
-```
-
-The demo only promotes rules after a successful, verified episode. A real
-LLM-backed version can add a hypothesis stage before this promotion and reject
-rules whose predictions fail on replay.
-
-## Evaluation
-
-`evaluate()` returns:
-
-- `success_rate`: fraction of tasks reaching the requested goal item;
-- `average_actions`: environment actions per episode;
-- `average_estimated_tokens`: proxy for model output cost;
-- `skill_reuse_rate`: holdout episodes that used a trained skill;
-- `failed_actions`: actions rejected by the environment.
-
-The intended competition comparison is:
-
-```text
-baseline: no learned store, extra inspection during resource collection
-hybrid:   trained SchemaStore, reusable skills, verified transitions
-```
-
-For a stronger experiment, run each condition over multiple seeded worlds,
-replace the token proxy with actual API usage, and add adversarial resource
-placements that invalidate an unverified rule.
-
-## Turning this into real Minecraft
-
-Keep the agent and evaluator unchanged and implement the `MinecraftAdapter`
-protocol in `src/schema_voyager/adapter.py`. The adapter needs these methods
-and state fields:
-
-```python
-task: TaskSpec
-position: Position
-inventory: Counter
-is_done: bool
-is_success: bool
-reset() -> Observation
-observe() -> Observation
-step(action: Action) -> ActionResult
-nearest_block(block: str) -> Position | None
-```
-
-The adapter translates `move`, `mine`, and `craft` into MineDojo or
-Mineflayer/Voyager actions and maps the real observation back to the compact
-`Observation` model. Start with the three training goals, log every raw
-observation, and only promote skills after replaying their predicted effects.
-
-## Repository layout
-
-```text
+mc/docker-compose.yml            pinned server (itzg/minecraft-server, 1.21.1)
+mc/datapacks/r2_coal_tool/       R2: coal ore loot table needs a stone-tier pickaxe
+mc/bot/                          Mineflayer bot server (contract: contracts/bot_api.md)
 src/schema_voyager/
-  models.py       # task, observation, action, schema, and episode dataclasses
-  environment.py  # deterministic Minecraft-like environment
-  tasks.py        # train/holdout task definitions
-  schema_store.py # JSON-backed rules, skills, and evidence
-  loop.py         # plan -> execute -> verify -> compile loop
-  evaluator.py    # metrics and evaluation reports
-  demo.py         # one-command end-to-end run
-tests/            # fast environment and loop checks
-examples/         # sample persisted schema JSON
+  layouts.py        seeded walled-arena layouts (sim and real server)
+  arena.py          RCON builder, reset, datapack switch
+  mineflayer_backend.py / environment.py   real and simulated backends
+  planner.py        backward chaining over usable rules
+  verifier.py       exact vs tolerant step checks
+  schema_store.py   rules, evidence replay, certification, demotion, skills
+  agent.py          SchemaVoyager (D)
+  baseline.py       skill-only Voyager-style baseline (B)
+  llm.py            Claude calls, token metering, record/replay
+  evaluator.py      metrics and results table
+  demo.py           CLI
+  panel.py          local server for the trace panel
+  export.py         run -> results/ and site/dist/results.js
+site/dist/          field guide (index.html) and trace panel (trace.html)
+results/            final run: table, traces, store snapshots (written by export)
+tests/              offline tests (pytest); live bot tests: node mc/bot/test/*.js
 ```
-

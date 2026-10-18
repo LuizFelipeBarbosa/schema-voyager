@@ -4,120 +4,193 @@ from dataclasses import asdict, dataclass, field
 from typing import Any, Literal
 
 
-Direction = Literal["north", "south", "east", "west"]
-
-
-@dataclass(frozen=True)
-class Position:
-    x: int
-    z: int
-
-    def moved(self, direction: Direction) -> "Position":
-        offsets: dict[Direction, tuple[int, int]] = {
-            "north": (0, -1),
-            "south": (0, 1),
-            "east": (1, 0),
-            "west": (-1, 0),
-        }
-        dx, dz = offsets[direction]
-        return Position(self.x + dx, self.z + dz)
+ActionKind = Literal["mine", "craft", "explore", "smelt"]
+RuleStatus = Literal["hypothesis", "certified", "demoted"]
+RuleCheck = Literal["exact", "stochastic"]
 
 
 @dataclass(frozen=True)
 class Action:
-    name: str
+    """One adapter call. A walk to the target is part of the action."""
+
+    kind: ActionKind
+    # mine: a block, or (v2) a group or variant family such as "#log" or "coal_ore";
+    # craft and smelt: the output item, which may be a group such as "#planks".
     target: str | None = None
+    tool: str | None = None  # mine only; None means bare hand
+    times: int = 1  # craft and smelt: how many times the recipe runs
+    fuel: str | None = None  # smelt only; may be a group
+    ingredient: str | None = None  # smelt only: the input item; may be a group
+    direction: str | None = None  # explore only: N, NE, E, SE, S, SW, W, NW; None is the v1 spiral
 
-
-@dataclass
-class TaskSpec:
-    task_id: str
-    split: Literal["train", "holdout"]
-    goal_item: str
-    goal_count: int
-    start: Position
-    start_inventory: dict[str, int]
-    resources: dict[Position, str]
-    action_budget: int
-    description: str
+    def describe(self) -> str:
+        if self.kind == "mine":
+            return f"mine {self.target} with {self.tool or 'hand'}"
+        if self.kind == "craft":
+            return f"craft {self.target}" + (f" x{self.times}" if self.times > 1 else "")
+        if self.kind == "smelt":
+            times = f" x{self.times}" if self.times > 1 else ""
+            return f"smelt {self.ingredient} -> {self.target}{times} with {self.fuel}"
+        return f"explore {self.direction}" if self.direction else "explore"
 
     def to_dict(self) -> dict[str, Any]:
+        """v2 fields are left out while unset, so v1 actions serialise (and key
+        the recorded LLM responses) exactly as before."""
         payload = asdict(self)
-        payload["start"] = asdict(self.start)
-        payload["resources"] = [
-            {"x": position.x, "z": position.z, "block": block}
-            for position, block in self.resources.items()
-        ]
+        for name in _V2_ACTION_FIELDS:
+            if payload[name] is None:
+                del payload[name]
         return payload
+
+
+_V2_ACTION_FIELDS = ("fuel", "ingredient", "direction")
 
 
 @dataclass
 class Observation:
-    task_id: str
-    position: Position
+    position: tuple[float, float, float]
     inventory: dict[str, int]
-    visible_blocks: dict[str, int]
-    action_count: int
-    action_budget: int
+    nearby: dict[str, int]  # block type -> count within the 16-block view
+    blocks_walked: float = 0.0
+
+
+@dataclass
+class Outcome:
+    """What the world reported for one action, read from server-confirmed state."""
+
+    ok: bool
+    error: str | None = None
+    block_removed: bool | None = None  # mine only
+    drops: dict[str, int] = field(default_factory=dict)  # mine only, exact
+    picked_up: dict[str, int] = field(default_factory=dict)  # mine only, tolerant
+    inventory_delta: dict[str, int] = field(default_factory=dict)
+    inventory: dict[str, int] = field(default_factory=dict)
+    blocks_walked: float = 0.0
+    detail: dict[str, Any] = field(default_factory=dict)
+    # v2: getting into position before the step itself (tolerant):
+    # {"distance": float, "dug": {...}, "placed": {...}, "picked_up": {...}}
+    travel: dict[str, Any] = field(default_factory=dict)
+    # v2: bot events during the call, e.g. {"seq": 41, "type": "damage", "amount": 2.0}
+    events: list[dict[str, Any]] = field(default_factory=list)
+
+
+@dataclass
+class Status:
+    """The bot's condition (v2 /status) and its events after a given seq."""
+
+    health: float
+    food: int
+    position: tuple[float, float, float]
+    alive: bool = True
+    events: list[dict[str, Any]] = field(default_factory=list)
+    last_seq: int = 0
+
+
+@dataclass
+class Task:
+    task_id: str  # "t1", "t2", "t3", "h3"
+    split: Literal["train", "holdout"]
     goal_item: str
     goal_count: int
-    done: bool
-    success: bool
-    last_message: str = ""
+    start_inventory: dict[str, int]
+    world_rules: tuple[str, ...]  # changed rules switched on, e.g. ("r2",)
+    budget: int  # adapter actions
+    description: str
 
 
 @dataclass
-class ActionResult:
-    ok: bool
-    message: str
-    observation: Observation
+class Rule:
+    """A STRIPS-style operator with the evidence for it.
 
+    Mine rules: preconditions {"tool_any": [...]} (empty list = any tool or bare hand),
+    effects {"block_removed": true, "drops": {...}}.
+    Craft rules: preconditions {"consumes": {...}, "station": "crafting_table" | None},
+    effects {"gains": {...}} per recipe run.
+    Smelt rules (v2): preconditions {"consumes": {...}, "station": "furnace",
+    "fuel_any": [...]}, effects {"gains": {...}} per item smelted.
+    v2 rules use normalized names ("#planks", "coal_ore"); see docs/v2-interfaces.md.
+    """
 
-@dataclass
-class StepRecord:
-    action: Action
-    ok: bool
-    message: str
-    predicted_effects: list[str] = field(default_factory=list)
-    verified_effects: list[str] = field(default_factory=list)
-
-
-@dataclass
-class Episode:
-    task_id: str
-    mode: str
-    success: bool
-    steps: list[StepRecord]
-    final_observation: Observation
-    used_skills: list[str] = field(default_factory=list)
-    estimated_output_tokens: int = 0
+    id: str
+    action: dict[str, str]  # {"type": "mine", "block": ...} or {"type": "craft", "item": ...}
+    preconditions: dict[str, Any]
+    effects: dict[str, Any]
+    status: RuleStatus = "hypothesis"
+    source: Literal["prior", "revision"] = "prior"
+    scope: str = "train"  # "train" or the holdout world id that proposed it
+    rank: int = 0  # order among sibling revision hypotheses
+    rationale: str = ""
+    revision_of: str | None = None
+    # Transition ids. confirmed/contradicted come from replay within the rule's
+    # scope; counterexamples are contradictions seen in other worlds.
+    evidence: dict[str, list[str]] = field(
+        default_factory=lambda: {"confirmed": [], "contradicted": [], "counterexamples": []}
+    )
+    # v2: the declared kind of check (verifier.py's whitelists take precedence),
+    # and the epoch of its (world, action, family) key it was proposed in.
+    check: RuleCheck = "exact"
+    epoch: int = 0
 
     @property
-    def action_count(self) -> int:
-        return self.final_observation.action_count
+    def kind(self) -> str:
+        return self.action["type"]
 
     @property
-    def failed_actions(self) -> int:
-        return sum(1 for step in self.steps if not step.ok)
+    def subject(self) -> str:
+        return self.action["block"] if self.kind == "mine" else self.action["item"]
 
+    def yields(self) -> dict[str, int]:
+        if self.kind == "mine":
+            return dict(self.effects.get("drops", {}))
+        return dict(self.effects.get("gains", {}))
 
-@dataclass
-class WorldRule:
-    rule_id: str
-    preconditions: list[str]
-    predicted_effects: list[str]
-    evidence: list[str] = field(default_factory=list)
-    confidence: int = 1
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "Rule":
+        return cls(**payload)
 
 
 @dataclass
 class Skill:
-    skill_id: str
-    goal_item: str
-    preconditions: list[str]
-    steps: list[str]
-    postconditions: list[str]
-    validator: str
-    version: int = 1
-    evidence: list[str] = field(default_factory=list)
+    """A compiled plan: the rule applications that reached a goal, by rule id."""
 
+    id: str
+    goal_item: str
+    goal_count: int
+    rule_ids: list[str]
+    steps: list[dict[str, Any]]
+    status: Literal["ok", "flagged"] = "ok"
+    flagged_by: str | None = None
+    evidence: list[str] = field(default_factory=list)  # episode ids
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "Skill":
+        return cls(**payload)
+
+
+@dataclass
+class EpisodeResult:
+    episode_id: str
+    system: str
+    task_id: str
+    layout_seed: int
+    world_id: str
+    success: bool
+    actions: int
+    llm_tokens: int
+    llm_calls: int
+    blocks_walked: float
+    repeated_failures: int
+    contradictions: int
+    actions_after_contradiction: int | None
+    revisions: int
+    final_inventory: dict[str, int]
+    used_skills: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)

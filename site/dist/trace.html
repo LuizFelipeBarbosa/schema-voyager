@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="Replays or follows one SchemaVoyager episode trace: plan, current step, predicted vs observed effects, and schema store changes." />
+    <title>SchemaVoyager // Trace</title>
+    <link rel="stylesheet" href="trace.css" />
+  </head>
+  <body>
+    <div class="layout">
+      <iframe class="viewer" id="viewer" title="Minecraft viewer" hidden></iframe>
+      <main class="panel">
+        <header class="bar">
+          <span class="brand"><span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>SCHEMAVOYAGER <b>//</b> TRACE</span>
+          <select id="picker" aria-label="Episode trace"></select>
+        </header>
+
+        <section class="life" id="life" hidden>
+          <div class="life-top">
+            <div class="life-follow" id="life-follow"></div>
+            <div class="life-tools">
+              <span class="camera" id="camera" hidden>
+                <button data-camera="third" title="Third person: the camera follows the bot from behind">3rd person</button><button data-camera="first" title="First person: the bot's eyes">1st person</button>
+              </span>
+              <button class="pin" id="pin" title="Freeze the panel, the route map and the camera until clicked again"></button>
+            </div>
+          </div>
+          <div class="goal-card" id="life-goal"></div>
+          <div class="life-story">
+            <div class="life-now">
+              <div id="life-revision"></div>
+              <div id="life-hypothesis"></div>
+              <div id="life-changes"></div>
+            </div>
+            <section class="card" id="life-plan"></section>
+          </div>
+          <section class="route" id="life-route">
+            <div class="route-head"><b>ROUTE</b><span id="route-note"></span></div>
+            <canvas id="route-canvas" title="Click to pin or follow"></canvas>
+            <p class="empty" id="route-empty">no route data</p>
+          </section>
+          <section class="strip" id="life-overview"></section>
+        </section>
+
+        <section class="episode" id="episode"></section>
+        <section class="counters" id="counters"></section>
+
+        <div class="cards">
+          <div class="column">
+            <section class="card plan-card" id="plan-card"></section>
+            <section class="card step-card" id="step-card"></section>
+          </div>
+          <div class="column">
+            <section class="card store-card" id="store-card"></section>
+            <section class="card log-card">
+              <div class="card-head"><b>EVENTS</b><span class="hint">click to jump</span></div>
+              <ol class="log" id="log"></ol>
+            </section>
+          </div>
+        </div>
+
+        <footer class="controls" aria-label="Playback">
+          <button data-action="start" title="First event (Home)">⏮</button>
+          <button data-action="prev" title="Previous event (←)">◀</button>
+          <button data-action="play" class="play" id="play" title="Play or pause (space)">▶</button>
+          <button data-action="next" title="Next event (→)">▶|</button>
+          <button data-action="end" title="Latest event (End)">⏭</button>
+          <input type="range" id="scrub" min="0" max="0" value="0" aria-label="Event position" />
+          <span class="position" id="position">0 / 0</span>
+          <select id="speed" aria-label="Playback speed">
+            <option value="1">1×</option>
+            <option value="2">2×</option>
+            <option value="4">4×</option>
+            <option value="10">10×</option>
+          </select>
+        </footer>
+      </main>
+    </div>
+    <div class="drop-hint" id="drop-hint" hidden><span>Drop a <code>.jsonl</code> episode trace</span></div>
+    <script src="life.js"></script>
+    <script src="minimap.js"></script>
+    <script src="trace.js"></script>
+  </body>
+</html>

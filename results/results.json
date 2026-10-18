@@ -1,0 +1,725 @@
+[
+  {
+    "episode_id": "D/t1/L1",
+    "system": "D",
+    "task_id": "t1",
+    "layout_seed": 1,
+    "world_id": "train",
+    "success": true,
+    "actions": 9,
+    "llm_tokens": 0,
+    "llm_calls": 0,
+    "blocks_walked": 6.6,
+    "repeated_failures": 0,
+    "contradictions": 0,
+    "actions_after_contradiction": null,
+    "revisions": 0,
+    "final_inventory": {
+      "stick": 2,
+      "wooden_pickaxe": 1,
+      "oak_planks": 3,
+      "crafting_table": 1
+    },
+    "used_skills": []
+  },
+  {
+    "episode_id": "D/t1/L2",
+    "system": "D",
+    "task_id": "t1",
+    "layout_seed": 2,
+    "world_id": "train",
+    "success": true,
+    "actions": 9,
+    "llm_tokens": 0,
+    "llm_calls": 0,
+    "blocks_walked": 4.7,
+    "repeated_failures": 0,
+    "contradictions": 0,
+    "actions_after_contradiction": null,
+    "revisions": 0,
+    "final_inventory": {
+      "stick": 2,
+      "wooden_pickaxe": 1,
+      "oak_planks": 3,
+      "crafting_table": 1
+    },
+    "used_skills": [
+      "skill_wooden_pickaxe"
+    ]
+  },
+  {
+    "episode_id": "D/t2/L1",
+    "system": "D",
+    "task_id": "t2",
+    "layout_seed": 1,
+    "world_id": "train",
+    "success": true,
+    "actions": 17,
+    "llm_tokens": 0,
+    "llm_calls": 0,
+    "blocks_walked": 57,
+    "repeated_failures": 0,
+    "contradictions": 0,
+    "actions_after_contradiction": null,
+    "revisions": 0,
+    "final_inventory": {
+      "stone_pickaxe": 1,
+      "oak_planks": 3,
+      "wooden_pickaxe": 1,
+      "crafting_table": 1
+    },
+    "used_skills": [
+      "skill_wooden_pickaxe"
+    ]
+  },
+  {
+    "episode_id": "D/t2/L2",
+    "system": "D",
+    "task_id": "t2",
+    "layout_seed": 2,
+    "world_id": "train",
+    "success": true,
+    "actions": 14,
+    "llm_tokens": 0,
+    "llm_calls": 0,
+    "blocks_walked": 16,
+    "repeated_failures": 0,
+    "contradictions": 0,
+    "actions_after_contradiction": null,
+    "revisions": 0,
+    "final_inventory": {
+      "stone_pickaxe": 1,
+      "oak_planks": 3,
+      "crafting_table": 1,
+      "wooden_pickaxe": 1
+    },
+    "used_skills": [
+      "skill_wooden_pickaxe",
+      "skill_stone_pickaxe"
+    ]
+  },
+  {
+    "episode_id": "D/t3/L1",
+    "system": "D",
+    "task_id": "t3",
+    "layout_seed": 1,
+    "world_id": "train",
+    "success": true,
+    "actions": 11,
+    "llm_tokens": 0,
+    "llm_calls": 0,
+    "blocks_walked": 14.3,
+    "repeated_failures": 0,
+    "contradictions": 0,
+    "actions_after_contradiction": null,
+    "revisions": 0,
+    "final_inventory": {
+      "stick": 1,
+      "oak_planks": 3,
+      "torch": 4,
+      "crafting_table": 1,
+      "wooden_pickaxe": 1
+    },
+    "used_skills": [
+      "skill_wooden_pickaxe"
+    ]
+  },
+  {
+    "episode_id": "D/t3/L2",
+    "system": "D",
+    "task_id": "t3",
+    "layout_seed": 2,
+    "world_id": "train",
+    "success": true,
+    "actions": 11,
+    "llm_tokens": 0,
+    "llm_calls": 0,
+    "blocks_walked": 15.2,
+    "repeated_failures": 0,
+    "contradictions": 0,
+    "actions_after_contradiction": null,
+    "revisions": 0,
+    "final_inventory": {
+      "stick": 1,
+      "oak_planks": 3,
+      "torch": 4,
+      "crafting_table": 1,
+      "wooden_pickaxe": 1
+    },
+    "used_skills": [
+      "skill_wooden_pickaxe",
+      "skill_torch"
+    ]
+  },
+  {
+    "episode_id": "B/t1/L1",
+    "system": "B",
+    "task_id": "t1",
+    "layout_seed": 1,
+    "world_id": "train",
+    "success": true,
+    "actions": 11,
+    "llm_tokens": 2168,
+    "llm_calls": 2,
+    "blocks_walked": 7.1,
+    "repeated_failures": 0,
+    "contradictions": 0,
+    "actions_after_contradiction": null,
+    "revisions": 0,
+    "final_inventory": {
+      "oak_log": 1,
+      "stick": 2,
+      "wooden_pickaxe": 1,
+      "oak_planks": 3,
+      "crafting_table": 1
+    },
+    "used_skills": []
+  },
+  {
+    "episode_id": "B/t1/L2",
+    "system": "B",
+    "task_id": "t1",
+    "layout_seed": 2,
+    "world_id": "train",
+    "success": true,
+    "actions": 7,
+    "llm_tokens": 1148,
+    "llm_calls": 1,
+    "blocks_walked": 7.8,
+    "repeated_failures": 0,
+    "contradictions": 0,
+    "actions_after_contradiction": null,
+    "revisions": 0,
+    "final_inventory": {
+      "stick": 2,
+      "wooden_pickaxe": 1,
+      "oak_planks": 3,
+      "crafting_table": 1
+    },
+    "used_skills": [
+      "obtain_wooden_pickaxe"
+    ]
+  },
+  {
+    "episode_id": "B/t2/L1",
+    "system": "B",
+    "task_id": "t2",
+    "layout_seed": 1,
+    "world_id": "train",
+    "success": true,
+    "actions": 12,
+    "llm_tokens": 1733,
+    "llm_calls": 1,
+    "blocks_walked": 23.1,
+    "repeated_failures": 0,
+    "contradictions": 0,
+    "actions_after_contradiction": null,
+    "revisions": 0,
+    "final_inventory": {
+      "stick": 4,
+      "oak_planks": 1,
+      "stone_pickaxe": 1,
+      "crafting_table": 1,
+      "wooden_pickaxe": 1
+    },
+    "used_skills": [
+      "obtain_wooden_pickaxe"
+    ]
+  },
+  {
+    "episode_id": "B/t2/L2",
+    "system": "B",
+    "task_id": "t2",
+    "layout_seed": 2,
+    "world_id": "train",
+    "success": true,
+    "actions": 17,
+    "llm_tokens": 6281,
+    "llm_calls": 4,
+    "blocks_walked": 37.5,
+    "repeated_failures": 1,
+    "contradictions": 0,
+    "actions_after_contradiction": 3,
+    "revisions": 0,
+    "final_inventory": {
+      "oak_log": 1,
+      "stick": 4,
+      "oak_planks": 1,
+      "stone_pickaxe": 1,
+      "crafting_table": 1,
+      "wooden_pickaxe": 1
+    },
+    "used_skills": [
+      "obtain_stone_pickaxe",
+      "obtain_wooden_pickaxe"
+    ]
+  },
+  {
+    "episode_id": "B/t3/L1",
+    "system": "B",
+    "task_id": "t3",
+    "layout_seed": 1,
+    "world_id": "train",
+    "success": true,
+    "actions": 9,
+    "llm_tokens": 1781,
+    "llm_calls": 1,
+    "blocks_walked": 15.8,
+    "repeated_failures": 0,
+    "contradictions": 0,
+    "actions_after_contradiction": null,
+    "revisions": 0,
+    "final_inventory": {
+      "stick": 1,
+      "torch": 4,
+      "oak_planks": 3,
+      "crafting_table": 1,
+      "wooden_pickaxe": 1
+    },
+    "used_skills": [
+      "obtain_wooden_pickaxe",
+      "obtain_stone_pickaxe"
+    ]
+  },
+  {
+    "episode_id": "B/t3/L2",
+    "system": "B",
+    "task_id": "t3",
+    "layout_seed": 2,
+    "world_id": "train",
+    "success": true,
+    "actions": 9,
+    "llm_tokens": 1762,
+    "llm_calls": 1,
+    "blocks_walked": 17.1,
+    "repeated_failures": 0,
+    "contradictions": 0,
+    "actions_after_contradiction": null,
+    "revisions": 0,
+    "final_inventory": {
+      "stick": 1,
+      "torch": 4,
+      "oak_planks": 3,
+      "crafting_table": 1,
+      "wooden_pickaxe": 1
+    },
+    "used_skills": [
+      "obtain_torch",
+      "obtain_wooden_pickaxe",
+      "obtain_stone_pickaxe"
+    ]
+  },
+  {
+    "episode_id": "B+/t1/L1",
+    "system": "B+",
+    "task_id": "t1",
+    "layout_seed": 1,
+    "world_id": "train",
+    "success": true,
+    "actions": 13,
+    "llm_tokens": 3796,
+    "llm_calls": 3,
+    "blocks_walked": 11.4,
+    "repeated_failures": 1,
+    "contradictions": 0,
+    "actions_after_contradiction": null,
+    "revisions": 0,
+    "final_inventory": {
+      "oak_log": 2,
+      "stick": 2,
+      "oak_planks": 3,
+      "wooden_pickaxe": 1,
+      "crafting_table": 1
+    },
+    "used_skills": []
+  },
+  {
+    "episode_id": "B+/t1/L2",
+    "system": "B+",
+    "task_id": "t1",
+    "layout_seed": 2,
+    "world_id": "train",
+    "success": true,
+    "actions": 8,
+    "llm_tokens": 1177,
+    "llm_calls": 1,
+    "blocks_walked": 7.8,
+    "repeated_failures": 0,
+    "contradictions": 0,
+    "actions_after_contradiction": null,
+    "revisions": 0,
+    "final_inventory": {
+      "stick": 2,
+      "oak_planks": 7,
+      "wooden_pickaxe": 1,
+      "crafting_table": 1
+    },
+    "used_skills": [
+      "obtain_wooden_pickaxe"
+    ]
+  },
+  {
+    "episode_id": "B+/t2/L1",
+    "system": "B+",
+    "task_id": "t2",
+    "layout_seed": 1,
+    "world_id": "train",
+    "success": true,
+    "actions": 12,
+    "llm_tokens": 1793,
+    "llm_calls": 1,
+    "blocks_walked": 27.8,
+    "repeated_failures": 0,
+    "contradictions": 0,
+    "actions_after_contradiction": null,
+    "revisions": 0,
+    "final_inventory": {
+      "stone_pickaxe": 1,
+      "oak_planks": 7,
+      "crafting_table": 1,
+      "wooden_pickaxe": 1
+    },
+    "used_skills": [
+      "obtain_wooden_pickaxe"
+    ]
+  },
+  {
+    "episode_id": "B+/t2/L2",
+    "system": "B+",
+    "task_id": "t2",
+    "layout_seed": 2,
+    "world_id": "train",
+    "success": true,
+    "actions": 14,
+    "llm_tokens": 4937,
+    "llm_calls": 3,
+    "blocks_walked": 18.6,
+    "repeated_failures": 0,
+    "contradictions": 0,
+    "actions_after_contradiction": null,
+    "revisions": 0,
+    "final_inventory": {
+      "oak_log": 1,
+      "stone_pickaxe": 1,
+      "oak_planks": 3,
+      "crafting_table": 1,
+      "wooden_pickaxe": 1
+    },
+    "used_skills": [
+      "obtain_stone_pickaxe",
+      "obtain_wooden_pickaxe"
+    ]
+  },
+  {
+    "episode_id": "B+/t3/L1",
+    "system": "B+",
+    "task_id": "t3",
+    "layout_seed": 1,
+    "world_id": "train",
+    "success": true,
+    "actions": 11,
+    "llm_tokens": 3960,
+    "llm_calls": 2,
+    "blocks_walked": 17.7,
+    "repeated_failures": 0,
+    "contradictions": 0,
+    "actions_after_contradiction": null,
+    "revisions": 0,
+    "final_inventory": {
+      "oak_planks": 3,
+      "coal": 1,
+      "stick": 1,
+      "torch": 4,
+      "crafting_table": 1,
+      "wooden_pickaxe": 1
+    },
+    "used_skills": [
+      "obtain_wooden_pickaxe",
+      "obtain_stone_pickaxe"
+    ]
+  },
+  {
+    "episode_id": "B+/t3/L2",
+    "system": "B+",
+    "task_id": "t3",
+    "layout_seed": 2,
+    "world_id": "train",
+    "success": true,
+    "actions": 12,
+    "llm_tokens": 3645,
+    "llm_calls": 2,
+    "blocks_walked": 21.1,
+    "repeated_failures": 0,
+    "contradictions": 0,
+    "actions_after_contradiction": null,
+    "revisions": 0,
+    "final_inventory": {
+      "oak_log": 1,
+      "coal": 1,
+      "oak_planks": 3,
+      "stick": 1,
+      "torch": 4,
+      "crafting_table": 1,
+      "wooden_pickaxe": 1
+    },
+    "used_skills": [
+      "obtain_torch",
+      "obtain_wooden_pickaxe",
+      "obtain_stone_pickaxe"
+    ]
+  },
+  {
+    "episode_id": "D/h3/L6",
+    "system": "D",
+    "task_id": "h3",
+    "layout_seed": 6,
+    "world_id": "we77d2",
+    "success": true,
+    "actions": 17,
+    "llm_tokens": 1860,
+    "llm_calls": 1,
+    "blocks_walked": 20.4,
+    "repeated_failures": 0,
+    "contradictions": 1,
+    "actions_after_contradiction": 0,
+    "revisions": 1,
+    "final_inventory": {
+      "oak_planks": 1,
+      "stick": 3,
+      "torch": 4,
+      "crafting_table": 1,
+      "wooden_pickaxe": 1,
+      "stone_pickaxe": 1
+    },
+    "used_skills": [
+      "skill_wooden_pickaxe",
+      "skill_torch"
+    ]
+  },
+  {
+    "episode_id": "B/h3/L6",
+    "system": "B",
+    "task_id": "h3",
+    "layout_seed": 6,
+    "world_id": "wf7e7e",
+    "success": false,
+    "actions": 18,
+    "llm_tokens": 6511,
+    "llm_calls": 4,
+    "blocks_walked": 37.8,
+    "repeated_failures": 7,
+    "contradictions": 0,
+    "actions_after_contradiction": 1,
+    "revisions": 0,
+    "final_inventory": {
+      "stick": 2,
+      "oak_planks": 3,
+      "crafting_table": 1,
+      "wooden_pickaxe": 1
+    },
+    "used_skills": [
+      "obtain_torch",
+      "obtain_wooden_pickaxe",
+      "obtain_stone_pickaxe"
+    ]
+  },
+  {
+    "episode_id": "B+/h3/L6",
+    "system": "B+",
+    "task_id": "h3",
+    "layout_seed": 6,
+    "world_id": "w0e6b2",
+    "success": false,
+    "actions": 17,
+    "llm_tokens": 6964,
+    "llm_calls": 4,
+    "blocks_walked": 22.6,
+    "repeated_failures": 4,
+    "contradictions": 0,
+    "actions_after_contradiction": 2,
+    "revisions": 0,
+    "final_inventory": {
+      "oak_log": 1,
+      "stick": 2,
+      "oak_planks": 3,
+      "crafting_table": 1,
+      "wooden_pickaxe": 1,
+      "cobblestone": 1
+    },
+    "used_skills": [
+      "obtain_torch",
+      "obtain_wooden_pickaxe",
+      "obtain_stone_pickaxe"
+    ]
+  },
+  {
+    "episode_id": "D/h3/L7",
+    "system": "D",
+    "task_id": "h3",
+    "layout_seed": 7,
+    "world_id": "wda661",
+    "success": true,
+    "actions": 17,
+    "llm_tokens": 1850,
+    "llm_calls": 1,
+    "blocks_walked": 15,
+    "repeated_failures": 0,
+    "contradictions": 1,
+    "actions_after_contradiction": 0,
+    "revisions": 1,
+    "final_inventory": {
+      "oak_planks": 1,
+      "stick": 3,
+      "torch": 4,
+      "crafting_table": 1,
+      "wooden_pickaxe": 1,
+      "stone_pickaxe": 1
+    },
+    "used_skills": [
+      "skill_wooden_pickaxe"
+    ]
+  },
+  {
+    "episode_id": "B/h3/L7",
+    "system": "B",
+    "task_id": "h3",
+    "layout_seed": 7,
+    "world_id": "wec7ea",
+    "success": true,
+    "actions": 20,
+    "llm_tokens": 6696,
+    "llm_calls": 4,
+    "blocks_walked": 19.8,
+    "repeated_failures": 4,
+    "contradictions": 0,
+    "actions_after_contradiction": 1,
+    "revisions": 0,
+    "final_inventory": {
+      "oak_planks": 1,
+      "stick": 3,
+      "torch": 4,
+      "crafting_table": 1,
+      "wooden_pickaxe": 1,
+      "stone_pickaxe": 1
+    },
+    "used_skills": [
+      "obtain_torch",
+      "obtain_wooden_pickaxe",
+      "obtain_stone_pickaxe"
+    ]
+  },
+  {
+    "episode_id": "B+/h3/L7",
+    "system": "B+",
+    "task_id": "h3",
+    "layout_seed": 7,
+    "world_id": "w52f6d",
+    "success": false,
+    "actions": 25,
+    "llm_tokens": 6942,
+    "llm_calls": 4,
+    "blocks_walked": 115.2,
+    "repeated_failures": 9,
+    "contradictions": 0,
+    "actions_after_contradiction": 2,
+    "revisions": 0,
+    "final_inventory": {
+      "oak_log": 1,
+      "stick": 2,
+      "oak_planks": 3,
+      "crafting_table": 1,
+      "wooden_pickaxe": 1
+    },
+    "used_skills": [
+      "obtain_torch",
+      "obtain_wooden_pickaxe",
+      "obtain_stone_pickaxe"
+    ]
+  },
+  {
+    "episode_id": "D/h3/L8",
+    "system": "D",
+    "task_id": "h3",
+    "layout_seed": 8,
+    "world_id": "w3919c",
+    "success": true,
+    "actions": 52,
+    "llm_tokens": 1846,
+    "llm_calls": 1,
+    "blocks_walked": 111.5,
+    "repeated_failures": 17,
+    "contradictions": 1,
+    "actions_after_contradiction": 0,
+    "revisions": 1,
+    "final_inventory": {
+      "oak_planks": 1,
+      "stick": 3,
+      "torch": 4,
+      "crafting_table": 1,
+      "wooden_pickaxe": 1,
+      "stone_pickaxe": 1
+    },
+    "used_skills": [
+      "skill_wooden_pickaxe",
+      "skill_stone_pickaxe"
+    ]
+  },
+  {
+    "episode_id": "B/h3/L8",
+    "system": "B",
+    "task_id": "h3",
+    "layout_seed": 8,
+    "world_id": "wf01d4",
+    "success": false,
+    "actions": 16,
+    "llm_tokens": 6697,
+    "llm_calls": 4,
+    "blocks_walked": 14.4,
+    "repeated_failures": 5,
+    "contradictions": 0,
+    "actions_after_contradiction": 1,
+    "revisions": 0,
+    "final_inventory": {
+      "oak_log": 1,
+      "stick": 2,
+      "oak_planks": 3,
+      "crafting_table": 1,
+      "wooden_pickaxe": 1
+    },
+    "used_skills": [
+      "obtain_torch",
+      "obtain_wooden_pickaxe",
+      "obtain_stone_pickaxe"
+    ]
+  },
+  {
+    "episode_id": "B+/h3/L8",
+    "system": "B+",
+    "task_id": "h3",
+    "layout_seed": 8,
+    "world_id": "w89223",
+    "success": true,
+    "actions": 23,
+    "llm_tokens": 7575,
+    "llm_calls": 4,
+    "blocks_walked": 25.9,
+    "repeated_failures": 4,
+    "contradictions": 0,
+    "actions_after_contradiction": 2,
+    "revisions": 0,
+    "final_inventory": {
+      "oak_log": 1,
+      "oak_planks": 1,
+      "stick": 3,
+      "torch": 4,
+      "stone_pickaxe": 1,
+      "wooden_pickaxe": 1,
+      "crafting_table": 1
+    },
+    "used_skills": [
+      "obtain_torch",
+      "obtain_wooden_pickaxe",
+      "obtain_stone_pickaxe"
+    ]
+  }
+]

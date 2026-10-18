@@ -1,32 +1,48 @@
 from __future__ import annotations
 
-from collections import Counter
-from typing import Protocol
+from typing import Any, Protocol
 
-from .models import Action, ActionResult, Observation, Position, TaskSpec
+from .layouts import Layout
+from .models import Action, Observation, Outcome, Status, Task
+
+DIRECTIONS = ("N", "NE", "E", "SE", "S", "SW", "W", "NW")  # N is -z, E is +x
+# direction -> raw block id -> {"x", "y", "z", "distance", "exposed"}
+LookResult = dict[str, dict[str, dict[str, Any]]]
 
 
-class MinecraftAdapter(Protocol):
-    """Runtime surface required by the agent loop.
+class Backend(Protocol):
+    """The action surface every system uses, in the simulator or on a real server.
 
-    A MineDojo, Mineflayer, or Voyager-backed implementation can satisfy this
-    protocol without changing planning, schema persistence, or evaluation.
+    Agents only see observations and outcomes. They never read the world's
+    recipe or loot tables.
     """
 
-    task: TaskSpec
-    position: Position
-    inventory: Counter
+    name: str
 
-    @property
-    def is_done(self) -> bool: ...
-
-    @property
-    def is_success(self) -> bool: ...
-
-    def reset(self) -> Observation: ...
+    def reset(self, task: Task, layout: Layout) -> Observation: ...
 
     def observe(self) -> Observation: ...
 
-    def step(self, action: Action) -> ActionResult: ...
+    def act(self, action: Action) -> Outcome: ...
 
-    def nearest_block(self, block: str) -> Position | None: ...
+    def say(self, message: str) -> None: ...
+
+
+class LifeBackend(Backend, Protocol):
+    """A backend for one continuous life (v2): no world reset between goals.
+
+    act() also accepts group and family targets ("#log", "coal_ore"), which the
+    backend expands or resolves through normalize.py. See docs/v2-interfaces.md.
+    """
+
+    def begin_episode(self) -> Observation:
+        """Per-goal bookkeeping only (the bot's skip list and walked distance); never touches the world."""
+        ...
+
+    def status(self, since: int = 0) -> Status: ...
+
+    def look(self, blocks: list[str], radius: int = 64) -> LookResult: ...
+
+    def probe(self, grid: list[list[str | None]]) -> dict[str, Any]:
+        """The recipe output for a crafting grid, without spending anything: {"output": {"item", "count"} | None}."""
+        ...
