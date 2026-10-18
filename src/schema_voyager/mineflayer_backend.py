@@ -52,6 +52,7 @@ class MineflayerBackend:
         # A natural-mode life never resets an arena.
         self.arena = None if natural else (arena or Arena())
         self._latest_inventory: dict[str, int] | None = None
+        self._keep_out: tuple[tuple[int, int, int], tuple[int, int, int]] | None = None
 
     def reset(self, task: Task, layout: Layout) -> Observation:
         self.arena.prepare_world()
@@ -66,6 +67,8 @@ class MineflayerBackend:
         return observation
 
     def act(self, action: Action) -> Outcome:
+        if action.kind in ("place", "clear"):
+            return self._build_step(action)
         if self.natural:
             return self._act_natural(action)
         if action.kind == "mine":
@@ -98,6 +101,50 @@ class MineflayerBackend:
             inventory=self.observe().inventory,
             blocks_walked=body.get("blocks_walked", 0.0),
             detail=_detail(body, "position"),
+        )
+
+    # --- v3.4: building -------------------------------------------------------
+
+    def set_keep_out(self, box: tuple[tuple[int, int, int], tuple[int, int, int]] | None) -> None:
+        self._keep_out = box
+
+    def scan(self, origin: tuple[int, int, int], size: tuple[int, int, int]) -> dict[tuple[int, int, int], str | None]:
+        body = self._post("/scan", {"origin": list(origin), "size": list(size)})
+        ox, oy, oz = origin
+        return {
+            (ox + x, oy + y, oz + z): name
+            for y, layer in enumerate(body["layers"])
+            for z, row in enumerate(layer)
+            for x, name in enumerate(row)
+        }
+
+    def _build_step(self, action: Action) -> Outcome:
+        """A place or a clear of one cell, the same in both modes."""
+        if action.pos is None:
+            raise ValueError(f"a {action.kind} action needs a pos")
+        x, y, z = action.pos
+        payload: dict[str, Any] = {"x": x, "y": y, "z": z, "scaffold": list(SCAFFOLD_BLOCKS)}
+        if self._keep_out is not None:
+            origin, size = self._keep_out
+            payload["keep_out"] = {"origin": list(origin), "size": list(size)}
+        if action.kind == "place":
+            body = self._post("/place", {"block": action.target} | payload)
+            detail_keys = ("block", "placed", "found", "inventory_before_step", "detail")
+        else:
+            body = self._post("/clear", payload)
+            detail_keys = ("cleared", "removed", "found", "inventory_before_step", "detail")
+        inventory = self._inventory(body)
+        before = body.get("inventory_before_step")
+        travel = body.get("travel") or {}
+        return Outcome(
+            ok=body["ok"],
+            error=body.get("error"),
+            inventory_delta=_difference(inventory, before) if before is not None else {},
+            inventory=inventory,
+            blocks_walked=travel.get("distance", 0.0),
+            detail=_detail(body, *detail_keys) | {"target": {"x": x, "y": y, "z": z}},
+            travel=travel,
+            events=body.get("events") or [],
         )
 
     def _inventory(self, body: dict[str, Any]) -> dict[str, int]:
@@ -382,6 +429,11 @@ def _interruption(body: dict[str, Any]) -> dict[str, Any]:
     if body.get("error") != "interrupted" or not isinstance(body.get("detail"), dict):
         return {}
     return {key: body["detail"][key] for key in ("threat", "outcome") if key in body["detail"]}
+
+
+def _difference(after: dict[str, int], before: dict[str, int]) -> dict[str, int]:
+    """after minus before, without the items that did not change."""
+    return {item: change for item in after.keys() | before.keys() if (change := after.get(item, 0) - before.get(item, 0))}
 
 
 def _merge_travel(travels: list[dict[str, Any]]) -> dict[str, Any]:
