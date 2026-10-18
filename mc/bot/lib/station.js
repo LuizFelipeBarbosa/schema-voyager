@@ -4,10 +4,12 @@
 const { Vec3 } = require('vec3')
 const { goals } = require('mineflayer-pathfinder')
 const {
-  AIR_BLOCKS, findInventoryItem, gotoGoal, inventoryCounts, pickUpEntities, settleInventory, sleepTicks, watchDrops
+  AIR_BLOCKS, emptyHand, findInventoryItem, gotoGoal, inventoryCounts, pickUpEntities, readDroppedStack, settleInventory, sleepTicks, watchDrops
 } = require('./world')
+const { watchServerBlockChange } = require('./blockchange')
 const { withWalkingMovements } = require('./goto')
-const { cheapestHarvestTool } = require('./movements')
+const { FALLING_BLOCKS, cheapestHarvestTool } = require('./movements')
+const { MAX_DIG_MS, checkClear, fastestTool, recentre } = require('./place')
 const { insideAny } = require('./protect')
 const { recordTravel } = require('./travel')
 
@@ -19,7 +21,13 @@ const STANDING_RADIUS = 24 // a remembered station this close is walked back to
 const WALK_BACK_TIMEOUT_MS = 15000
 const HOME_WALK_TIMEOUT_MS = 45000
 const HOME_WALK_RANGE = 3 // a station is used from 4.5 blocks; 3 spares a step that a canopy or ledge can block
+const NICHE_CONFIRM_TIMEOUT_MS = 2000
 const HOME_WALK_STALL_MS = 8000 // no progress this long answers station_unreachable instead of waiting out the timeout
+
+// A niche is never one of these: a block that can hold things or does something when it is dug.
+const NICHE_NEVER = /^infested_|chest$|barrel$|shulker_box$|^(crafting_table|furnace|blast_furnace|smoker|hopper|dispenser|dropper|brewing_stand|enchanting_table|smithing_table|cartography_table|fletching_table|grindstone|loom|stonecutter|lectern|anvil|chipped_anvil|damaged_anvil|spawner|trial_spawner|vault|decorated_pot)$/
+const SIDES = [new Vec3(1, 0, 0), new Vec3(-1, 0, 0), new Vec3(0, 0, 1), new Vec3(0, 0, -1)]
+const AROUND = [...SIDES, new Vec3(0, 1, 0), new Vec3(0, -1, 0)]
 
 // A station this handler placed and won't dig back up because of an abort:
 // remember it (name and position) in the episode for later actions.
@@ -85,13 +93,13 @@ async function reachStation (bot, name, { episode = null, signal = null } = {}) 
 // usedHome, travel}: placedPos is set when the bot placed the table or must dig
 // up a remembered one (`remembered`); or {error, detail, station_gone,
 // station_unreachable, travel} (the keys that apply).
-async function acquireTable (bot, { station = null, protect = [], episode = null, signal = null } = {}) {
+async function acquireTable (bot, { station = null, protect = [], episode = null, tracker = null, signal = null } = {}) {
   const reached = await reachStation(bot, 'crafting_table', { episode, signal })
   if (reached) {
     const { station: table, remembered } = reached
     return { table, placedPos: remembered ? table.position : null, remembered }
   }
-  const { station: table, ...rest } = await placeHeldOrUseHome(bot, 'crafting_table', { station, protect, episode, signal })
+  const { station: table, ...rest } = await placeHeldOrUseHome(bot, 'crafting_table', { station, protect, episode, tracker, signal })
   return rest.error ? rest : { table, remembered: false, ...rest }
 }
 
@@ -102,13 +110,17 @@ async function acquireTable (bot, { station = null, protect = [], episode = null
 // travel} for the home one, or {error, detail, station_gone, station_unreachable,
 // travel} (the keys that apply). Home stations stand outside the walls, so the
 // walk never digs, places or opens a door.
-async function placeHeldOrUseHome (bot, name, { station = null, protect = [], episode = null, signal = null } = {}) {
+async function placeHeldOrUseHome (bot, name, { station = null, protect = [], episode = null, tracker = null, signal = null } = {}) {
   // with no home station to fall back on, placing is still tried, so a failure is reported as it always was
-  const canPlace = findSpots(bot, protect).length > 0 || !station
+  const canPlace = !station || canPlaceHere(bot, protect)
   if (canPlace && findInventoryItem(bot, name)) {
     try {
-      const placed = await placeStation(bot, name, { protect, signal })
-      return { station: placed, placedPos: placed.position }
+      const placed = await placeStation(bot, name, { protect, episode, tracker, signal })
+      return {
+        station: placed.block,
+        placedPos: placed.block.position,
+        ...(placed.niche && { niche: placed.niche, nicheLateDrops: placed.lateDrops, held: placed.held, travel: placed.travel })
+      }
     } catch (err) {
       if (signal?.aborted) throw signal.reason
       return { error: 'craft_failed', detail: `could not place a ${name.replace('_', ' ')}: ${err.message}` }
@@ -134,22 +146,130 @@ async function placeHeldOrUseHome (bot, name, { station = null, protect = [], ep
   return { station: block, placedPos: null, usedHome: true, travel }
 }
 
+// Places the station and returns {block, niche, lateDrops, held, travel}: `niche` is
+// the cell dug to make room ([x, y, z], else null), `lateDrops` its drops that
+// were not picked up yet ({entity, stack}), `held` the inventory once the dig
+// is over and before the station leaves it, `travel` what the dig did.
+// When no cell is free the bot recentres in its cell, then digs a niche: at the
+// bottom of a shaft its own column is the only air. The dig is travel, not the
+// step's own: its drop is picked up here, and is no own drop of the tracker's.
+//
 // The server can refuse a cell that looks free here (say, an entity is in the
 // way), and asking again for the same cell gets the same answer. So each
 // refusal moves on to the next closest cell, a few ticks later.
-async function placeStation (bot, itemName, { protect = [], signal = null } = {}) {
-  const spots = findSpots(bot, protect).slice(0, MAX_CELLS)
+async function placeStation (bot, itemName, { protect = [], episode = null, tracker = null, signal = null } = {}) {
+  let spots = findSpots(bot, protect)
+  if (spots.length === 0) {
+    await recentre(bot, { signal })
+    spots = findSpots(bot, protect)
+  }
+  let dug = null
+  let held = null
+  let travel = null
+  if (spots.length === 0) {
+    tracker?.log.setPhase('travel')
+    const recording = recordTravel(bot, episode ?? { walked: 0 })
+    try {
+      dug = await digNiche(bot, protect, itemName, signal)
+      await recording.settle()
+      held = inventoryCounts(bot)
+    } finally {
+      travel = recording.finish()
+      tracker?.log.setPhase('step') // /craft and /smelt are in their step when they place
+    }
+    spots = findSpots(bot, protect)
+  }
+  spots = spots.slice(0, MAX_CELLS)
   if (spots.length === 0) throw new Error('no free spot next to the bot')
   let lastProblem = null
   for (const spot of spots) {
     signal?.throwIfAborted()
     lastProblem = await tryPlace(bot, itemName, spot)
-    if (!lastProblem) return bot.blockAt(spot.pos)
+    if (!lastProblem) return { block: bot.blockAt(spot.pos), niche: dug?.cell ?? null, lateDrops: dug?.lateDrops ?? [], held, travel }
     signal?.throwIfAborted()
     console.log(`warn: ${itemName} not placed at ${spot.pos}: ${lastProblem}`)
     await sleepTicks(RETRY_TICKS)
   }
   throw new Error(`refused at ${spots.length} cells, last: ${lastProblem}`)
+}
+
+// Whether a station could go next to the bot: a free cell now, or one once the
+// bot is in the middle of its cell, or a niche to dig. Moves nothing, digs nothing.
+function canPlaceHere (bot, protect) {
+  const centred = bot.entity.position.floored().offset(0.5, 0, 0.5)
+  return findSpots(bot, protect, centred).length > 0 || nicheCandidates(bot, protect, centred).length > 0
+}
+
+// The cells a niche can be dug in, quickest first: the sides of the bot's feet
+// and head cells (never the floor), with `at` as the bot's position. See digNiche.
+function nicheCandidates (bot, protect, at) {
+  const feet = at.floored()
+  const candidates = []
+  for (const dy of [0, 1]) {
+    for (const side of SIDES) {
+      const cell = feet.offset(side.x, dy, side.z)
+      if (overlapsBot(bot, cell, at) || insideAny(protect, cell)) continue
+      const block = bot.blockAt(cell)
+      if (!block || NICHE_NEVER.test(block.name)) continue
+      const check = checkClear(bot, cell)
+      if (check.error || check.alreadyClear) continue
+      if (AROUND.some((offset) => ['water', 'lava'].includes(bot.blockAt(cell.plus(offset))?.name))) continue
+      if (FALLING_BLOCKS.test(bot.blockAt(cell.offset(0, 1, 0))?.name ?? '')) continue
+      // the station needs a solid block to stand against once the cell is open
+      if (!AROUND.some((offset) => bot.blockAt(cell.plus(offset))?.boundingBox === 'block')) continue
+      const { tool, ms } = fastestTool(bot, block)
+      if (ms <= MAX_DIG_MS) candidates.push({ cell, block, tool, ms })
+    }
+  }
+  return candidates.sort((a, b) => a.ms - b.ms)
+}
+
+// Digs the quickest niche beside the bot, waits for the server to confirm it
+// and picks the drop up. Returns {cell: [x, y, z], lateDrops}, or null if there
+// is none or the dig failed. `lateDrops` are the drops the bot has not picked
+// up yet: {entity, stack}. A niche has no liquid, falling block or protected box
+// around it and is no container or station.
+async function digNiche (bot, protect, itemName, signal) {
+  const [best] = nicheCandidates(bot, protect, bot.entity.position)
+  if (!best) return null
+  const { cell, block, tool } = best
+  const watcher = watchDrops(bot, cell)
+  const confirmation = watchServerBlockChange(bot, cell, block.name)
+  let confirmed = false
+  try {
+    if (tool) await bot.equip(tool, 'hand')
+    else await emptyHand(bot)
+    await bot.dig(block, true)
+    confirmed = await confirmation.waitForConfirmation(NICHE_CONFIRM_TIMEOUT_MS)
+    await sleepTicks(DROP_WINDOW_TICKS)
+  } catch (err) {
+    if (signal?.aborted) throw signal.reason
+    console.log(`warn: could not dig a niche at ${cell}: ${err.message}`)
+  } finally {
+    confirmation.stop()
+  }
+  const { entities } = watcher.stop()
+  await pickUpEntities(bot, entities, { signal })
+  await settleInventory(bot)
+  if (!confirmed) return null
+  const lateDrops = entities
+    .filter((entity) => bot.entities[entity.id])
+    .map((entity) => ({ entity, stack: readDroppedStack(entity) }))
+    .filter((drop) => drop.stack)
+  console.log(`[station] dug a niche at ${cell.x} ${cell.y} ${cell.z} for a ${itemName.replace('_', ' ')}`)
+  return { cell: [cell.x, cell.y, cell.z], lateDrops }
+}
+
+// `delta` (item name -> change) without the niche drops that were picked up during
+// the step: they were not the step's gain. A drop still on the ground is not in it.
+function withoutLateNicheDrops (bot, delta, lateDrops) {
+  const rest = { ...delta }
+  for (const { entity, stack } of lateDrops) {
+    if (bot.entities[entity.id] || !(rest[stack.name] >= stack.count)) continue
+    rest[stack.name] -= stack.count
+    if (rest[stack.name] === 0) delete rest[stack.name]
+  }
+  return rest
 }
 
 // Null when the station stands at `spot.pos`, else what went wrong.
@@ -170,9 +290,9 @@ async function tryPlace (bot, itemName, spot) {
 // is the face of that block the station goes on. Cells on the ground come
 // first, then the closest; the others are for a bot standing on a pillar or a
 // ledge, with nothing solid at its own level. A cell inside a `protect` box is never one.
-function findSpots (bot, protect = []) {
-  const feet = bot.entity.position.floored()
-  const botPos = bot.entity.position
+// `botPos` is where the bot is taken to stand (the middle of its cell, to see what recentring frees).
+function findSpots (bot, protect = [], botPos = bot.entity.position) {
+  const feet = botPos.floored()
   // the face to place on, preferring the top of the block below the cell
   const faces = [new Vec3(0, 1, 0), new Vec3(1, 0, 0), new Vec3(-1, 0, 0), new Vec3(0, 0, 1), new Vec3(0, 0, -1), new Vec3(0, -1, 0)]
   const candidates = []
@@ -181,7 +301,7 @@ function findSpots (bot, protect = []) {
       for (let dz = -2; dz <= 2; dz++) {
         const pos = feet.offset(dx, dy, dz)
         if (!AIR_BLOCKS.has(bot.blockAt(pos)?.name)) continue
-        if (dy >= 0 && overlapsBot(bot, pos)) continue
+        if (dy >= 0 && overlapsBot(bot, pos, botPos)) continue
         if (insideAny(protect, pos)) continue
         const faceToCell = faces.find((face) => bot.blockAt(pos.minus(face))?.boundingBox === 'block')
         if (faceToCell) candidates.push({ pos, faceToCell, onGround: faceToCell.y === 1 && dy === 0 })
@@ -192,8 +312,8 @@ function findSpots (bot, protect = []) {
   return candidates.sort((a, b) => (b.onGround - a.onGround) || (distance(a) - distance(b)))
 }
 
-function overlapsBot (bot, cell) {
-  const { x, z } = bot.entity.position
+function overlapsBot (bot, cell, position = bot.entity.position) {
+  const { x, z } = position
   const halfWidth = 0.3 + 0.05 // player hitbox plus a small margin
   return cell.x < x + halfWidth && cell.x + 1 > x - halfWidth &&
     cell.z < z + halfWidth && cell.z + 1 > z - halfWidth
@@ -236,6 +356,6 @@ async function retrieveStation (bot, pos, itemName, countBefore, { withBestTool 
 }
 
 module.exports = {
-  acquireTable, findPlacedStation, findSpots, forgetStanding, overlapsBot, placeHeldOrUseHome, placeStation, reachStation,
-  rememberStanding, retrieveStation, validateStation
+  acquireTable, digNiche, findPlacedStation, findSpots, forgetStanding, overlapsBot, placeHeldOrUseHome, placeStation, reachStation,
+  rememberStanding, retrieveStation, validateStation, withoutLateNicheDrops
 }

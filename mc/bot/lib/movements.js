@@ -138,4 +138,4 @@ class GoalBesideBlock extends goals.Goal {
   }
 }
 
-module.exports = { DiggingMovements, sprintAllowed, GoalBesideBlock, cheapestHarvestTool }
+module.exports = { DiggingMovements, FALLING_BLOCKS, sprintAllowed, GoalBesideBlock, cheapestHarvestTool }
