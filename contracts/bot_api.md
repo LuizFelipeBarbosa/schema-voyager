@@ -784,3 +784,63 @@ is three integers from 1 to 32 with at most 8192 cells in all.
 ### Error codes (v3.4)
 
 v3.2 codes, plus `missing_item`, `occupied`, `no_support`, `place_failed` and `unbreakable`.
+
+## v3.4b: protected boxes and `/survey` (S10, lanes `protect-bot` and `survey-bot`)
+
+The Python side is `docs/v3-interfaces.md` v3.4b.
+
+### `protect` on `/mine`, `/explore`, `/look`, `/place`, `/clear`, `/goto` and `/survey`
+
+- Optional on all seven: `"protect": [{"origin": [x, y, z], "size": [w, h, d]}, ...]`, at most 32 boxes, each with
+  an `origin` of three integers and a `size` of three positive integers (else 400 `bad_request`). It is per
+  request: the bot keeps no protected state, so a restart loses nothing. Python sends every box with every request.
+- `/mine` never targets a block inside a box: `chooseTargets` (and the v1 nearest-block search) skips those
+  candidates, so a `#log` mine next to a built house takes a tree's log or answers `not_found`.
+- A walk never breaks a block inside a box: `DiggingMovements` adds an `exclusionAreasBreak` entry of at least 100
+  (pathfinder's `safeToBreak` then refuses the dig) and `/explore`'s other digs (going `up`, a dig-through
+  direction) check the box before `bot.dig`.
+- A walk never places scaffold inside a box: `DiggingMovements` and the build movements of `/place` and `/clear`
+  add an `exclusionAreasPlace` entry of `KEEP_OUT_COST` for every box, as `keep_out` does.
+- `/look` leaves out blocks inside a box.
+- `/place` and `/clear` still act on their own target cell inside a box: only their walks obey `protect`.
+  `keep_out` keeps its v3.4 meaning (the running build's box, and a door's walk ends outside it), and the stance
+  for any target never ends on top of the `keep_out` box (feet at or above its top y, inside its x and z): the bot
+  could not get down without digging the roof.
+
+### POST /survey  `{"size": [7, 5], "radius": 24, "protect": [...]}`
+
+Where to put a `width x depth` footprint near the bot. It takes the lock like `/scan`, never walks, and the guard
+doesn't cut into it. `size` is two integers from 1 to 16, `radius` an integer from 1 to 32 (default 24). 30 s.
+
+```json
+{"ok": true, "sites": [{"origin": [8, 64, -5], "cut": 3, "fill": 1, "distance": 6.2}],
+ "considered": 1760, "ruled_out": {"liquid": 120, "tree": 300, "unknown": 0, "steep": 40, "protected": 0}}
+```
+
+- A column's **ground**: from the bot's feet y + 12 down to feet y - 12, the first block with a collision box that
+  isn't a plant (`blueprint.REPLACEABLE` in Python). The column is ruled out when the window's top cell isn't air or
+  no ground is found or the chunk isn't loaded (`unknown`: an underground bot sees rock, not ground), when that block
+  is water or lava or either is above it (`liquid`), or when it is a log, wood, stripped log or wood, leaves or a
+  mushroom block (`tree`).
+- A footprint is ruled out when one of its columns is, when a column of the one-block ring around it is water or
+  lava (`liquid`), when it plus the ring overlaps a `protect` box in x and z (`protected`), or when a column's
+  ground is more than 3 above `floor - 1` or more than 1 below it (`steep`: the builder fills only the layer under
+  layer 0). The floor is the lower median of its grounds plus 1;
+  `cut` and `fill` are counted from it (`docs/v3-interfaces.md` v3.4b), and `origin` is `[x0, floor, z0]`, the
+  north-west corner.
+- `sites`: at most 10, by `cut + fill`, then `distance` (feet to footprint centre, horizontal, one decimal), then
+  x0, then z0. `considered` counts footprints; `ruled_out` counts each by its first reason. No site is not an error:
+  `sites: []`.
+
+### POST /goto  `{"x": 10, "y": 64, "z": -3, "range": 3, "protect": [...]}`
+
+Walk near a point: pathfinder's `GoalNear(x, y, z, range)` with the world-preserving movements (no digging, no
+scaffold, `canOpenDoors` off). `range` is an integer from 1 to 16 (default 3). It takes the action lock, the guard
+cuts into it as into `/mine` (`cutIn: true`), and it honours `session.signal`. 60 s.
+
+- `{"ok": true, "arrived": true, "travel": {...}, "events": [...]}` when the bot ends within `range`.
+- No path, or not there within 60 s: `unreachable` with `travel` (how far it got).
+
+### Error codes (v3.4b)
+
+No new codes: `/survey` answers `sites: []` rather than an error, and `/goto` uses `unreachable`.

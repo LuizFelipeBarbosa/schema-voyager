@@ -13,6 +13,7 @@ from typing import Any, Iterator
 from . import normalize
 
 Pos = tuple[int, int, int]
+Box = tuple[Pos, tuple[int, int, int]]  # (origin, size), as scan takes them (v3.4b)
 
 MAX_SIZE: tuple[int, int, int] = (16, 12, 16)  # width (x), height (y), depth (z)
 GROUPS: tuple[str, ...] = ("#planks", "#log", "#cobblestone")
@@ -264,3 +265,9 @@ def is_full(value: str) -> bool:
 def carries(value: str) -> bool:
     """Whether a placed cell with this value carries its neighbours: a full block, glass or a pane."""
     return is_full(value) or value in ("glass", "glass_pane")
+
+
+def site_box(bp: dict, origin: Pos) -> Box:
+    """v3.4b: the blueprint's box plus the layer under it, which the builder fills: what a build scans and protects."""
+    (ox, oy, oz), (width, height, depth) = origin, bp["size"]
+    return (ox, oy - 1, oz), (width, height + 1, depth)

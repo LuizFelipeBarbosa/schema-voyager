@@ -4,7 +4,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any, Literal
 
 
-ActionKind = Literal["mine", "craft", "explore", "smelt", "place", "clear"]
+ActionKind = Literal["mine", "craft", "explore", "smelt", "place", "clear", "goto"]
 RuleStatus = Literal["hypothesis", "certified", "demoted"]
 RuleCheck = Literal["exact", "stochastic"]
 # v3 goals (docs/v3-interfaces.md, v3.1)
@@ -26,7 +26,7 @@ class Action:
     fuel: str | None = None  # smelt only; may be a group
     ingredient: str | None = None  # smelt only: the input item; may be a group
     direction: str | None = None  # explore only: N, NE, E, SE, S, SW, W, NW; None is the v1 spiral
-    # v3.4: place and clear only, the cell in world coordinates. place's target is a raw block id.
+    # v3.4: place, clear and goto only, the cell in world coordinates. place's target is a raw block id.
     pos: tuple[int, int, int] | None = None
 
     def __post_init__(self) -> None:
@@ -48,6 +48,8 @@ class Action:
             return f"place {self.target} at {_cell(self.pos)}"
         if self.kind == "clear":
             return f"clear {_cell(self.pos)}"
+        if self.kind == "goto":
+            return f"goto {_cell(self.pos)}"
         return f"explore {self.direction}" if self.direction else "explore"
 
     def to_dict(self) -> dict[str, Any]:
@@ -108,6 +110,20 @@ class Status:
     alive: bool = True
     events: list[dict[str, Any]] = field(default_factory=list)
     last_seq: int = 0
+
+
+@dataclass(frozen=True)
+class Site:
+    """A place to build (v3.4b, `/survey`): a footprint's north-west corner on the first air layer above the ground."""
+
+    origin: tuple[int, int, int]
+    cut: int  # solid blocks at or above origin y inside the footprint
+    fill: int  # free cells in the layer under origin y inside the footprint
+    distance: float  # horizontal, from the bot's feet to the footprint's centre
+
+    @property
+    def cost(self) -> int:
+        return self.cut + self.fill
 
 
 @dataclass

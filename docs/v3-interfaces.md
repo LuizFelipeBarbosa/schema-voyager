@@ -908,7 +908,8 @@ S07 re-split two lanes (2026-10-18), after finding that no handler stops after `
 
 ### v3.4a Blueprints, `place`, `clear` and `scan` (S09: S4.1, S4.2, S4.8)
 
-The parts every build needs. There is no build goal yet: that is S10's v3.4b. The bot side is
+The parts every build needs. The build goal itself is S10's v3.4b, which changes `matches` for doors (any
+wooden door) and adds `Box`/`site_box`. The bot side is
 `contracts/bot_api.md` v3.4 (`/place`, `/clear`, `/scan`).
 
 D1 holds: a placed or cleared block is checked exactly (is the cell what we asked for afterwards?) but is never
@@ -1107,4 +1108,378 @@ stub on `main` has them, with the function signatures.
 | `mineflayer_backend.py`, `tests/test_v3_build_backend.py` | `build-backend` | Fake HTTP |
 | `mc/bot/test/v3_place_live.js` | `place-live` (live, instance a) | After `build-bot` is merged |
 
+### v3.4b Build goals (S10: S4.3–S4.7, S4.9)
+
+"Build a small wooden house with a door": Claude designs a blueprint, the panel shows it, and the user approves it.
+Then the life picks a site, gathers the materials through the planner, builds bottom-up checking every block, and
+the goal is `done` when a final scan matches the blueprint. The bot side is `contracts/bot_api.md` v3.4b
+(`/survey` and `protect`). D1 holds as in v3.4a: `place` and `clear` steps go through `Episode.act` and are
+checked exactly, but never reach `store.record_transition`; gathering the materials does, as for any obtain goal.
+
+#### Protected boxes (everything the bot built)
+
+A built or half-built thing must survive the next goal: a `#log` mine must never pick a placed log, a digging walk
+must never tunnel through a wall, and scaffold must never land inside.
+
+- `Box = tuple[Pos, tuple[int, int, int]]`, an `(origin, size)` box (`blueprint.py`, public). A build's box is
+  `blueprint.site_box(bp, origin)`: the blueprint's box plus the layer under it, `((ox, oy - 1, oz), (w, h + 1, d))`,
+  so the foundation the builder filled is protected too.
+- The life keeps the list in `life_state.json`, key `"protected"`: `[{"goal_id": "u003", "name": "small house",
+  "origin": [x, y, z], "size": [w, h, d], "status": "building" | "built" | "partial"}]`, where `origin` and `size`
+  are the blueprint's (not the site box's). An entry is added, and `life_state.json` saved at once, when a build
+  goal's site is picked (`status: building`). When the goal ends `done` it becomes `built`. When it ends `failed` or
+  `cancelled` (a cancel, a second death, any failure) it becomes `partial` if any of its cells was placed
+  (`BuildPlan.placed > 0`, which `run_build` keeps up to date as it goes, so it is known even when
+  `GoalInterrupted` ends the run; half-built walls stay protected), else it is removed. A preempted, died-in or clock-cut goal keeps its `building` entry and runs
+  again on the same origin. The goal's origin lives here (keyed by `goal_id`), not in `goals.jsonl`. M5 (S12)
+  builds "home" on this list.
+- `LifeBackend.set_protected(boxes: list[Box]) -> None`: the site boxes of every entry. The life calls it at start
+  (fresh: `[]`; `--resume`: from the loaded list) and after every change to the list. It is backend state on the
+  Python side only: `MineflayerBackend` sends `"protect": [{"origin", "size"}, ...]` with every `/mine`, `/explore`,
+  `/look`, `/place`, `/clear`, `/goto` and `/survey`, so a bot restart or reconnect loses nothing and needs no
+  re-sending. The same goes for `keep_out` (`set_keep_out`), which is now only the running build's own box.
+- What `protect` means, in the bot (`contracts/bot_api.md` v3.4b) and the simulator alike:
+  - `/mine` never targets a block inside a protected box (the bot's candidate filter; `NaturalWorld._choose_target`);
+  - a walk never breaks a block inside one (`DiggingMovements`' `exclusionAreasBreak`, any other dig the bot makes
+    outside `/clear`; the simulator's `_dig_path` and `_explore_up`); a buried target whose dig path crosses a box
+    is skipped;
+  - a walk never places scaffold inside one (`exclusionAreasPlace` in `DiggingMovements` and in `/place`/`/clear`'s
+    build movements, as `keep_out` does);
+  - `/look` leaves out blocks inside one, so an explore toward a `#log` never heads for the house;
+  - `/survey` rules out a site whose footprint, grown by one block on each side, overlaps a box in x and z;
+  - `/place` and `/clear` still act on their own target cell, inside a box or not: the builder clears and fills
+    cells of its own box. Only their walks obey `protect`.
+- The test that matters (`tests/test_v3_build_life.py`): a simulator life builds the fake hut next to trees, then a
+  user goal "get me 10 logs" runs, and a `scan` of the site box before and after is identical.
+
+#### `/survey`: where to build (`LifeBackend.survey`, lanes `survey-bot` and `survey-backend`)
+
+```python
+@dataclass(frozen=True)
+class Site:                  # models.py
+    origin: tuple[int, int, int]  # the north-west corner of layer 0: the first air layer above the ground
+    cut: int                 # solid blocks at or above origin y inside the footprint (dug by the builder)
+    fill: int                # free cells in the layer under origin y inside the footprint (filled by the builder)
+    distance: float          # from the bot's feet to the footprint's centre, horizontally
+
+    @property
+    def cost(self) -> int: return self.cut + self.fill
+
+def survey(self, size: tuple[int, int], radius: int = 24) -> list[Site]   # LifeBackend; size is (width, depth)
+```
+
+- One ranking, the same in the bot and the simulator. For every column `(x, z)` within `radius` of the bot (a
+  square), find its **ground**: going down from the bot's feet y + 12 to feet y - 12, the first block that is solid
+  (not air, not `blueprint.REPLACEABLE`, not a flower or another block without a collision box). The column is
+  **ruled out** when the window's top cell (feet y + 12) isn't exactly `air` (the bot is underground: rock or
+  `cave_air` there means a cave floor, not ground), when the ground block is water or lava, a log, wood or leaves (`*_log`, `*_wood`, `*_leaves`, the
+  stripped ones, mushroom blocks), or when there is water or lava above it, or no ground in the window, or the chunk
+  isn't loaded. `ground(x, z)` is that block's y.
+- A candidate is a footprint of `width x depth` columns with its north-west corner at `(x0, z0)`. The floor is
+  `fy = median(ground) + 1` over the footprint (the lower median of the sorted grounds, so it is an existing
+  height). It is ruled out when any of its columns is, when any column of the one-block ring around it is water or
+  lava, when its footprint plus the ring overlaps a protected box in x and z, or when a column is **steep**: its
+  ground is above `fy - 1 + SURVEY_MAX_STEP` (`SURVEY_MAX_STEP = 3`) or below `fy - 2` (the builder fills only the
+  layer under layer 0). Then `cut = sum(max(0, ground - fy + 1))` and `fill = sum(max(0, fy - 1 - ground))` over
+  its columns.
+- Ranked by `cost`, then `distance`, then `(x0, z0)`. The answer has the first `SURVEY_MAX_SITES = 10`, which may
+  overlap one another. `origin = (x0, fy, z0)`.
+- The simulator uses `NaturalWorld`'s own columns (`_column`), features (trees) and `block_at`; it has no unloaded
+  chunks.
+- `MineflayerBackend.survey` posts `/survey {"size": [w, d], "radius": r, "protect": [...]}` and turns `sites` into
+  `Site`s. A 400 raises `BackendError`.
+
+#### `goto`: back to the site (`models.py` stub, lanes `survey-bot` and `survey-backend`)
+
+After gathering, a death or `--resume`, the bot may be far from the site, and a far site's chunks may not be
+loaded (the scan has `None` cells). The runner walks back first.
+
+- `ActionKind` gains `"goto"`: `Action("goto", pos=(x, y, z))`, `describe()` gives `"goto 10 64 -3"`. Like `place`
+  and `clear`, it is never a rule kind, the LLM's enums don't gain it, and it is never recorded (D1).
+- The bot: `POST /goto {"x", "y", "z", "range": 3, "protect"?}` walks with the world-preserving movements (no
+  digging, no scaffold) to pathfinder's `GoalNear(x, y, z, range)`, under the action lock with the guard's cut-in,
+  60 s. `{"ok": true, "arrived": true, "travel": {...}, "events": [...]}`; not there in time or no path:
+  `unreachable` (with `travel`), as `/mine`'s walk reports it.
+- `act(Action("goto"))` returns an `Outcome` with `travel`, `blocks_walked`, an empty `inventory_delta`, and
+  `detail: {"arrived", "target"}`. The simulator teleports the bot to the nearest standable cell within `range` and
+  counts the walk as `_travel_to` does; it joins `THREATENED_ACTIONS`.
+
+#### The approval flow (`goals.py`, `llm.py`, `panel.py`, `life.py`)
+
+- `parse_goal` (lane `build-life`): `SUPPORTED_GOAL_KINDS` gains `"build"`. A `build` kind (from the model, or the
+  fake parser's first word) calls `design_blueprint(text)` and returns `GoalSpec(kind="build", source="user",
+  text=text, blueprint=bp)` with `item=None`, `count=1`, `target=None`. A `BlueprintDesignError` becomes
+  `Unsupported("I couldn't design that. Try \"build a small wooden house with a door\".")`, so a design that never
+  validates isn't retried every pass. `SpendCapReached` (an `LLMError`) still leaves the goal `submitted`.
+- `GoalQueue.accept(spec)`: a `build` spec goes from `submitted` straight to `awaiting_approval` (one line, under
+  the lock, so a crash can't leave an unapproved build `queued`). The table gains `submitted -> awaiting_approval`;
+  `queued -> awaiting_approval` stays allowed but unused. A queued build goal has therefore been approved.
+- The life, on accepting a build: logs `goal_parsed` (with `goal_kind: "build"` and the blueprint's `name`) and
+  says "Plan for u003: small house, 5 x 4 x 5: 55 planks, 12 logs, 1 torch, 1 oak door. Approve it in the panel,
+  or say !yes or !no." (the materials as `goal_label` would name them, largest first).
+- Approve: `awaiting_approval -> queued`, by `POST /goals/<id>/approve` or `!yes`. Discard: `awaiting_approval ->
+  cancelled` with `reason: "discarded"`, by `POST /goals/<id>/discard` or `!no`. Cancel (panel or `!cancel`) still
+  works on it too.
+- `goal_label(spec)` for a build is the blueprint's `name` ("small house").
+- Chat (v3.1g gains two commands; the help line lists them):
+
+  | Command | Effect | Reply |
+  |---|---|---|
+  | `!yes` | approve the oldest `awaiting_approval` user goal | "Approved u003: small house." or "Nothing to approve." |
+  | `!yes <id>` | approve that goal | the same, or "No goal u009." / "u003 isn't waiting for approval." |
+  | `!no` / `!no <id>` | discard it | "Discarded u003: small house." and the same misses |
+
+- `!status` adds "Waiting for approval: u003." when one is.
+
+#### Panel routes and the preview (`panel.py`, `site/dist/build_preview.js`, lane `panel-preview`)
+
+- `POST /goals/<id>/approve {"run"?}`: `200 {"ok": true, "id": "u003", "status": "queued"}`. Unknown id `404
+  unknown_goal`; any status but `awaiting_approval` `409 {"ok": false, "error": "not_awaiting_approval", "status":
+  "<status>"}` (also when `mark` loses a race). Same media type, Origin and run rules as v3.1f.
+- `POST /goals/<id>/discard {"run"?}`: `mark(id, "cancelled", reason="discarded")`, `200 {"ok": true, "id",
+  "status": "cancelled"}`; the same 404 and 409.
+- `GET /goals.json`: each goal whose `blueprint` isn't null also gets `"preview": {"name", "size", "layers":
+  blueprint.render(bp), "palette": {key: value}, "materials": blueprint.materials(bp)}` (computed by the panel, not
+  stored in `goals.jsonl`). A blueprint that fails `validate` gets `"preview": null`.
+- `site/dist/build_preview.js` (`SvBuildPreview`, a classic script like `goals.js`, mounted in
+  `<section class="build-preview" id="build-preview">` in `trace.html`): it polls `GET /goals.json` every 2 s, as
+  `goals.js` does, and shows the newest goal with a `preview` that is `awaiting_approval` (else the newest
+  `running` one, else nothing). It draws one small grid per layer, bottom-up, a colour per palette value with a
+  legend, the materials list, and Approve and Discard buttons only while `awaiting_approval`. Tested with node's
+  `vm` like `goals.test.mjs` (`node site/dist/build_preview.test.mjs`, part of the offline suite from S10 on).
+
+#### `design_blueprint` (`llm.py`, lane `blueprint-llm`)
+
+```python
+@dataclass(frozen=True)
+class BlueprintLimits:
+    max_size: tuple[int, int, int] = (7, 4, 7)   # within blueprint.MAX_SIZE; a roof 4 up is one the bot can
+                                                 # reach from inside and drop from (maxDropDown 4)
+    max_placed: int = 120                        # placed cells, both door cells counted
+
+class BlueprintDesignError(Exception):           # not an LLMError: the parse turns it into Unsupported
+    def __init__(self, errors: list[str]) -> None
+
+DESIGN_RETRIES = 2
+FAKE_HUT: dict                                    # the fixed blueprint fake mode returns
+
+class LLM:
+    def design_blueprint(self, text: str, limits: BlueprintLimits = BlueprintLimits()) -> dict
+```
+
+- Live and replay: `_json_call("design_blueprint", DESIGN_BLUEPRINT_SYSTEM, user, BLUEPRINT_SCHEMA)`. The schema is
+  v3.4a's "Claude's form": `name` (string), `size` (array of integers), `palette` (array of `{"key", "block"}`,
+  `block` an enum of `sorted(PLACEABLE) + list(GROUPS) + ["air", "any"]`), `layers` (array of arrays of strings);
+  every object `additionalProperties: false` with every key required.
+- The palette list becomes the map (a repeated key: `"palette: key 'P' is listed twice"`), then
+  `blueprint.validate`, then the limits: `"size: [9, 5, 9] is over this build's limit 7 x 4 x 7"`,
+  `"layers: 130 placed cells, this build's limit is 120"`. Any errors go back to Claude in a new call whose user
+  message has the request, the previous answer as JSON and the error list. After `DESIGN_RETRIES` failed retries
+  (3 calls in all) it raises `BlueprintDesignError(errors)`. Each call is metered and replayed as usual.
+- The system prompt explains the axes (`layers[y][z][x]`, bottom-up, north to south, west to east), that layer 0
+  stands on the ground, `.` for every cell that must be air (**the interior too**: a space keeps whatever grass or
+  flowers were there), a space only where anything goes (such as roof corners), doors as two cells of the same
+  door in one column with a full block or the ground below, a torch with a full block below or beside it, every
+  other block connected to the ground, `#planks` and `#log` for wood (the bot places whichever species it holds),
+  glass only when asked for windows, torches only when asked for light (coal needs a pickaxe and a search), and the
+  limits.
+- Fake mode (no call; `_meter_fake("design_blueprint", text)`): a deep copy of `FAKE_HUT`, whatever the text:
+
+  ```json
+  {"name": "small hut", "size": [5, 4, 5],
+   "palette": {"L": "#log", "P": "#planks", "D": "oak_door", "T": "torch"},
+   "layers": [
+     ["LPPPL", "P...P", "P...P", "P...P", "LPDPL"],
+     ["LPPPL", "PT..P", "P...P", "P...P", "LPDPL"],
+     ["LPPPL", "P...P", "P...P", "P...P", "LPPPL"],
+     [" PPP ", "PPPPP", "PPPPP", "PPPPP", " PPP "]]}
+  ```
+
+  Its `materials` are `{"#planks": 55, "#log": 12, "torch": 1, "oak_door": 1}`.
+
+#### Doors are any wooden door (`normalize.py`, `blueprint.py`, `environment.py`, lane `doors`)
+
+A door needs six planks of one species, so an `oak_door` can't be made from birch. A door is treated like
+`#planks`:
+
+- `normalize` gains the group `#door`: `<species>_door` for each of `SPECIES`. `family("oak_door")` is `#door`, and
+  `resolve("#door", inventory)` is the door of a species with at least 6 planks held (the most held such species;
+  failing that, the species whose planks are held most; failing that, the door held most), as `#planks` follows the logs. A rule about a raw door normalizes to `#door` like any member.
+- `blueprint.matches(door, found)` (v3.4a change): a door value matches any member of `DOORS`. `materials` still
+  names the door as written (`"oak_door": 1`); the runner gathers `normalize.family` of each material.
+- The simulator's `WHITELIST_RECIPES` gains `"#door": ({"#planks": 6}, 3, True)` (crafted per species, like
+  planks), and `data/prior_rules_v2.json` a fake prior rule for it, so a fake-mode life plans a door.
+- `resolve` is for crafting. The runner places a door value as the `#door` member held most, as it places any
+  group.
+
+#### Build order (`builder.py`, lane `build-order`)
+
+```python
+@dataclass(frozen=True)
+class BuildStep:
+    kind: Literal["clear", "place"]
+    pos: Pos
+    value: str        # place: the palette value (a raw id or a group); clear: "air"
+    phase: Literal["clear", "fill", "place", "torch", "door"]
+
+def build_steps(bp: dict, origin: Pos, scan: dict[Pos, str | None]) -> list[BuildStep]
+def fill_value(bp: dict) -> str                       # the value that fills holes under layer 0
+def progress(bp: dict, origin: Pos, scan: dict[Pos, str | None]) -> tuple[int, int]   # (placed, total)
+def mismatches(bp: dict, origin: Pos, scan: dict[Pos, str | None]) -> list[Pos]
+def needed(steps: list[BuildStep]) -> dict[str, int]  # place steps' values -> count: what is left to place
+```
+
+`blueprint.py` gains `Box` and `site_box(bp, origin) -> Box` (the box above). `scan` is a backend scan of
+`site_box`: layer -1 (`oy - 1`) and the blueprint's layers. A cell missing from `scan`, or `None`, is unknown.
+
+- **Free**: `blueprint.AIR_BLOCKS` or `blueprint.REPLACEABLE`. **Solid** (gives support): known, not free, not a
+  liquid (`water`, `lava`), not a door, a torch or `wall_torch`, and not another block without a collision box
+  (a private list in `builder.py`: flowers, saplings, mushrooms, sugar cane, sweet berry bushes, vines, pink
+  petals).
+- The steps, in this order, every phase skipping a cell that already matches (`blueprint.matches`) and a cell
+  that is unknown:
+  1. **clear**, top-down (y descending, then z, then x): every blueprint cell whose value is `air` and doesn't
+     match; every cell to be placed (a placed value, or a door's upper cell) whose block is neither free nor a
+     match. In layer -1, only a block that is neither free nor solid (a flower: dug, then filled).
+  2. **fill**: every cell of layer -1 under the footprint that isn't solid, with `fill_value(bp)`: the most used full-block
+     value of the blueprint (`blueprint.is_full`), ties broken by `GROUPS` order, then by name.
+  3. **place**: every cell whose value is a full block, glass or a pane (`blueprint.carries`), lowest first as
+     far as support allows. A cell is ready when a face neighbour is solid in the world as it will be after the
+     earlier steps (the scan, minus what phase 1 clears, plus what phases 2 and 3 placed so far). Ready cells come
+     out of a heap keyed by `(y, z, x)`; placing one may make its neighbours ready. Cells never ready (only
+     possible on a site that doesn't hold) are appended at the end in `(y, z, x)` order.
+  4. **torch**, in `(y, z, x)` order, after every full block.
+  5. **door**, the lower cell of each door only (`door_tops` are filled by the door), in `(y, z, x)` order, last.
+- `progress`: `total` counts the blueprint's placed cells with each door once (no door tops, no fill); `placed`
+  counts those that match in `scan`. `build_progress` is always counted this way, from a scan or from the cell
+  states the runner keeps, never from `placed: true` (a retry answers `placed: false`).
+- `mismatches`: every non-`any` blueprint cell that doesn't match, plus every layer -1 cell under the footprint
+  that isn't solid, in `(y, z, x)` order. A build is done when it is empty.
+- Tests first: the example house (v3.4a) on flat ground orders clear, then place bottom-up, then the torch, then
+  the door; an overhang is placed after its support; a half-built scan resumes with only the missing cells; grass
+  in an interior air cell is cleared, grass under a placed cell isn't; a hole under layer 0 is filled first.
+
+#### The build runner (`build_runner.py`, lane `build-run`)
+
+```python
+BUILD_GOAL = "build"             # a build goal's Task.goal_item (like EXPLORE_GOAL); goal_count is progress total
+BUILD_SECONDS_PER_STEP = 10      # a build goal's clock: per build step, plus 30 s per planned gathering step
+MAX_BUILD_PASSES = 3             # scan, build, final scan; again while cells don't match
+SCAFFOLD_MIN = 16                # SCAFFOLD_BLOCKS to hold before building: the first cell of a layer is placed
+                                 # from a pillar outside the box
+NEAR_SITE = 12                   # horizontal blocks from the footprint's centre; farther, the runner walks back
+BUILD_KINDS = frozenset({"place", "clear", "goto"})   # episode.py
+
+@dataclass
+class BuildPlan:
+    spec: GoalSpec
+    origin: Pos
+    site: Site | None            # the survey's pick; None when the origin came from the protected list
+    steps: list[BuildStep]       # from the scan prepare_build made
+    needs: dict[str, int]        # family -> count to hold: needed(steps) by normalize.family, plus scaffold
+    gather_steps: int            # planner steps to gather what isn't held (for the budget and the clock)
+    placed: int = 0              # builder.progress of the latest cell states; run_build updates it as it goes
+    @property
+    def budget(self) -> int      # max(MIN_GOAL_BUDGET, BUDGET_PER_PLAN_STEP * gather_steps + 2 * len(steps) + 10)
+    @property
+    def clock_s(self) -> float   # GOAL_SECONDS_PER_PLAN_STEP * gather_steps + BUILD_SECONDS_PER_STEP * len(steps)
+
+@dataclass
+class BuildOutcome:
+    result: EpisodeResult
+    reason: str                  # "" on success, else at most 80 characters
+    placed: int
+    total: int
+
+def prepare_build(backend: LifeBackend, store: SchemaStore, spec: GoalSpec, *, origin: Pos | None,
+                  protected: list[Box], world_id: str, excluded: frozenset[str]) -> BuildPlan | str
+def run_build(episode: Episode, store: SchemaStore, plan: BuildPlan, *, before_step: BeforeStep,
+              check_interrupts: Callable[[], None], excluded: frozenset[str]) -> BuildOutcome
+```
+
+`planner.py` gains `make_plan_for(needs: dict[str, int], inventory, rules, skill_for, visible) -> list[PlanStep]`:
+the planner's `_gather` (every need held at once, deeper items first, a need that spends another repeated), made
+public. `agent.py` gains `pursue(episode, store, needs, *, before_step, excluded, goal=None, narrate=True) ->
+list[tuple[Action, str]]`: `run_schemavoyager`'s plan-and-run loop moved out of it, looping until every need is
+held (not `episode.goal_met`), planning with `make_plan` for one need (so `run_schemavoyager`, now
+`pursue({task.goal_item: task.goal_count})` plus its start and end, behaves exactly as before) and `make_plan_for`
+for several. It returns the completed steps (for the skill), and records, revises and blocks exactly as before.
+
+- `prepare_build` runs before the episode exists, like an obtain goal's `make_plan`. With no `origin` it surveys
+  (`survey((w, d))`) and drops sites overlapping `protected`; with none left it explores `up` once
+  (`backend.act(Action("explore", direction="up"))`, as the junk toss acts outside an episode) and surveys again;
+  still none: the string "no site". It takes the first site, scans `site_box`, computes `build_steps`, and the
+  needs: `needed(steps)` by `normalize.family`, plus `dirt` up to `SCAFFOLD_MIN` scaffold blocks held in all.
+  `gather_steps` is `len(make_plan_for(needs, held, usable rules minus excluded, ...))`; a `PlanningError` is the
+  string "no plan: <error>". The scan may have `None` cells when the site is far; the steps then cover only what is
+  known, and `run_build` rescans on site.
+- The life, on a string: the episode is still made (budget `MIN_GOAL_BUDGET`), logs `build_failed {"reason"}`,
+  finishes failed, and `_end_goal` fails the goal with that reason, as an obtain goal's "no plan" does. On a plan:
+  it adds the protected entry, saves `life_state.json` and calls `set_protected` before making the episode with
+  `plan.budget` and `plan.clock_s` (capped by the life's remaining time).
+- `run_build`, in that one episode:
+  1. logs `build_site {"goal_id", "origin", "size", "cut", "fill"}` and sets `set_keep_out(site_box)`. Says
+     "Building small hut at 12 64 -30: gathering 55 planks, 12 logs, 1 torch, 1 door." (only what isn't held).
+  2. **Materials**: `pursue(episode, store, needs, before_step=before_step, excluded=excluded, narrate=False)`.
+     Not all held when it returns: the goal fails "couldn't get 55 planks" (the first need not held).
+  3. **On site**: if the bot is more than `NEAR_SITE` blocks (horizontally) from the footprint's centre, or the
+     last scan had a `None` cell, `goto` the centre at the origin's y with `range` `max(w, d) // 2 + 3` (the walk
+     only needs the chunks loaded, and the centre may be inside finished walls), up to 3 times. Then a fresh
+     scan of `site_box` and `build_steps` again. A pass whose scan still has `None` cells after the walks fails
+     "can't see the site"; `None` cells never use up a pass otherwise.
+  4. **Build**: the steps in order. Before each, `check_interrupts()` (the life's poll, parse, cancel, death and
+     preemption checks, without the `ChangeTrigger`, which is for rule steps). A place resolves a group to the
+     member the bot holds most of (a door value: the `#door` member held most); holding none is `missing_item`. Each runs through
+     `episode.act(Action("place", target=raw, pos=pos))` or `episode.act(Action("clear", pos=pos))` with no
+     `annotate`, so nothing is checked against a rule and nothing is recorded. `Episode.act` treats `BUILD_KINDS`
+     differently: never an explore; `interrupted` retried in place as for every kind; `unreachable` and `timeout`
+     retried once in place; any other error returned at once.
+  5. A step's outcome updates the runner's cell states (`found` from `detail`); `build_progress {"goal_id",
+     "placed", "total"}` (`builder.progress` of those states) is logged after each step that changed `placed`,
+     and once after each scan.
+  6. **A failed step**: `missing_item`, or `unreachable` while the bot holds fewer than 4 scaffold blocks (pillars
+     are left standing, so scaffold runs out), reruns the materials (2) once per pass, without counting toward
+     "stuck". Otherwise the cell is remembered
+     with its error; if that cell had already failed in this goal the build stops "stuck at 12 65 -28:
+     unreachable". Else the runner rescans, recomputes the steps, moves the steps of every failed cell to the end,
+     and goes on.
+  7. **Final scan**: `mismatches` of a fresh scan. Empty: success. Else another pass from 3, up to
+     `MAX_BUILD_PASSES`, then "3 cells don't match". Out of budget or time ends it with the life's own reasons
+     ("out of steps", "out of time").
+  8. `episode.finish(success=..., announce=False)`, `store.certify()` and the `certified` event, as
+     `run_schemavoyager` ends; no skill. A `finally` sets `set_keep_out(None)`. `GoalInterrupted` from
+     `check_interrupts` or `before_step` propagates to the life unchanged.
+- Resuming (a preemption, a death, `--resume`) is just running again: the life passes the saved origin,
+  `prepare_build` rescans, and matching cells are skipped. A cell placed before a crash is in the scan.
+- `/place`'s walk for a `keep_out` box (lane `protect-bot`): besides ending outside the box for a door, the stance
+  never ends on top of the box (feet at or above the box's top y, inside its x and z), where the bot could be stuck:
+  it can drop at most 4 on build walks and 3 on digging walks, and can't dig the protected roof.
+- The life (lane `build-life`): `_run_goal` sends a `build` spec to `prepare_build`/`run_build` instead of
+  `make_plan`/`run_schemavoyager`, inside the same `try/except GoalInterrupted` and through the same `_end_goal`
+  (the six endings and a death, v3.1d/v3.2d). `_before_step` becomes `_check_interrupts()` (keeping `_poll_bot`
+  and `_parse_pending`) plus `hooks.before_step`. A failed build's reason is `BuildOutcome.reason`. The life
+  record gains `"build": {"name", "origin", "placed", "total"}`. "Done: small hut" / "Couldn't build small hut:
+  <reason>". The junk toss's `wanted` and `_unasked_families` include the materials (by family) of
+  `awaiting_approval`, `queued` and `running` build goals, so glass brings its sand and smelting priors.
+- Tests (`tests/test_v3_build_run.py`, simulator, `--llm fake`): `prepare_build` on a flat site; a run that gathers
+  and builds a door-less hut and ends with no mismatches and no `place`/`clear`/`goto` transition in the store; a
+  preemption mid build that resumes and finishes with the same origin; a `missing_item` rerun; a far bot walking
+  back. `tests/test_v3_build_life.py`: the whole flow with `FAKE_HUT`, submit, `awaiting_approval`, approve, gather,
+  build, `done`, plus the protected-box mine test above and `--resume` re-sending `set_protected`.
+
+#### Who owns what (S10)
+
+| File | Owner | Note |
+|---|---|---|
+| `models.py` (`Site`, `goto` in `ActionKind`), `adapter.py` (`survey`, `set_protected`), `blueprint.py` (`Box`, `site_box`), `builder.py` (stub) | S10 stubs on `main` | S08 may add `kill` to the same `ActionKind` line: whoever merges second rebases |
+| `builder.py`, `tests/test_v3_builder.py` | `build-order` | |
+| `mc/bot/lib/survey.js`, `mc/bot/lib/goto.js` (new), `mc/bot/server.js` (two routes), `mc/bot/test/unit/survey.test.js`, `mc/bot/test/unit/goto.test.js` | `survey-bot` | |
+| `mineflayer_backend.py` (`survey`, `goto`), `environment.py` (`survey`, `goto`), `tests/test_v3_survey.py` | `survey-backend` | |
+| `llm.py` (`design_blueprint` only), `tests/test_v3_blueprint_llm.py` | `blueprint-llm` | |
+| `site/dist/build_preview.js`, `site/dist/build_preview.test.mjs`, `site/dist/trace.html`, `site/dist/trace.css`, `site/dist/trace.js` (only to render `place`/`clear`/`goto` steps and `build_*` events), `panel.py`, `tests/test_panel.py` | `panel-preview` | |
+| `mc/bot/lib/protect.js` (new), `lib/targets.js`, `lib/mine.js`, `lib/movements.js`, `lib/explore.js`, `lib/place.js`, `lib/survey.js`, `lib/goto.js`, `mc/bot/server.js` (validators), `mc/bot/test/unit/protect.test.js` | `protect-bot` | After `survey-bot` |
+| `mineflayer_backend.py`, `environment.py` (`set_protected`), `tests/test_v3_protect.py` | `protect-backend` | After `survey-backend` |
+| `normalize.py` (`#door`), `blueprint.py` (`matches`), `environment.py` (the door recipe), `data/prior_rules_v2.json`, `tests/test_v3_doors.py` | `doors` | After `protect-backend` |
+| `build_runner.py`, `agent.py` (`pursue`), `planner.py` (`make_plan_for`), `episode.py` (`BUILD_KINDS`), `tests/test_v3_build_run.py` | `build-run` | After group 1 and the design check; alongside `doors` |
+| `life.py`, `llm.py` (`parse_goal`), `goals.py` (`accept`, `goal_label`), `tests/test_v3_build_life.py` | `build-life` | After `build-run` and `doors` |
 ## v3.5 Places, chests, composite goals
