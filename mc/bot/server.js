@@ -21,6 +21,7 @@ const { createUnreachableMemory, look } = require('./lib/targets')
 const { attachEventTracker, createEventLog } = require('./lib/events')
 const { attachChatCommands } = require('./lib/chat_commands')
 const { attachSurvival } = require('./lib/survival')
+const { createFollow, validateFollow } = require('./lib/follow')
 const { MODES, createGuard } = require('./lib/guard')
 const { createActionLock } = require('./lib/action_lock')
 const { DIRECTIONS } = require('./lib/geometry')
@@ -60,6 +61,7 @@ let survival = null
 // The guard's mode outlives reconnects; the guard follows the current bot.
 let guardMode = process.env.BOT_GUARD || 'defend'
 let guard = null
+let follow = null
 let pvpMovements = null
 const GUARD_TICK_EVERY = 4 // physics ticks
 let worldBorder = null
@@ -93,6 +95,10 @@ function connect () {
   survival = attachSurvival(current, eventLog)
   const currentGuard = createGuard(current, { eventLog, mode: guardMode, movements: () => pvpMovements })
   guard = currentGuard
+  const currentFollow = createFollow(current, {
+    guard: currentGuard, eventLog, isFree: () => actionLock.busyDetail() === null, movements: () => pvpMovements
+  })
+  follow = currentFollow
   tracker = attachEventTracker(current, eventLog)
   worldBorder = trackWorldBorder(current._client)
 
@@ -122,6 +128,7 @@ function connect () {
     if (!connected || ++physicsTicks % GUARD_TICK_EVERY !== 0) return
     try {
       actionLock.onTick(currentGuard.mode === 'off' ? null : currentGuard.check())
+      currentFollow.tick() // after onTick, which may have started a fight
     } catch (err) {
       log(`guard tick failed: ${err.stack}`)
     }
@@ -129,6 +136,7 @@ function connect () {
   current.once('end', (reason) => {
     connected = false
     currentGuard.dispose()
+    currentFollow.dispose()
     if (current.viewer) current.viewer.close()
     viewerControl.detach(current)
     log(`disconnected (${reason}); reconnecting in ${RECONNECT_DELAY_MS / 1000} s`)
@@ -198,6 +206,7 @@ function observe () {
 }
 
 async function resetEpisode () {
+  follow?.stop()
   interruptBot()
   // Settle first so a teleport sent just before this call is applied before
   // the new origin is taken.
@@ -389,7 +398,8 @@ function status (req, res) {
     nearby_entities: ready ? nearbyEntities(bot) : {},
     events: eventLog.since(body.since ?? 0),
     last_seq: eventLog.lastSeq(),
-    guard: guard ? guard.status() : { mode: guardMode, fighting: null }
+    guard: guard ? guard.status() : { mode: guardMode, fighting: null },
+    follow: follow ? follow.status() : null
   })
 }
 app.post('/status', status)
@@ -407,6 +417,21 @@ app.post('/guard', (req, res) => {
   }
   guardMode = body.mode
   respond(200, { ok: true, mode: guardMode })
+})
+
+// Follows a player, or stops following; doesn't take the action lock and never answers 409.
+app.post('/follow', (req, res) => {
+  const body = req.body || {}
+  const respond = responder('/follow', body, res)
+  const problem = validateFollow(body)
+  if (problem) return respond(400, { ok: false, error: 'bad_request', detail: problem })
+  if (!connected || !bot.entity) return respond(200, { ok: false, error: 'not_connected' })
+  respond(200, follow.start(body.player, body.distance ?? undefined))
+})
+
+app.post('/follow/stop', (req, res) => {
+  const respond = responder('/follow/stop', req.body || {}, res)
+  respond(200, { ok: true, player: follow ? follow.stop() : null })
 })
 
 // Restarts the viewer in another camera mode; doesn't take the action lock.
