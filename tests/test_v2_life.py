@@ -385,9 +385,9 @@ def test_resume_continues_the_same_world_and_goal_index(tmp_path):
     asked_again = []
 
     class SpyLLM(LLM):
-        def propose_prior_rules_v2(self, families, known_blocks, world_id):
+        def propose_prior_rules_v2(self, families, known_blocks, world_id, mobs=()):
             asked_again.extend(families)
-            return super().propose_prior_rules_v2(families, known_blocks, world_id)
+            return super().propose_prior_rules_v2(families, known_blocks, world_id, mobs=mobs)
 
     config = LifeConfig(run_dir=tmp_path / "run", world_id="a-different-id", max_goals=4)
     second = run_life(FakeLifeBackend(), SpyLLM(mode="fake", cache_path=tmp_path / "c2.jsonl"), config, resume=True)
@@ -403,9 +403,9 @@ def test_prior_calls_are_batched_and_never_repeat_a_family(tmp_path):
     batches = []
 
     class SpyLLM(LLM):
-        def propose_prior_rules_v2(self, families, known_blocks, world_id):
+        def propose_prior_rules_v2(self, families, known_blocks, world_id, mobs=()):
             batches.append((list(families), list(known_blocks)))
-            return super().propose_prior_rules_v2(families, known_blocks, world_id)
+            return super().propose_prior_rules_v2(families, known_blocks, world_id, mobs=mobs)
 
     run_life(FakeLifeBackend(), SpyLLM(mode="fake", cache_path=tmp_path / "c.jsonl"), make_config(tmp_path, max_goals=5))
     asked = [family for families, _ in batches for family in families]
