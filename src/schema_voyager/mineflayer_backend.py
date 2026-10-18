@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 import urllib.error
 import urllib.request
 from collections import Counter
@@ -17,11 +18,22 @@ from .inventory import SCAFFOLD_BLOCKS
 from .layouts import Layout
 from .models import Action, Observation, Outcome, Status, Task
 
-# Longer than the bot's own 120 s action timeout, so a slow action comes back
-# as an error the episode can retry instead of a dropped connection.
-REQUEST_TIMEOUT_S = 150
+# Longer than an interrupted action's worst case (the bot's own 120 s timeout, up to
+# 10 s for the handler to settle, then up to 30 s of fighting), so a slow action comes
+# back as an error the episode can retry instead of a dropped connection.
+REQUEST_TIMEOUT_S = 180
 SMELT_TIMEOUT_S = 150  # plus SMELT_TIMEOUT_PER_ITEM_S per item smelted
 SMELT_TIMEOUT_PER_ITEM_S = 12
+
+# A 409 busy (an action or the guard's fight holds the bot) is retried: after the first
+# wait, then every second one, until this long after the first try.
+BUSY_FIRST_WAIT_S = 0.25
+BUSY_WAIT_S = 0.5
+BUSY_GIVE_UP_S = 60
+
+# Injectable for tests.
+_sleep = time.sleep
+_monotonic = time.monotonic
 
 MINE_MAX_DISTANCE = 32
 EXPLORE_DISTANCE = 32
@@ -97,7 +109,7 @@ class MineflayerBackend:
 
     def say(self, message: str) -> None:
         try:
-            self._post("/chat", {"message": message})
+            self._post("/chat", {"message": message}, retry_busy=False)  # a busy bot drops it
         except BackendError:
             pass  # narration is best effort
 
@@ -197,6 +209,9 @@ class MineflayerBackend:
             values = [body[key] for body in bodies if body.get(key) is not None]
             if values:
                 detail[key] = values[-1] if key != "table_retrieved" else all(values)
+        if failed and (interruption := _interruption(failed)):
+            detail.pop("detail", None)
+            detail.update(interruption)
         tools_broken = [item for body in bodies for item in body.get("tools_broken") or []]
         if tools_broken:
             detail["tools_broken"] = tools_broken
@@ -286,22 +301,40 @@ class MineflayerBackend:
         """The latest inventory the bot reported; ask once if none has been."""
         return self._latest_inventory if self._latest_inventory is not None else self.observe().inventory
 
-    def _post(self, path: str, payload: dict[str, Any] | None = None, timeout: float = REQUEST_TIMEOUT_S) -> dict[str, Any]:
+    def _post(
+        self, path: str, payload: dict[str, Any] | None = None, timeout: float = REQUEST_TIMEOUT_S, *, retry_busy: bool = True
+    ) -> dict[str, Any]:
         request = urllib.request.Request(
             self.api_url + path,
             data=json.dumps(payload or {}).encode("utf-8"),
             headers={"Content-Type": "application/json"},
             method="POST",
         )
-        try:
-            with urllib.request.urlopen(request, timeout=timeout) as response:
-                return json.loads(response.read().decode("utf-8"))
-        except urllib.error.HTTPError as error:
-            raise BackendError(f"bot server returned {error.code} for {path}: {error.read().decode()[:200]}") from error
-        except (urllib.error.URLError, TimeoutError) as error:
-            raise BackendError(
-                f"bot server not reachable at {self.api_url} ({error}). Start it with: npm --prefix mc/bot start"
-            ) from error
+        first_try = _monotonic()
+        wait = BUSY_FIRST_WAIT_S
+        while True:
+            try:
+                with urllib.request.urlopen(request, timeout=timeout) as response:
+                    return json.loads(response.read().decode("utf-8"))
+            except urllib.error.HTTPError as error:
+                text = error.read().decode()
+                if retry_busy and error.code == 409 and _is_busy(text) and _monotonic() - first_try < BUSY_GIVE_UP_S:
+                    _sleep(wait)
+                    wait = BUSY_WAIT_S
+                    continue
+                raise BackendError(f"bot server returned {error.code} for {path}: {text[:200]}") from error
+            except (urllib.error.URLError, TimeoutError) as error:
+                raise BackendError(
+                    f"bot server not reachable at {self.api_url} ({error}). Start it with: npm --prefix mc/bot start"
+                ) from error
+
+
+def _is_busy(error_text: str) -> bool:
+    try:
+        body = json.loads(error_text)
+    except ValueError:
+        return False
+    return isinstance(body, dict) and body.get("error") == "busy"
 
 
 def _observation(body: dict[str, Any]) -> Observation:
@@ -313,13 +346,42 @@ def _observation(body: dict[str, Any]) -> Observation:
         nearby={block: info["count"] for block, info in (body.get("nearby_blocks") or {}).items()},
         blocks_walked=body.get("blocks_walked", 0.0),
         free_slots=free_slots if isinstance(free_slots, int) else None,
+        entities=_entities(body.get("nearby_entities")),
     )
+
+
+def _entities(nearby_entities: Any) -> dict[str, dict[str, Any]]:
+    """/observe's nearby_entities, without the entries that are malformed (it is never part of a check)."""
+    if not isinstance(nearby_entities, dict):
+        return {}
+    entities = {}
+    for entity_type, info in nearby_entities.items():
+        if not isinstance(info, dict):
+            continue
+        count, nearest, kind = info.get("count"), info.get("nearest"), info.get("kind")
+        if _is_number(count, int) and _is_number(nearest, (int, float)) and isinstance(kind, str):
+            entities[entity_type] = {"count": count, "nearest": float(nearest), "kind": kind}
+    return entities
+
+
+def _is_number(value: Any, types: type | tuple[type, ...]) -> bool:
+    return isinstance(value, types) and not isinstance(value, bool)
 
 
 def _detail(body: dict[str, Any], *keys: str) -> dict[str, Any]:
     """The listed response fields that are set. "detail" is the bot's own
-    explanation of a failure, such as why a crafting table could not be placed."""
-    return {key: body[key] for key in keys if body.get(key) is not None}
+    explanation of a failure, such as why a crafting table could not be placed.
+    An interrupted action's "detail" is a dict, which goes in flat (threat, outcome)."""
+    interruption = _interruption(body)
+    found = {key: body[key] for key in keys if body.get(key) is not None and not (key == "detail" and interruption)}
+    return found | interruption
+
+
+def _interruption(body: dict[str, Any]) -> dict[str, Any]:
+    """The threat and outcome of an interrupted action's body; {} for any other."""
+    if body.get("error") != "interrupted" or not isinstance(body.get("detail"), dict):
+        return {}
+    return {key: body["detail"][key] for key in ("threat", "outcome") if key in body["detail"]}
 
 
 def _merge_travel(travels: list[dict[str, Any]]) -> dict[str, Any]:

@@ -28,6 +28,8 @@ NEW_PLACE_BLOCKS = 8
 # interrupted (v3.2): the bot's guard cut in to fight or flee.
 RETRIED_ERRORS = frozenset({"unreachable", "craft_failed", "dig_failed", "timeout", "interrupted"})
 MAX_RETRIES = 2
+# An interrupted step is retried in place, on a budget of its own: several fights can land on one step at night.
+MAX_INTERRUPTS = 4
 # The goal item of a life's exploration round: nothing to hold, so its success is reported by the life.
 EXPLORE_GOAL = "explore"
 
@@ -95,11 +97,13 @@ class Episode:
     def act(self, action: Action, annotate: Annotator | None = None) -> Outcome:
         """Run one action with the tolerant policy every system shares, within
         the budget: a target out of view gets up to 3 explores, and an error in
-        RETRIED_ERRORS up to 2 more attempts, each after an explore. Every
+        RETRIED_ERRORS up to 2 more attempts, each after an explore. An
+        `interrupted` step (the guard fought) is retried at once, in place and
+        without an explore, up to MAX_INTERRUPTS times, apart from those. Every
         adapter call is logged and counted as an action; `annotate` adds fields
         (such as the verifier's verdict) to each attempt's step."""
         outcome = self._act_once(action, annotate)
-        explores = retries = 0
+        explores = retries = interrupts = 0
         went_up = False
         previous_direction: str | None = None
         max_explores = MAX_NATURAL_EXPLORES_PER_TARGET if self.natural else MAX_EXPLORES_PER_TARGET
@@ -118,6 +122,12 @@ class Episode:
                     previous_direction = explore.direction
                 else:
                     explore = Action("explore")
+            elif outcome.error == "interrupted":
+                if interrupts >= MAX_INTERRUPTS:
+                    break
+                interrupts += 1
+                outcome = self._act_once(action, annotate)
+                continue
             elif outcome.error in RETRIED_ERRORS and retries < MAX_RETRIES:
                 retries += 1
                 explore = Action("explore")
