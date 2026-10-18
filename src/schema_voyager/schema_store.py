@@ -115,9 +115,12 @@ class SchemaStore:
             raise ValueError(f"cannot retest {rule_id}: it is already a retest")
         if any(r.source == "retest" and r.revision_of == rule_id for r in self.rules.values()):
             raise ValueError(f"cannot retest {rule_id}: it already has a retest")
+        retest_id = f"{rule_id}.retest@{world_id}"
+        if retest_id in self.rules:
+            raise ValueError(f"cannot retest {rule_id}: a rule with id {retest_id} already exists")
 
         retest = Rule(
-            id=f"{rule_id.split('@')[0]}.retest@{world_id}",
+            id=retest_id,
             action=copy.deepcopy(rule.action),
             preconditions=copy.deepcopy(rule.preconditions),
             effects=copy.deepcopy(rule.effects),

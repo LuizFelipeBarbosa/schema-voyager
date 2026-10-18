@@ -243,6 +243,63 @@ def test_the_producer_with_most_confirmations_is_retested_and_a_rule_out_of_scop
     assert [e["rule"] for e in life._retests_unreported] == ["smelt_iron_ingot"]
 
 
+def test_nested_revisions_are_each_retested_once_and_the_pass_ends(tmp_path):
+    life, _ = make_life(tmp_path)
+    oak, birch = "x.rev1@" + WORLD, "x.rev1@" + WORLD + ".rev1@" + WORLD
+    oak_action = Action("mine", "oak_log", tool="wooden_pickaxe")
+    birch_action = Action("mine", "birch_log", tool="wooden_pickaxe")
+    drops, nothing = {"block_removed": True, "drops": {"stick": 1}}, {"block_removed": True, "drops": {}}
+    demote_after_confirmations(life.store, mine_rule(oak, "oak_log", "stick"), oak_action, drops, nothing, episodes=2)
+    demote_after_confirmations(life.store, mine_rule(birch, "birch_log", "stick"), birch_action, drops, nothing, episodes=1)
+    life.store.add_rule(craft_rule("craft_wooden_pickaxe", "wooden_pickaxe", {"stick": 1}))
+    life.asked.add("stick")
+
+    real_retest, calls = life.store.retest, []
+
+    def guarded_retest(rule_id, world_id):
+        calls.append(rule_id)
+        assert len(calls) <= 5, "retests never end"
+        return real_retest(rule_id, world_id)
+
+    life.store.retest = guarded_retest
+
+    assert life._repair_dead_ingredients(OBSERVATION) is True
+    assert calls == [oak]
+
+    record(life.store, "oak-retest/bad", "e10", oak_action, nothing)
+    life.store.demote(retest_of(life.store, oak).id, "oak-retest/bad", WORLD)
+    assert life._repair_dead_ingredients(OBSERVATION) is True
+    assert calls == [oak, birch]
+    assert [e["outcome"] for e in life._retests_unreported] == ["started", "mismatch", "started"]
+
+    assert life._repair_dead_ingredients(OBSERVATION) is False
+    assert calls == [oak, birch]
+
+
+def test_a_retest_started_for_one_item_covers_the_next_item_it_yields(tmp_path):
+    life, _ = make_life(tmp_path)
+    both = {"block_removed": True, "drops": {"coal": 1, "flint": 1}}
+    nothing = {"block_removed": True, "drops": {}}
+    coal_action = Action("mine", "coal_ore", tool="wooden_pickaxe")
+    gravel_action = Action("mine", "gravel", tool="wooden_pickaxe")
+    two_drops = Rule(
+        id="mine_two_drops", action={"type": "mine", "block": "coal_ore"}, preconditions={"tool_any": PICKAXES},
+        effects=both, scope=WORLD,
+    )
+    demote_after_confirmations(life.store, two_drops, coal_action, both, nothing, episodes=2)
+    demote_after_confirmations(
+        life.store, mine_rule("mine_gravel", "gravel", "flint"), gravel_action,
+        {"block_removed": True, "drops": {"flint": 1}}, nothing, episodes=1,
+    )
+    life.store.add_rule(craft_rule("craft_torch", "torch", {"coal": 1, "flint": 1}))
+    life.asked.update({"coal", "flint"})
+
+    assert life._repair_dead_ingredients(OBSERVATION) is True
+
+    assert [(e["rule"], e["outcome"], e["item"]) for e in life._retests_unreported] == [("mine_two_drops", "started", "coal")]
+    assert life.llm.repair_calls == []
+
+
 # -- the change trigger -------------------------------------------------------------------
 
 

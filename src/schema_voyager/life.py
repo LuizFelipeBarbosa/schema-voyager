@@ -381,6 +381,8 @@ class _Life:
             produced = {item for rule in rules for item in rule.yields()}
             pass_started = False
             for item in sorted(self._needed_items(rules, produced) & self.asked):
+                if item in produced:
+                    continue  # a retest started in this pass already yields it
                 original = self._best_demoted_producer(item)
                 if original is None:
                     continue
@@ -390,6 +392,7 @@ class _Life:
                     f"Trying {_rule_name(original)} again: nothing else I know gives {item.lstrip('#')}.",
                     {"rule": original.id, "retest": retest.id, "outcome": "started", "transition": demoted_by, "item": item},
                 )
+                produced |= set(retest.yields())
                 pass_started = True
             if not pass_started:
                 return started
