@@ -58,11 +58,11 @@ def test_a_dead_ingredient_gets_one_repair_call_and_the_iron_goal_becomes_planna
     repaired = [line for line in lines if "repairs" in line]
     assert len(repaired) == 1
     assert repaired[0]["repairs"] == [
-        {"rule": "smelt_iron_ingot", "dead_items": ["iron_ore"], "proposed": [fix.id]}
+        {"rule": "smelt_iron_ingot", "dead_items": ["iron_ore"], "proposed": [fix.id], "skipped": []}
     ]
     assert repaired[0]["llm_calls"] >= 1
     assert any(line["goal"] == "iron_ingot" and line["outcome"] == "success" for line in lines)
-    assert json.loads((tmp_path / "life_state.json").read_text())["repaired"] == ["smelt_iron_ingot"]
+    assert json.loads((tmp_path / "life_state.json").read_text())["repaired"] == sorted(["smelt_iron_ingot", fix.id])  # a repair is never repaired
 
 
 def test_the_repair_is_traced_said_and_printed(tmp_path, capsys):

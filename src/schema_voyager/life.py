@@ -22,7 +22,7 @@ from .agent import run_schemavoyager
 from .curriculum import Curriculum, Goal
 from .episode import EXPLORE_GOAL, Episode
 from .llm import LLM, SpendCapReached
-from .models import Action, EpisodeResult, Observation, Task
+from .models import Action, EpisodeResult, Observation, Rule, Task
 from .planner import PlanStep
 from .schema_store import SchemaStore
 from .trace import EpisodeLog
@@ -335,17 +335,33 @@ class _Life:
                 continue
             proposed = self.llm.repair_rule_v2(rule, dead_items, obtainable, self.world_id)
             self.repaired.add(rule.id)
+            kept, skipped = [], []
             for repair in proposed:
+                why = self._useless_repair_reason(repair, dead)
+                if why:
+                    skipped.append({"id": repair.id, "why": why})
+                    continue
                 self.store.add_rule(repair)
+                self.repaired.add(repair.id)  # a repair is never repaired
+                kept.append(repair)
+            proposed = kept
             added |= bool(proposed)
             dead_text = " or ".join(item.lstrip("#") for item in dead_items)
             message = f"Rethinking {rule.kind} {rule.subject.lstrip('#')}: nothing I know gives {dead_text}."
             print(f"[repair] {rule.id}: no source for {', '.join(dead_items)}; proposed {[r.id for r in proposed]}")
             self.backend.say(message[:MAX_CHAT_CHARS])
             self._repairs_unreported.append(
-                {"rule": rule.id, "dead_items": dead_items, "proposed": [r.id for r in proposed]}
+                {"rule": rule.id, "dead_items": dead_items, "proposed": [r.id for r in proposed], "skipped": skipped}
             )
         return added
+
+    def _useless_repair_reason(self, repair: Rule, dead: set[str]) -> str | None:
+        """Why a proposed repair is not worth adding: it repeats a known rule or still consumes a dead item."""
+        for known in self.store.rules.values():
+            if (known.action, known.preconditions, known.effects) == (repair.action, repair.preconditions, repair.effects):
+                return f"same as {known.id}"
+        still_dead = sorted(dead & set(repair.preconditions.get("consumes", {})))
+        return f"still consumes {still_dead[0]}" if still_dead else None
 
     def _expand_frontier(self) -> bool:
         candidates = self.curriculum.unused_whitelist()
