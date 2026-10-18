@@ -6,16 +6,22 @@
 const { Movements, goals } = require('mineflayer-pathfinder')
 const { Vec3 } = require('vec3')
 const { watchServerBlockChange } = require('./blockchange')
-const { overlapsBot } = require('./station')
 const { hazardNear } = require('./targets')
 const { emptyTravel, recordTravel } = require('./travel')
 const { AIR_BLOCKS, emptyHand, findInventoryItem, gotoGoal, inventoryCounts, sleepTicks } = require('./world')
 
 const REACH = 4.5
+const SHAPELESS_REACH = 4 // GoalWithinReach: the eyes' distance to the cell's centre
+const EYE_HEIGHT = 1.62
+const PLAYER_HALF_WIDTH = 0.3
+const HITBOX_EPSILON = 1e-3
 const WALK_MS = 20000
+const RECENTRE_TICKS = 20
+const RECENTRE_DISTANCE = 0.1
 const PLACE_TRIES = 3
 const RETRY_TICKS = 5
 const REFUSAL_POLL_TICKS = 2
+const DOOR_UPPER_WAIT_TICKS = 20 // after a door's lower half: how long its upper half's block update is awaited
 const REFUSAL_WAIT_TICKS = 20 // after a refused placement, how long a late block update is awaited
 const CONFIRM_TIMEOUT_MS = 2000
 const SETTLE_TICKS = 10 // after a dig: falling sand, flowing water and drops
@@ -159,6 +165,27 @@ class StanceGoal extends goals.Goal {
   }
 }
 
+// Reach-only goal for a block with no collision shape (torch, grass, flower),
+// which GoalLookAtBlock's raycast can never hit: any stance whose eyes are within `reach` of the cell's centre.
+class GoalWithinReach extends goals.Goal {
+  constructor (pos, reach) {
+    super()
+    Object.assign(this, { centre: pos.offset(0.5, 0.5, 0.5), reach })
+  }
+
+  eyeDistance (node) {
+    return this.centre.distanceTo(node.offset(0.5, EYE_HEIGHT, 0.5))
+  }
+
+  heuristic (node) {
+    return Math.max(0, this.eyeDistance(node) - this.reach)
+  }
+
+  isEnd (node) {
+    return this.eyeDistance(node) <= this.reach
+  }
+}
+
 // Runs `fn` with world-preserving movements that may scaffold with `scaffoldNames`
 // (and, with `keepOut`, never inside it); restores the previous movements.
 async function withBuildMovements (bot, { scaffoldNames, keepOut }, fn) {
@@ -190,6 +217,34 @@ async function walk (bot, episode, goal, { scaffoldNames, keepOut, signal }) {
   }
 }
 
+// Walks to the middle of the cell the bot's feet are in, to get its hitbox off the neighbouring cells.
+// Sneaking is slow and never walks off an edge. If it runs out of ticks the caller re-checks.
+async function recentre (bot, { signal }) {
+  const centre = bot.entity.position.floored().offset(0.5, 0, 0.5)
+  try {
+    for (let tick = 0; tick < RECENTRE_TICKS; tick++) {
+      const { x, y, z } = bot.entity.position
+      if (Math.hypot(centre.x - x, centre.z - z) < RECENTRE_DISTANCE) return
+      signal?.throwIfAborted()
+      await bot.lookAt(new Vec3(centre.x, y + bot.entity.eyeHeight, centre.z), true)
+      bot.setControlState('sneak', true)
+      bot.setControlState('forward', true)
+      await sleepTicks(1)
+    }
+  } finally {
+    bot.setControlState('forward', false)
+    bot.setControlState('sneak', false)
+  }
+}
+
+// True if the bot's real hitbox (pathfinder snaps it to a cell's centre after a walk) reaches into `cell`.
+function hitboxOverlaps (bot, cell) {
+  const { x, z } = bot.entity.position
+  const halfWidth = (typeof bot.entity.width === 'number' ? bot.entity.width / 2 : PLAYER_HALF_WIDTH) + HITBOX_EPSILON
+  return cell.x < x + halfWidth && cell.x + 1 > x - halfWidth &&
+    cell.z < z + halfWidth && cell.z + 1 > z - halfWidth
+}
+
 // --- /place ----------------------------------------------------------------
 
 // Waits for the server's answer to a placement mineflayer gave up on: the
@@ -197,6 +252,15 @@ async function walk (bot, episode, goal, { scaffoldNames, keepOut, signal }) {
 async function waitUntilNotFree (bot, pos) {
   for (let waited = 0; waited < REFUSAL_WAIT_TICKS; waited += REFUSAL_POLL_TICKS) {
     if (!isFreeToPlace(bot.blockAt(pos)?.name)) return
+    await sleepTicks(REFUSAL_POLL_TICKS)
+  }
+}
+
+// The server sets a door's upper half right after the lower one, but its block
+// update reaches the bot a few ticks later: waits for the cell above to read as `doorName`.
+async function waitForUpperHalf (bot, pos, doorName) {
+  for (let waited = 0; waited < DOOR_UPPER_WAIT_TICKS; waited += REFUSAL_POLL_TICKS) {
+    if (bot.blockAt(pos.plus(UP))?.name === doorName) return
     await sleepTicks(REFUSAL_POLL_TICKS)
   }
 }
@@ -256,13 +320,21 @@ async function place (bot, body, { episode, tracker, signal = null }) {
   if (late) return late
   if (!arrival.faces) return finish('unreachable', { detail: 'the target cell is not loaded' })
   // A solid block can't go where the bot stands; the walk avoids it, this is the backstop.
-  const feetY = Math.floor(bot.entity.position.y)
-  if (!isTorch(blockName) && cells.some((cell) => (cell.y === feetY || cell.y === feetY + 1) && overlapsBot(bot, cell))) {
-    return finish('unreachable', { detail: 'standing in the target cell' })
+  await sleepTicks(1) // the stopped position reaches the server
+  const overlapsCells = () => {
+    const feetY = Math.floor(bot.entity.position.y)
+    return !isTorch(blockName) && cells.some((cell) => (cell.y === feetY || cell.y === feetY + 1) && hitboxOverlaps(bot, cell))
+  }
+  if (overlapsCells()) {
+    // The walk counts whole cells, so it can end off-centre with the hitbox reaching into the target.
+    await recentre(bot, { signal })
+    if (overlapsCells()) return finish('unreachable', { detail: 'standing in the target cell' })
   }
 
   const { placed, found } = await placeAgainstSupport(bot, blockName, pos, arrival.faces, signal)
-  return placed ? finish(null, { placed: true, found }) : finish('place_failed', { found })
+  if (!placed) return finish('place_failed', { found })
+  if (isDoor(blockName)) await waitForUpperHalf(bot, pos, found)
+  return finish(null, { placed: true, found })
 }
 
 // --- /clear ----------------------------------------------------------------
@@ -285,7 +357,8 @@ async function clear (bot, body, { episode, tracker, signal = null }) {
   // A door goes as a whole, so the walk keeps clear of both halves.
   const target = bot.blockAt(pos)
   const cells = target && isDoor(target.name) ? [pos, pos.offset(0, target.getProperties().half === 'upper' ? -1 : 1, 0)] : [pos]
-  const reach = new goals.GoalLookAtBlock(pos, bot.world, { reach: REACH })
+  const hasShape = !target || target.shapes.length > 0
+  const reach = hasShape ? new goals.GoalLookAtBlock(pos, bot.world, { reach: REACH }) : new GoalWithinReach(pos, SHAPELESS_REACH)
   const goal = new StanceGoal(reach, { cells, floor: pos, avoidBox: cells.length > 1 ? keepOut : null })
   const walked = await walk(bot, episode, goal, { scaffoldNames: scaffoldNamesFor(bot, scaffold), keepOut, signal })
   result.travel = walked.travel

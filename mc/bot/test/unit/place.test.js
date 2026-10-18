@@ -43,7 +43,8 @@ function buildBot (inventory = {}, extra = {}) {
   bot.blocks = blocks
   bot.inventory = { slots, items: () => slots.filter(Boolean), on () {}, removeListener () {} }
   bot.heldItem = null
-  Object.assign(bot, { clearControlStates () {}, on () {}, removeListener () {}, dig: async () => {}, equip: async () => {} })
+  bot.entity.eyeHeight = 1.62
+  Object.assign(bot, { clearControlStates () {}, setControlState () {}, lookAt: async () => {}, on () {}, removeListener () {}, dig: async () => {}, equip: async () => {} })
   bot._client = new EventEmitter()
   bot.world.getBlock = (pos) => bot.blockAt(pos)
   bot.world.raycast = (from, direction, range) => marchRay(bot, from, direction, range)
@@ -303,6 +304,19 @@ test('/place a door against the floor, walking clear of both cells and outside k
   assert.equal(goal.isEnd(new Vec3(1, 10, 1)), false) // inside keep_out
 })
 
+test('/place of a door waits for the upper half to arrive before answering', async () => {
+  const bot = buildBot({ oak_door: 1 })
+  bot.placeAs = 'oak_door'
+  const placeBlock = bot.placeBlock
+  bot.placeBlock = async (ref, face) => {
+    await placeBlock(ref, face)
+    setTimeout(() => { bot.blocks['2,11,0'] = 'oak_door' }, 100)
+  }
+  const result = await place(bot, request({ block: 'oak_door' }), newSession())
+  assert.deepEqual([result.ok, result.found], [true, 'oak_door'])
+  assert.equal(bot.blocks['2,11,0'], 'oak_door')
+})
+
 test('/place with the bot overlapping the cell is unreachable for a solid block, but not for a torch', async () => {
   const bot = buildBot({ oak_planks: 1 })
   bot.entity.position = new Vec3(1.9, 10, 0.5) // in the next cell, but its hitbox reaches into the target
@@ -314,6 +328,61 @@ test('/place with the bot overlapping the cell is unreachable for a solid block,
   torchBot.entity.position = new Vec3(1.9, 10, 0.5)
   torchBot.placeAs = 'torch'
   assert.equal((await place(torchBot, { block: 'torch', x: 2, y: 10, z: 0 }, newSession())).ok, true)
+})
+
+// A bot at (x, 10, 0.5) whose forward control walks it 0.05 per tick toward the point it last looked at.
+function offCentreBot (x, { walks = true } = {}) {
+  const bot = buildBot({ oak_planks: 1 })
+  bot.entity.position = new Vec3(x, 10, 0.5) // feet in the next cell, hitbox reaching into the target
+  bot.placeAs = 'oak_planks'
+  bot.controls = { forward: false, sneak: false }
+  bot.looks = []
+  let walker = null
+  bot.lookAt = async (point, force) => { bot.looks.push([point, force]) }
+  bot.setControlState = (name, on) => {
+    bot.controls[name] = on
+    if (name !== 'forward') return
+    clearInterval(walker)
+    if (!on || !walks) return
+    walker = setInterval(() => {
+      const toward = Math.sign(bot.looks.at(-1)[0].x - bot.entity.position.x)
+      bot.entity.position = bot.entity.position.offset(0.05 * toward, 0, 0)
+    }, 50)
+  }
+  return bot
+}
+
+test('/place re-centres an off-centre bot by sneaking toward its feet cell centre, then places', async () => {
+  const bot = offCentreBot(1.9)
+  const result = await place(bot, request(), newSession())
+  assert.deepEqual([result.ok, result.placed, result.found], [true, true, 'oak_planks'])
+  assert.ok(Math.abs(bot.entity.position.x - 1.5) < 0.1)
+  const [point, force] = bot.looks[0]
+  assert.deepEqual([point.x, point.z, force], [1.5, 0.5, true])
+  assert.ok(Math.abs(point.y - 11.62) < 1e-9) // level with the eyes
+  assert.deepEqual(bot.controls, { forward: false, sneak: false })
+})
+
+test('/place is unreachable when the re-centre does not move the bot, and releases the controls', async () => {
+  const bot = offCentreBot(1.9, { walks: false })
+  const result = await place(bot, request(), newSession())
+  assert.deepEqual([result.error, result.detail], ['unreachable', 'standing in the target cell'])
+  assert.equal(bot.looks.length, 20)
+  assert.deepEqual(bot.controls, { forward: false, sneak: false })
+  assert.equal(bot.placeCalls.length, 0)
+})
+
+test('/place throws the abort reason when aborted while re-centring, with the controls released', async () => {
+  const bot = offCentreBot(1.9, { walks: false })
+  const controller = new AbortController()
+  const lookAt = bot.lookAt
+  bot.lookAt = async (...args) => {
+    await lookAt(...args)
+    if (bot.looks.length === 3) controller.abort(Object.assign(new Error('guard'), { code: 'aborted' }))
+  }
+  await assert.rejects(place(bot, request(), newSession({ signal: controller.signal })), { code: 'aborted' })
+  assert.deepEqual(bot.controls, { forward: false, sneak: false })
+  assert.equal(bot.placeCalls.length, 0)
 })
 
 test('/place throws the abort reason when aborted', async () => {
@@ -460,4 +529,32 @@ test('/clear is unreachable when the walk fails', async () => {
   bot.entity.position = new Vec3(2.5, 11, 0.5) // on top of the target
   const result = await clear(bot, clearRequest(), newSession())
   assert.deepEqual([result.ok, result.error, bot.digs], [false, 'unreachable', undefined])
+})
+
+test('/place does not re-centre a bot whose real hitbox stays out of the target cell', async () => {
+  const bot = offCentreBot(1.81) // box 1.51..2.11, clear of cell 0
+  const result = await place(bot, request({ x: 0 }), newSession())
+  assert.deepEqual([result.ok, result.placed], [true, true])
+  assert.equal(bot.looks.length, 0)
+  assert.ok(!Object.values(bot.controls).includes(true))
+})
+
+test('/clear of a block with no collision shape walks to a reach-only goal, a solid block keeps GoalLookAtBlock', async () => {
+  for (const name of ['torch', 'short_grass', 'poppy']) {
+    const bot = clearBot({}, { '2,10,0': name })
+    let goal = null
+    bot.pathfinder.goto = async (g) => { goal = g }
+    const result = await clear(bot, clearRequest(), newSession())
+    assert.deepEqual([result.ok, result.cleared], [true, true], name)
+    assert.ok(!(goal.inner instanceof goals.GoalLookAtBlock), name)
+    assert.equal(goal.isEnd(new Vec3(2, 10, 3)), true, name) // in reach
+    assert.equal(goal.isEnd(new Vec3(2, 10, 6)), false, name) // too far
+    assert.equal(goal.isEnd(new Vec3(2, 10, 0)), false, name) // inside it
+    assert.equal(goal.isEnd(new Vec3(2, 11, 0)), false, name) // on top of it
+  }
+  const bot = clearBot({}, { '2,10,0': 'dirt' })
+  let goal = null
+  bot.pathfinder.goto = async (g) => { goal = g }
+  await clear(bot, clearRequest(), newSession())
+  assert.ok(goal.inner instanceof goals.GoalLookAtBlock)
 })
