@@ -222,17 +222,25 @@ class _BuildRun:
     # -- materials ------------------------------------------------------------
 
     def gather_materials(self, needs: dict[str, int]) -> str:
-        """Run the rule planner until every need is held; else the first need not held, as a reason."""
-        pursue(
-            self.episode, self.store, needs, before_step=self.before_step, excluded=self.excluded, narrate=False
-        )
+        """Run the rule planner until every need is held; else the needs not held, as a reason.
+
+        The planner gathers deeper items first, so a door would be crafted from whatever planks the logs make, of
+        mixed species. Gathering everything else first leaves the bulk of the planks held, and some species has 6."""
+        if "#door" in needs:
+            self.pursue_needs({item: count for item, count in needs.items() if item != "#door"})
+        self.pursue_needs(needs)
         held = self.episode.counts
-        short = next((item for item, count in needs.items() if held.get(item, 0) < count), None)
-        if short is None:
+        short = [_label(item, count) for item, count in needs.items() if held.get(item, 0) < count]
+        if not short:
             return ""
         if not self.episode.can_act:
             return self.out_of_budget()
-        return f"couldn't get {_label(short, needs[short])}"
+        return "couldn't get " + ", ".join(short)
+
+    def pursue_needs(self, needs: dict[str, int]) -> None:
+        pursue(
+            self.episode, self.store, needs, before_step=self.before_step, excluded=self.excluded, narrate=False
+        )
 
     def remaining_needs(self) -> dict[str, int]:
         """What the cells not yet matching still take, from the states so far."""

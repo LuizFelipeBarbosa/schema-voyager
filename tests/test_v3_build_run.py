@@ -372,8 +372,52 @@ def test_materials_that_cannot_be_gathered_fail_the_goal_and_free_the_keep_out_b
     episode = _episode(world, llm, plan)
     outcome = run_build(episode, SchemaStore(), plan, before_step=NO_HOOK, check_interrupts=lambda: None,
                         excluded=frozenset())  # no rules: the planner has nothing to plan with
-    assert outcome.reason == "couldn't get 12 logs" and not outcome.result.success
+    assert outcome.reason == "couldn't get 12 logs, 57 planks, 1 torch, 16 dirt" and not outcome.result.success
     assert world._keep_out is None
+
+
+def _build_run(world, llm, store, plan):
+    return build_runner._BuildRun(
+        episode=_episode(world, llm, plan), store=store, plan=plan, before_step=NO_HOOK,
+        check_interrupts=lambda: None, excluded=frozenset(),
+    )
+
+
+def _spy_on_pursue(monkeypatch):
+    calls = []
+
+    def spy(episode, store, needs, **kwargs):
+        calls.append(dict(needs))
+        return pursue(episode, store, needs, **kwargs)
+
+    monkeypatch.setattr(build_runner, "pursue", spy)
+    return calls
+
+
+def test_gathering_with_a_door_need_pursues_everything_else_first_then_all(world, llm, store, monkeypatch):
+    calls = _spy_on_pursue(monkeypatch)
+    run = _build_run(world, llm, store, _prepare(world, store))
+    needs = {"#door": 1, "#log": 2, "dirt": 3}
+
+    run.gather_materials(needs)
+
+    assert calls == [{"#log": 2, "dirt": 3}, needs]
+
+
+def test_gathering_without_a_door_need_pursues_once(world, llm, store, monkeypatch):
+    calls = _spy_on_pursue(monkeypatch)
+    run = _build_run(world, llm, store, _prepare(world, store))
+    needs = {"#log": 2, "dirt": 3}
+
+    assert run.gather_materials(needs) == ""
+
+    assert calls == [needs]
+
+
+def test_the_reason_names_every_need_not_held_in_order(world, llm, store):
+    run = _build_run(world, llm, SchemaStore(), _prepare(world, store))  # no rules: nothing can be gathered
+
+    assert run.gather_materials({"#door": 1, "#log": 12, "dirt": 0}) == "couldn't get 1 door, 12 logs"
 
 
 # --- placing a group ---------------------------------------------------------------------

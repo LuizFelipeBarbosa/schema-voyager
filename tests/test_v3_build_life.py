@@ -7,6 +7,8 @@ Chat commands come from a NaturalWorld whose `status()` emits on the Nth call (c
 
 import json
 
+import pytest
+
 from schema_voyager import blueprint, builder
 from schema_voyager.environment import NaturalWorld
 from schema_voyager.goals import GoalQueue
@@ -117,6 +119,19 @@ def test_a_build_goal_runs_from_submission_to_done(tmp_path):
     record = json.loads((tmp_path / "life.jsonl").read_text().splitlines()[0])
     assert (record["build"]["name"], record["build"]["origin"]) == ("small hut", saved["origin"])
     assert record["build"]["placed"] == record["build"]["total"] > 0
+
+
+@pytest.mark.parametrize("seed", range(1, 9))
+def test_a_build_goal_is_done_and_matches_on_every_seed(tmp_path, seed):
+    world = ChatWorld(seed=seed)
+
+    run(tmp_path, world)
+
+    assert entry(tmp_path, "u001").status == "done"
+    [saved] = protected(tmp_path)
+    origin = tuple(saved["origin"])
+    scan = world.scan(*site_box_of(saved))
+    assert builder.mismatches(FAKE_HUT, origin, scan) == []
 
 
 def test_a_later_log_goal_never_takes_a_block_of_the_house(tmp_path):
