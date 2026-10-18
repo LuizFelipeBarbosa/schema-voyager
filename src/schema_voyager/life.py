@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 import os
 import time
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, ContextManager, Protocol
 
@@ -20,7 +20,7 @@ from . import normalize
 from .adapter import DIRECTIONS, LifeBackend
 from .agent import run_schemavoyager
 from .curriculum import Curriculum, Goal
-from .episode import Episode
+from .episode import EXPLORE_GOAL, Episode
 from .llm import LLM, SpendCapReached
 from .models import Action, EpisodeResult, Observation, Task
 from .planner import PlanStep
@@ -334,7 +334,6 @@ class _Life:
         log.event("goal", index=index, item=goal.item, count=goal.count, reason=goal.reason, budget=budget)
         for repair in self._repairs_unreported:
             log.event("repair", **repair)
-        self.backend.say(f"Next goal: {goal.item} ({goal.reason})"[:MAX_CHAT_CHARS])
 
         result = run_schemavoyager(episode, self.store, self.hooks.before_step)
         # Cut short by the life's own clock (not the goal's deadline or budget): no attempt to count.
@@ -357,7 +356,7 @@ class _Life:
         name = f"g{index:03d}"
         observation = self.backend.begin_episode()
         task = Task(
-            task_id=name, split="train", goal_item="explore", goal_count=1,
+            task_id=name, split="train", goal_item=EXPLORE_GOAL, goal_count=1,
             start_inventory=dict(observation.inventory), world_rules=(), budget=EXPLORES_PER_ROUND,
             description="Explore for new blocks",
         )
@@ -369,7 +368,7 @@ class _Life:
             backend=self.backend, llm=self.llm, log=log, inventory=dict(observation.inventory), natural=True,
             deadline=time.monotonic() + min(self.config.goal_wall_clock_s, max(self._remaining_s(), 0.0)),
         )
-        goal = Goal("explore", 1, 0, (), "nothing left to learn here")
+        goal = Goal(EXPLORE_GOAL, 1, 0, (), "nothing left to learn here")
         log.event("goal", index=index, item=goal.item, count=goal.count, reason=goal.reason, budget=task.budget)
         self.backend.say("Nothing left to learn here; exploring for new blocks.")
 
@@ -378,7 +377,7 @@ class _Life:
             direction = DIRECTIONS[self.explores_done % len(DIRECTIONS)]
             self.explores_done += 1
             all_ok &= episode.act(Action("explore", direction=direction)).ok
-        result = replace(episode.finish(), success=all_ok)
+        result = episode.finish(success=all_ok)
 
         self.curriculum.skipped.clear()
         self.curriculum.failures.clear()

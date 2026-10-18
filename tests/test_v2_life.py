@@ -351,8 +351,7 @@ def test_a_life_runs_goals_in_one_world_without_resets(tmp_path):
     assert store.rules and {r.scope for r in store.rules.values()} == {config.world_id}
     assert {t.world_id for t in store.transitions} == {config.world_id}
     assert all(line["budget"] == max(30, 4 * line["plan_length"]) for line in lines)
-    assert sum(1 for message in backend.said if message.startswith("Next goal:")) == 6
-    assert sum(1 for message in backend.said if message.startswith("Plan:")) == 6
+    assert sum(1 for message in backend.said if message.startswith("Goal:")) == 6
     assert all(len(message) <= 240 for message in backend.said)
 
 
@@ -564,12 +563,12 @@ def test_the_before_step_hook_sees_every_step(tmp_path):
     assert seen == [("mine", 2), ("craft", 2)]
 
 
-def test_the_plan_is_narrated_for_the_first_plan_and_after_a_revision_only(tmp_path, monkeypatch):
+def test_the_goal_is_announced_with_the_first_plan_only(tmp_path, monkeypatch):
     backend = FakeLifeBackend()
     monkeypatch.setattr(agent, "check", scripted_check(["failed", "failed"]))
     llm = make_llm(tmp_path)
     run_schemavoyager(make_episode(backend, llm, "#planks", 4), prior_store(llm, "#planks", "#log"))
-    assert sum(m.startswith("Plan:") for m in backend.said) == 1  # three plans, one narrated
+    assert sum(m.startswith("Goal:") for m in backend.said) == 1  # three plans, one narrated
 
 
 def test_a_chat_burst_is_three_messages_of_240_characters(tmp_path):
