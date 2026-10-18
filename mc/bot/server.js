@@ -12,6 +12,8 @@ const { probe } = require('./lib/probe')
 const { smelt } = require('./lib/smelt')
 const { clear, place, validateClear, validatePlace } = require('./lib/place')
 const { scan, validateScan } = require('./lib/scan')
+const { survey, validateSurvey } = require('./lib/survey')
+const { goto, validateGoto } = require('./lib/goto')
 const { toss, validateToss } = require('./lib/toss')
 const { createUnreachableMemory, look } = require('./lib/targets')
 const { attachEventTracker, createEventLog } = require('./lib/events')
@@ -40,6 +42,8 @@ const RECONNECT_DELAY_MS = 3000
 const ACTION_TIMEOUT_MS = 120000
 const MAX_WALK_STEP = 2 // larger per-tick jumps are teleports, not walking
 const BUILD_TIMEOUT_MS = 60000 // /place and /clear: the 20 s walk plus the placing or digging
+const SURVEY_TIMEOUT_MS = 30000
+const GOTO_TIMEOUT_MS = 60000
 const TOSS_TIMEOUT_MS = 20000 // the 10 s walk plus the tosses and the settle
 const SMELT_TIMEOUT_BASE_MS = 30000
 const SMELT_TIMEOUT_PER_ITEM_MS = 12000
@@ -279,6 +283,8 @@ const validators = {
   place: validatePlace,
   clear: validateClear,
   scan: validateScan,
+  survey: validateSurvey,
+  goto: validateGoto,
   chat: (body) => (typeof body.message === 'string' ? null : '"message" must be a string')
 }
 
@@ -427,6 +433,8 @@ action('/toss', validators.toss, (body, session) => toss(bot, body, session), { 
 action('/place', validators.place, (body, session) => place(bot, body, session), { timeoutMs: BUILD_TIMEOUT_MS, cutIn: true })
 action('/clear', validators.clear, (body, session) => clear(bot, body, session), { timeoutMs: BUILD_TIMEOUT_MS, cutIn: true })
 action('/scan', validators.scan, (body) => scan(bot, body))
+action('/survey', validators.survey, (body) => survey(bot, body), { timeoutMs: SURVEY_TIMEOUT_MS })
+action('/goto', validators.goto, (body, session) => goto(bot, body, session), { timeoutMs: GOTO_TIMEOUT_MS, cutIn: true })
 action('/chat', validators.chat, (body) => chat(body))
 action('/reset_episode', validators.none, () => resetEpisode())
 
