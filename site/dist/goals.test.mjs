@@ -21,19 +21,19 @@ function fakeElement() {
   return { value: '', textContent: '', innerHTML: '', hidden: true, addEventListener: (type, fn) => { listeners[type] = fn; }, fire: (type, event) => listeners[type](event) };
 }
 
-function setup(payload, respond = () => ({ ok: true, status: 201, body: { ok: true } })) {
+function setup(payload, respond = () => ({ ok: true, status: 201, body: { ok: true } }), options = {}) {
   const calls = [];
-  const els = { '.goals-input': fakeElement(), '.goals-send': fakeElement(), '.goals-error': fakeElement(), '.goals-list': fakeElement() };
+  const els = { '.goals-input': fakeElement(), '.goals-send': fakeElement(), '.goals-error': fakeElement(), '.goals-run': fakeElement(), '.goals-list': fakeElement() };
   const timers = [];
   const state = { payload };
   const fetch = async (url, options) => {
     calls.push({ url, options });
-    if (!options) return { ok: true, json: async () => state.payload };
+    if (!options) return { ok: state.getStatus === undefined, status: state.getStatus || 200, json: async () => state.payload };
     const reply = respond(url, options);
     return { ok: reply.ok, json: async () => reply.body };
   };
   const root = { innerHTML: '', querySelector: (selector) => els[selector] };
-  const controller = createController({ root, fetch, setInterval: (fn, ms) => timers.push({ fn, ms }) });
+  const controller = createController({ root, fetch, setInterval: (fn, ms) => timers.push({ fn, ms }), ...options });
   return { calls, els, timers, state, controller, posts: () => calls.filter((c) => c.options) };
 }
 const settle = () => new Promise((resolve) => setImmediate(resolve));
@@ -131,6 +131,58 @@ const tests = {
     const t = setup({ run: null, goals: [] });
     await settle();
     assert.ok(t.els['.goals-list'].innerHTML.includes('no goals yet'));
+  },
+  async 'the run line names the run, or says there is none'() {
+    const t = setup({ run: 'life-1', goals: [] });
+    await settle();
+    assert.equal(t.els['.goals-run'].textContent, 'Run: life-1');
+    t.state.payload = { run: null, goals: [] };
+    await t.controller.refresh();
+    assert.equal(t.els['.goals-run'].textContent, 'No live run');
+  },
+  async 'pageRun goes in the GET url and the POST body'() {
+    const t = setup({ run: 'other', goals: [] }, undefined, { pageRun: 'my run' });
+    await settle();
+    assert.equal(t.calls[0].url, '/goals.json?run=my%20run');
+    t.els['.goals-input'].value = 'x';
+    await t.controller.send();
+    assert.deepEqual(JSON.parse(t.posts()[0].options.body), { text: 'x', run: 'my run' });
+    await t.controller.cancel('u001');
+    assert.deepEqual(JSON.parse(t.posts()[1].options.body), { run: 'my run' });
+  },
+  async 'ambiguous_run on GET shows the message and keeps the list'() {
+    const t = setup({ run: 'r', goals: [goal('u001', 'queued')] });
+    await settle();
+    t.state.payload = { ok: false, error: 'ambiguous_run', runs: ['a', 'b'] };
+    t.state.getStatus = 409;
+    await t.controller.refresh();
+    assert.equal(t.els['.goals-error'].textContent, 'Several lives are running: a, b. Open the panel with ?run=<name>.');
+    assert.equal(t.els['.goals-error'].hidden, false);
+    assert.ok(t.els['.goals-list'].innerHTML.includes('u001'));
+    assert.equal(t.els['.goals-run'].textContent, 'Run: r');
+    assert.ok(t.els['.goals-input']);
+  },
+  async 'a good GET clears the ambiguity message'() {
+    const t = setup({ run: 'r', goals: [] });
+    await settle();
+    t.state.payload = { ok: false, error: 'ambiguous_run', runs: ['a', 'b'] };
+    t.state.getStatus = 409;
+    await t.controller.refresh();
+    t.state.payload = { run: 'a', goals: [] };
+    delete t.state.getStatus;
+    await t.controller.refresh();
+    assert.equal(t.els['.goals-error'].hidden, true);
+  },
+  async 'ambiguous_run on POST shows the message'() {
+    const ambiguous = { ok: false, error: 'ambiguous_run', runs: ['a', 'b'] };
+    const t = setup({ run: null, goals: [] }, () => ({ ok: false, body: ambiguous }));
+    await settle();
+    t.state.payload = ambiguous; // the follow-up GET is ambiguous too
+    t.state.getStatus = 409;
+    t.els['.goals-input'].value = 'x';
+    await t.controller.send();
+    assert.equal(t.els['.goals-error'].textContent, 'Several lives are running: a, b. Open the panel with ?run=<name>.');
+    assert.equal(t.els['.goals-input'].value, 'x');
   }
 };
 
