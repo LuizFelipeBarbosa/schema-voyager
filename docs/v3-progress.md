@@ -44,7 +44,7 @@ pushed to `origin` until the user says so.
 | S07 survival | done | b | 24 lanes merged (pytest 840, bot 266); live guard test ALL PASS; soaks `runs/v3-soak-1..3` (soak 3 on the final code: 30/32 goals, 0 deaths, 0 false contradictions); not pushed |
 | S08 combat and hunting | not started | b | |
 | S09 building foundations | done | a | Contract v3.4a and bot API v3.4; 5 lanes merged (pytest 821, bot 258); `runs/s09-place-live` ALL PASS (16 checks) from `main`; not pushed |
-| S10 build goals | running | a | v3.4b contract (protected boxes, `/survey`, approval, build runner); lanes: build-order, survey-bot, blueprint-llm, panel-preview, then survey-backend, protect-bot, protect-backend, then build-run, build-life; live `runs/v3-build-live` |
+| S10 build goals | done | a | Contract v3.4b and bot API v3.4b; 12 lanes merged (pytest 997, bot 312); live `runs/v3-build-live` and `-easy`: Claude's house approved in the panel, built and matched (0 failed steps); protection checked live; not pushed |
 | S11 duels | not started | b | |
 | S12 home, storage, composite goals | not started | a | |
 | S13 mine reach (`unreachable` ore) | running | b | Diagnosing `mine iron_ore` `unreachable` and the underground blind-explore loop |
@@ -383,3 +383,44 @@ pushed to `origin` until the user says so.
   - In the simulator, a fight's `damage` events are phase `step`, so most interrupted steps are judged `quarantined`, the bot's
     `failed`; neither records a transition.
 - Instance b is down, with no lock. No S07 worktrees or branches are left. Not pushed.
+
+## S10 build goals (done 2026-10-18)
+
+- Contract: f3e73d9 v3.4b in `docs/v3-interfaces.md` and bot API v3.4b, after the advisor's review (GO with changes) and
+  the build runner's design check (GO with five fixes); 8118c7e adds "doors gathered last". Beyond the S10 prompt:
+  protected boxes (sent per request as `protect`, so a reconnect or restart loses nothing; `building`/`built`/`partial`
+  in `life_state.json`), `goto` (back to the site), `#door` (any wooden door; crafted from 6 planks of one species),
+  `accept` sending a build straight to `awaiting_approval` (new transition `submitted -> awaiting_approval`),
+  `agent.pursue`/`planner.make_plan_for` (several needs in one episode), `Episode.act`'s build-kind policy (no explores,
+  one in-place retry of `unreachable`/`timeout`), limits 7 x 4 x 7 and 120 cells.
+- Merges: 025286d `build-order`, 38284c1 `survey-bot`, fb752e6 `survey-backend`, fc9c725 `blueprint-llm` (architect's
+  fix: a worked example in the prompt), 6d9a5a6 `protect-backend`, a6b473e `protect-bot`, 491124f `panel-preview`,
+  54126d8 `build-run`, ae6ba95 `doors`, 3496bb1 `build-approval`, 704fa0e `build-life`, d13950c `door-order`;
+  4eb011b `scripts/v3-clip.js`. Suite on 1d296c3: pytest 997 (1 skipped), bot unit 312, `trace.test.mjs`,
+  `goals.test.mjs` and `build_preview.test.mjs` pass (the last joins the offline suite).
+- Re-splits: `build-life` became `build-approval` (parse, approval, `!yes`/`!no`; ran alongside `doors`) and
+  `build-life` (running builds, protected state); `build-run` ran alongside wave B, since it needed nothing from it.
+  Existing tests edited only where the contract changed them: "can't build" replies (`test_v3_parse_goal.py`,
+  `test_v3_life_queue.py`), the transition table copy (`test_v3_goals.py`), the panel's build-goal helper, and one
+  reason string (`test_v3_build_run.py`).
+- Found by the lanes: `craft #door` blocked on 5 of 8 simulator seeds (planks from mixed log species): fixed by
+  `door-order`; the fake hut now builds on seeds 1-8.
+- Live (instance a, see Log 04:55-05:16): `runs/v3-build-live` (peaceful) and `runs/v3-build-live-easy` (easy) pass:
+  approve in the panel, gather, 72 place steps with 0 failures, `mismatches` `[]` on an independent scan, about 5-6
+  minutes and $0.04 each. Clip `runs/v3-build-live/build.mp4` / `build.gif` (`runs/` is git-ignored: not in the
+  README yet). Protection: a resumed life's 10-log goal left every house cell unchanged; the bot log shows `protect`
+  on its `/mine` requests. Instance a is down with no lock; no S10 worktrees or `v3/*` branches are left. Not pushed.
+- Advisor (one Opus `Plan`, four consultations): contract GO with changes; design check GO with five fixes; final
+  review: nothing blocks done.
+- Open, for S12 and the orchestrator:
+  - Must (S12): the bot can't enter a finished house (walks never open doors), so nothing inside is reachable; and
+    crafting tables/furnaces aren't kept out of protected boxes. Needs a door-open step or a doorless doorway.
+  - Must: the protected list has no cap in Python; the bot refuses more than 32 boxes (400 on every `/mine`), and
+    `partial` entries pile up over a long life. Cap or merge in `life.py`.
+  - A resumed build that needs only a door, with mixed planks held, can still be blocked on species.
+  - Not tried live: chat `!yes`/`!no` (the panel route was used), a real browser click on the preview (curl and
+    served 200 only), glass or torch designs (Claude chose wood and a door only).
+  - Dirt scaffold pillars stay beside the house (`travel.placed` has names, not positions).
+  - Grass under the walls decays to dirt: house checks must use `builder.mismatches`, not identical scans.
+  - `!yes` answers "Approved" even if `mark` loses a race; the life's own goal counts `pursue` steps of a build in
+    its plan length only as `gather_steps`.
