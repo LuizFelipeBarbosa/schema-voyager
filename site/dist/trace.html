@@ -16,6 +16,19 @@
           <select id="picker" aria-label="Episode trace"></select>
         </header>
 
+        <section class="life" id="life" hidden>
+          <div class="life-follow" id="life-follow"></div>
+          <div class="goal-card" id="life-goal"></div>
+          <div class="life-story">
+            <div class="life-now">
+              <div id="life-revision"></div>
+              <div id="life-hypothesis"></div>
+            </div>
+            <section class="card" id="life-plan"></section>
+          </div>
+          <section class="strip" id="life-overview"></section>
+        </section>
+
         <section class="episode" id="episode"></section>
         <section class="counters" id="counters"></section>
 
@@ -51,6 +64,7 @@
       </main>
     </div>
     <div class="drop-hint" id="drop-hint" hidden><span>Drop a <code>.jsonl</code> episode trace</span></div>
+    <script src="life.js"></script>
     <script src="trace.js"></script>
   </body>
 </html>

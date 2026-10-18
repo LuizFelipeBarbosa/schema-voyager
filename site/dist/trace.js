@@ -22,6 +22,7 @@ const MAX_GAP_S = 6; // replay shortens long pauses, such as a Claude call
 const LIVE_WINDOW_S = 60; // an unfinished trace written to this recently is live
 
 const params = new URLSearchParams(location.search);
+const LIFE_RUN = params.get('run'); // set: show the life view (life.js) of this run
 const byId = (id) => document.getElementById(id);
 
 const player = {
@@ -33,6 +34,9 @@ const player = {
   speed: 1,
   timer: null
 };
+
+// What the life view reads besides the trace on screen: the run's goals and world changes.
+const lifeFeed = { rows: [], changes: [], episodes: [] };
 
 // --- Loading and following traces --------------------------------------------
 
@@ -50,7 +54,7 @@ async function openPath(path, autoplay) {
   updateUrl();
   syncPicker();
   await pollFile();
-  seek(0);
+  seek(LIFE_RUN && isLive() ? player.events.length - 1 : 0); // a live goal shows where it is now
   if (autoplay) play();
 }
 
@@ -101,9 +105,24 @@ async function pollIndex() {
   // ?run=<run dir name> shows and follows that run only, when several write traces at once.
   if (params.get('run')) episodes = episodes.filter((episode) => episode.run === params.get('run'));
   renderPicker(episodes);
+  lifeFeed.episodes = episodes;
   const newest = episodes[0];
   if (player.followNewest && newest && newest.path !== player.path) openPath(newest.path, true);
   return episodes;
+}
+
+async function pollLife() {
+  const [rows, changes] = await Promise.all(['life', 'changes'].map(async (name) => {
+    try {
+      const response = await fetch(`/runs/${LIFE_RUN}/${name}.jsonl`, { cache: 'no-store' });
+      return response.ok ? parseTrace(await response.text()) : [];
+    } catch {
+      return [];
+    }
+  }));
+  if (rows.length === lifeFeed.rows.length && changes.length === lifeFeed.changes.length) return;
+  Object.assign(lifeFeed, { rows, changes });
+  render();
 }
 
 function updateUrl() {
@@ -323,6 +342,11 @@ function isRevision(ruleId) {
 // --- Rendering ---------------------------------------------------------------
 
 function render() {
+  if (LIFE_RUN) {
+    renderLife();
+    renderControls();
+    return;
+  }
   const state = stateAt(player.events, player.index);
   const system = state.start ? state.start.system : 'D';
   byId('episode').innerHTML = episodeHtml(state);
@@ -339,6 +363,43 @@ function render() {
   if (currentStep) currentStep.parentElement.scrollTop = currentStep.offsetTop - currentStep.parentElement.clientHeight / 2;
   const latestChange = document.querySelector('.change.latest');
   if (latestChange) latestChange.parentElement.scrollTop = latestChange.offsetTop;
+}
+
+function renderLife() {
+  const story = goalStory(player.events.slice(0, player.index + 1));
+  const row = story.goal ? lifeFeed.rows.find((candidate) => candidate.index === story.goal.index) : null;
+  byId('life-follow').innerHTML = player.followNewest
+    ? '<span class="live-badge">● LIVE</span> following the newest goal'
+    : `<span class="pinned-badge">PINNED</span> ${story.goal ? `to goal ${story.goal.index}` : ''} <button data-live>back to live</button>`;
+  byId('life-goal').innerHTML = goalCardHtml(story, story.end ? row : null);
+  byId('life-revision').innerHTML = revisionHtml(story);
+  byId('life-hypothesis').innerHTML = hypothesisHtml(story);
+  byId('life-plan').innerHTML = lifePlanHtml(story);
+  byId('life-overview').innerHTML = overviewHtml(lifeOverview(lifeFeed.rows, lifeFeed.changes, story, lifeFeed.episodes));
+  const running = document.querySelector('.plan-rows li.running');
+  if (running) running.parentElement.scrollTop = running.offsetTop - running.parentElement.clientHeight / 2;
+}
+
+function tickElapsed() {
+  const elapsed = byId('life-elapsed');
+  if (elapsed && !elapsed.dataset.end && isLive()) elapsed.textContent = formatElapsed(Date.now() / 1000 - Number(elapsed.dataset.start));
+}
+
+// Pins the goal of a timeline chip, or goes back to following the newest.
+async function pinGoal(path) {
+  player.followNewest = false;
+  await openPath(path, false);
+  seek(player.events.length - 1);
+}
+
+async function goLive() {
+  player.followNewest = true;
+  updateUrl();
+  const episodes = await pollIndex();
+  if (episodes && episodes[0] && episodes[0].path === player.path) {
+    seek(player.events.length - 1);
+    play();
+  }
 }
 
 function episodeHtml(state) {
@@ -724,6 +785,11 @@ function wireControls() {
       openPath(value, false);
     }
   });
+  byId('life').addEventListener('click', (event) => {
+    const chip = event.target.closest('.chip[data-path]');
+    if (chip) pinGoal(chip.dataset.path);
+    if (event.target.closest('[data-live]')) goLive();
+  });
   document.addEventListener('keydown', (event) => {
     if (event.target.matches('select, input')) return;
     const action = { ' ': 'play', ArrowLeft: 'prev', ArrowRight: 'next', Home: 'start', End: 'end' }[event.key];
@@ -767,6 +833,13 @@ function embedViewer() {
 }
 
 async function main() {
+  if (LIFE_RUN) {
+    byId('life').hidden = false;
+    document.querySelector('.layout').classList.add('life-mode');
+    pollLife();
+    setInterval(pollLife, INDEX_POLL_MS);
+    setInterval(tickElapsed, 1000);
+  }
   embedViewer();
   wireControls();
   wireDrop();
