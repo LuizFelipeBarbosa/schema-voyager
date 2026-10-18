@@ -13,6 +13,7 @@ import pytest
 from schema_voyager.environment import NaturalWorld
 from schema_voyager.episode import Episode
 from schema_voyager.goals import GoalQueue
+from schema_voyager import life
 from schema_voyager.life import LifeConfig, LifeHooks, run_life
 from schema_voyager.llm import LLM
 from schema_voyager.mineflayer_backend import BackendError
@@ -209,7 +210,8 @@ def test_a_poll_error_on_the_idle_path_is_waited_for(tmp_path):
     assert back["goal_id"] is None
 
 
-def test_a_goal_lost_three_times_fails(tmp_path):
+def test_a_goal_lost_three_times_fails(tmp_path, monkeypatch):
+    monkeypatch.setattr(life, "BOT_STUCK_LOSSES", 99)  # these losses are not a stuck bot (v3.0i)
     world = FlakyWorld()
     world.fail_act_on = {1, 2, 3}
 

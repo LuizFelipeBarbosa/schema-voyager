@@ -53,6 +53,8 @@ FINAL_GOAL_STATUSES = frozenset({"done", "failed", "cancelled", "unsupported"})
 GOAL_RANK = {"system": 0, "user": 1, "curriculum": 2}  # a queued goal of a lower rank preempts the running one
 CHAT_COMMANDS_HELP = "Commands: !goal <what>, !yes [id], !no [id], !cancel [id], !stop, !status"
 BOT_LOSSES_TO_FAIL = 3  # a goal that loses the bot this many times in a life fails (v3.0h)
+BOT_STUCK_LOSSES = 3  # this many bot losses within BOT_STUCK_WINDOW_S, none with an action answered between, stop the life (v3.0i)
+BOT_STUCK_WINDOW_S = 300.0
 DEATHS_TO_STOP = 3  # this many deaths within DEATH_WINDOW_S stop the life (v3.2d)
 DEATH_WINDOW_S = 600.0
 USER_DEATHS_TO_FAIL = 2
@@ -325,6 +327,8 @@ class _Life:
         self._cancelled_in_chat: set[str] = set()  # their ending doesn't say "Cancelled" a second time
         self._bot_gone = False  # the bot did not come back within bot_wait_s: nothing may call it any more
         self._bot_losses: dict[str, int] = {}  # goal id -> times it lost the bot (v3.0h)
+        self._loss_times: list[float] = []  # time.monotonic() of the bot losses since the bot last answered an action (v3.0i)
+        self._bot_stuck = False  # the bot is connected but keeps answering busy: the life stops with "bot_stuck"
         if hooks.bind_store is not None:
             hooks.bind_store(self.store)
         if resume and "places" not in state:  # a life saved before v3.5: its first house is home
@@ -361,7 +365,7 @@ class _Life:
                 running = next((g.id for g in self.queue.goals() if g.status == "running"), None)
                 back = self._wait_for_bot(running, error)
                 self.queue.requeue_running()
-                stop_reason = None if back else "bot_down"
+                stop_reason = None if back else ("bot_stuck" if self._bot_stuck else "bot_down")
             if stop_reason is not None:
                 return stop_reason
 
@@ -401,6 +405,8 @@ class _Life:
             return "spend_cap"
         if self._run_goal(spec, goal) and self.config.mode == "learn" and spec.source == "curriculum":
             self._run_exploration_round(reason="the resource was not found here", reset_skips=False)
+        if self._bot_stuck:
+            return "bot_stuck"
         return "bot_down" if self._bot_gone else None
 
     def summary(self, stop_reason: str) -> dict[str, Any]:
@@ -938,7 +944,16 @@ class _Life:
             print(f"[bot] could not say it: {error}")
 
     def _wait_for_bot(self, goal_id: str | None, error: Exception) -> bool:
-        """Wait up to `bot_wait_s` for the bot to be connected again (v3.0h). Returns whether it is."""
+        """Wait up to `bot_wait_s` for the bot to be connected again (v3.0h). Returns whether it is. A bot that is
+        connected but keeps failing (busy) is stuck (v3.0i): the third loss in a row stops the life without a wait."""
+        now = time.monotonic()
+        self._loss_times = (self._loss_times + [now])[-BOT_STUCK_LOSSES:]
+        if len(self._loss_times) == BOT_STUCK_LOSSES and now - self._loss_times[0] <= BOT_STUCK_WINDOW_S:
+            window_s = round(now - self._loss_times[0], 1)
+            self._log_event("bot_stuck", goal_id=goal_id, losses=BOT_STUCK_LOSSES, window_s=window_s, error=str(error)[:200])
+            print(f"[bot] the bot is stuck ({str(error)[:200]}): {BOT_STUCK_LOSSES} losses in {window_s} s; stopping the life")
+            self._bot_stuck = self._bot_gone = True  # chat stays silent, as for a gone bot
+            return False
         self._log_event("bot_down", goal_id=goal_id, error=str(error)[:200])
         print(f"[bot] lost the bot ({str(error)[:200]}); waiting up to {self.config.bot_wait_s:.0f} s")
         went_down = time.monotonic()
@@ -973,6 +988,8 @@ class _Life:
         """Runs before each plan step: the interrupt checks, then the caller's hook (which runs last, so a hidden
         change is never switched on for a step that doesn't run)."""
         self._inventory_seen = dict(episode.inventory)  # what a death in this poll may have cost
+        if episode.actions > 0:
+            self._loss_times.clear()  # the bot answered an action since it was last lost
         self._check_interrupts()
         if self.hooks.before_step is not None:
             self.hooks.before_step(episode, step, plan)
@@ -1233,6 +1250,8 @@ class _Life:
     ) -> None:
         """The one ending of a goal (v3.1d): done, failed, cancelled, preempted or cut short by the life's clock.
         A build goal also settles its protected entry (v3.4b)."""
+        if getattr(episode, "actions", 0) > 0:  # (some test episodes are stubs) the bot answered this goal's actions:
+            self._loss_times = self._loss_times[-1:] if interrupt == "bot" else []  # only a loss that ended it still counts
         queued_goal = spec.source != "curriculum"
         label = goal_label(spec)
         couldnt = {"build": "Couldn't build", "kill": "Couldn't do", "guard": "Couldn't do"}.get(spec.kind, "Couldn't get")
