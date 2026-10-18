@@ -40,7 +40,7 @@ pushed to `origin` until the user says so.
 | S03 retest demoted rules | running | none | Design v3.0f, then lanes `retest-store`, `retest-life` (offline) |
 | S04 full inventory | done | a | `/toss`, `free_slots`, `inventory.py`, 36-slot sim, junk tossed before a goal; live `runs/s04-junk`; pytest 445, bot 120; not pushed |
 | S05 contracts for M1 and M2 | done | none | Contracts v3.1/v3.2 and stubs merged 1b80640; plugin pins in v3.2g; prompt changes for S06/S07 in v3.2h |
-| S06 goals you give it | not started | a | |
+| S06 goals you give it | running | a | Contract 3649653; lanes goal-queue, goal-parse, chat-bot, panel-ui, then panel-routes, life-queue, then goal-narration |
 | S07 survival | not started | b | |
 | S08 combat and hunting | not started | b | |
 | S09 building foundations | not started | a | |
@@ -87,6 +87,7 @@ pushed to `origin` until the user says so.
 - 23:36-00:06 S02 live `runs/v3-baseline-1` (instance b, seed 2024 fresh, `--change scramble --keep-going --minutes 30 --cap-usd 2`), bot and Python from `sv2` at 7ebbd68 (S04's toss merges landed during the run, after both had loaded). 55 goals, 54 ok, $0.25, 0 Tracebacks. 1 crafting table (m4-2024: 2), 0 `.fix1.fix1`, 0 `rule_blocked`, `change_report` 3/3 pass. One false contradiction: g018 `smelt iron_ingot` saw `wooden_pickaxe: -1`, because `retrieveStation` dug the furnace with the last pickaxe on its last durability point; `smelt_iron_ingot` was demoted and g018 (iron_pickaxe) failed. Max identical failed steps 5 (g014, g018: `mine iron_ore` `unreachable`, exempt from blocking).
 - 00:16 S02 b7ca710 contract v3.0e (`tools_broken`); 1cd61f1 merge `v3/wear-verify` (backend passes it, the verifier adds it back), e34d65d merge `v3/wear-bot` (`retrieveStation` digs with the cheapest durable tool and measures a break). pytest 455, bot 126, panel pass.
 - 00:19-00:49 S02 live `runs/v3-baseline` (instance b, seed 2024 fresh, same flags), bot and Python from `sv2` at 8f9fc0b. 33 goals, 32 ok (g019 iron_pickaxe failed), $0.19, 0 Tracebacks. Contradictions 3, all at fired changes; `change_report` 3/3 pass. 1 crafting table; 2 furnaces, because g017's furnace drop was missed (`furnace_retrieved: false`, no dig warning) and a g019 walk picked it up later. 0 `.fix1.fix1`, 0 repairs, 0 `rule_blocked`, 0 `tools_broken` (the bot sends `tools_broken: []`). Failed steps outside the exempt search/travel errors: 0 (m4-2024: 30, 30, 30). Literal max 12: g020 `mine #log` `unreachable` with the bot stuck at y=50 under the surface, plus 8 blind explores that moved 0 (no `explore up` asked).
+- 01:12 S06 3649653 contract v3.1 extended (one goal ending `_end_goal`, a user goal's budget and clock, `wanted` keeps done user goals, `goal_label`, failure reasons, idle never observes); stubs `goal_label`, `run_schemavoyager(goal=)`, `Episode.finish(announce=)`. pytest 455, bot 126, panel pass.
 
 ## S01 setup and baseline (done 2026-10-17)
 
