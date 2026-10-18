@@ -117,6 +117,7 @@ const NICHE_RADIUS = 2 // the stone block is 5x5x5 around the shaft's foot
 const NICHE_BELOW = 1
 const NICHE_ABOVE = 3 // the block's top; the shaft is 3 high (feet, head, one above)
 const SMELT_HTTP_TIMEOUT_MS = 300 * 1000
+const SMELT_GRAB_TIMEOUT_MS = 90000 // how long the stuck check retries a busy /smelt
 const STUCK_EVENT_TIMEOUT_MS = 330 * 1000
 const LIFE_STOP_TIMEOUT_MS = 60 * 1000
 const STUCK_EVENT_KINDS = ['bot_down', 'bot_back', 'bot_stuck']
@@ -653,13 +654,23 @@ async function main () {
 
     for (const stack of ['raw_iron 20', 'coal 3', 'furnace 1']) await rcon.exec(`give ${voyagerName} minecraft:${stack}`)
     const startedAt = Date.now()
-    const smelting = fetch(botUrl('/smelt'), {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ ingredient: 'raw_iron', item: 'iron_ingot', times: 20, fuel: 'coal' }),
-      signal: AbortSignal.timeout(SMELT_HTTP_TIMEOUT_MS)
-    }).then((res) => res.json()).catch((err) => ({ ok: false, error: err.message }))
-    console.log('  /smelt of 20 raw_iron started; the life\'s own actions get 409 busy meanwhile')
+    // The life holds the lock during its own actions: a 409 answers at once, so retry until the smelt takes the
+    // lock in a gap between them (then the answer only comes when the smelt ends).
+    const smeltOnceFree = async () => {
+      const deadline = Date.now() + SMELT_GRAB_TIMEOUT_MS
+      for (;;) {
+        const res = await fetch(botUrl('/smelt'), {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ ingredient: 'raw_iron', item: 'iron_ingot', times: 20, fuel: 'coal' }),
+          signal: AbortSignal.timeout(SMELT_HTTP_TIMEOUT_MS)
+        })
+        if (res.status !== 409 || Date.now() > deadline) return res.json()
+        await sleep(100)
+      }
+    }
+    const smelting = smeltOnceFree().catch((err) => ({ ok: false, error: err.message }))
+    console.log('  /smelt of 20 raw_iron sent (retried while busy); the life\'s own actions get 409 busy once it runs')
 
     const seen = new Set()
     const printNewEvents = () => readEvents().forEach((event) => {
