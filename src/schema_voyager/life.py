@@ -51,6 +51,8 @@ HUNGER_BELOW = 8  # a food level under this, with nothing edible held, queues a 
 HUNGER_FOOD_COUNT = 4
 HUNGRY_LOG_EVERY_S = 300.0
 HUNGER_RETRY_S = 900.0  # a food whose hunger goal failed isn't chosen again for this long
+ARM_SWORDS = ("iron_sword", "stone_sword", "wooden_sword")  # the arming goal's choices, best first (v3.2e)
+ARM_RETRY_S = 900.0  # a sword whose arming goal failed isn't chosen again for this long
 # Foods the bot's auto-eat never eats (v3.2g), so they don't count as edible.
 AUTO_EAT_BANNED = frozenset(
     {"pufferfish", "spider_eye", "poisonous_potato", "rotten_flesh", "chorus_fruit", "chicken", "suspicious_stew", "golden_apple"}
@@ -289,7 +291,7 @@ class _Life:
         self._food: int | None = None  # the food level of the latest poll
         self._died_in_goal = False  # the bot died since the running goal started
         self._last_hungry_log: float | None = None  # time.monotonic()
-        self._hunger_failed_at: dict[str, float] = {}  # food -> time.monotonic() of its failed hunger goal
+        self._system_failed_at: dict[str, float] = {}  # item of a failed hunger or arming goal -> time.monotonic()
         self._cancelled_in_chat: set[str] = set()  # their ending doesn't say "Cancelled" a second time
         if hooks.bind_store is not None:
             hooks.bind_store(self.store)
@@ -514,7 +516,8 @@ class _Life:
     # -- the bot's chat and the goal queue --------------------------------
 
     def _poll_bot(self) -> None:
-        """Handle the chat commands (v3.1g) and deaths (v3.2d) the bot recorded since the last poll."""
+        """Handle the chat commands (v3.1g) and deaths (v3.2d) the bot recorded since the last poll, and arm the
+        bot if it met a threat (v3.2e)."""
         if not self._polls_bot:
             return
         since = self.bot_seq
@@ -528,6 +531,7 @@ class _Life:
             return
         self.bot_seq = status.last_seq
         self._food = status.food
+        threat_seen = False
         for event in sorted(status.events, key=lambda e: e["seq"]):
             if event["seq"] <= since:
                 continue
@@ -535,6 +539,10 @@ class _Life:
                 self._handle_chat_command(event)
             elif event["type"] == "death":
                 self._handle_death(event)
+            elif event["type"] == "threat":
+                threat_seen = True
+        if threat_seen:
+            self._queue_arming_goal()
 
     def _handle_death(self, event: dict[str, Any]) -> None:
         """Count the death, log what it cost, and remember that the running goal, if any, died (v3.2d)."""
@@ -558,30 +566,50 @@ class _Life:
         the usable rules can reach, or log that the bot is hungry (v3.2e)."""
         if self._food is None or self._food >= HUNGER_BELOW:
             return
-        if any(g.source == "system" and g.status in ("queued", "running") for g in self.queue.goals()):
+        if self._system_goal_is_open():
             return
         foods = self._edible_foods()
         inventory = self._inventory_seen  # an idle pass never observes: that takes the bot's lock
         if any(inventory.get(food, 0) > 0 for food in foods):
             return
-        excluded = self._excluded_rules()
-        rules = [rule for rule in self.store.usable_rules(self.world_id) if rule.id not in excluded]
-        held = normalize.counts(inventory)
         for food in sorted(foods, key=lambda food: (-foods[food], food)):
-            failed_at = self._hunger_failed_at.get(food)
-            if failed_at is not None and time.monotonic() - failed_at < HUNGER_RETRY_S:
-                continue
-            try:
-                make_plan(food, held.get(food, 0) + HUNGER_FOOD_COUNT, held, rules, self.store.skill_for)
-            except PlanningError:
-                continue
-            text = f"hunger: {HUNGER_FOOD_COUNT} {food}"
-            goal_id = self.queue.submit(text, "system")
-            self.queue.accept(GoalSpec(id=goal_id, kind="obtain", source="system", text=text, item=food, count=HUNGER_FOOD_COUNT))
-            return
+            if self._queue_system_goal("hunger", food, HUNGER_FOOD_COUNT, HUNGER_RETRY_S):
+                return
         if self._last_hungry_log is None or time.monotonic() - self._last_hungry_log >= HUNGRY_LOG_EVERY_S:
             self._last_hungry_log = time.monotonic()
             self._log_event("hungry", food=self._food)
+
+    def _queue_arming_goal(self) -> None:
+        """When a threat finds the bot with no sword or axe and no system goal open, queue a goal for the best
+        sword the usable rules can reach (v3.2e)."""
+        if any(item.endswith(("_sword", "_axe")) and count > 0 for item, count in self._inventory_seen.items()):
+            return
+        if self._system_goal_is_open():
+            return
+        for sword in ARM_SWORDS:
+            if self._queue_system_goal("arm", sword, 1, ARM_RETRY_S):
+                return
+
+    def _system_goal_is_open(self) -> bool:
+        return any(g.source == "system" and g.status in ("queued", "running") for g in self.queue.goals())
+
+    def _queue_system_goal(self, prefix: str, item: str, count: int, retry_s: float) -> bool:
+        """Queue `<prefix>: <count> <item>` unless its last goal failed under `retry_s` ago or the usable rules
+        can't reach it. Returns whether it was queued."""
+        failed_at = self._system_failed_at.get(item)
+        if failed_at is not None and time.monotonic() - failed_at < retry_s:
+            return False
+        excluded = self._excluded_rules()
+        rules = [rule for rule in self.store.usable_rules(self.world_id) if rule.id not in excluded]
+        held = normalize.counts(self._inventory_seen)
+        try:
+            make_plan(item, held.get(item, 0) + count, held, rules, self.store.skill_for)
+        except PlanningError:
+            return False
+        text = f"{prefix}: {count} {item}"
+        goal_id = self.queue.submit(text, "system")
+        self.queue.accept(GoalSpec(id=goal_id, kind="obtain", source="system", text=text, item=item, count=count))
+        return True
 
     @staticmethod
     def _edible_foods() -> dict[str, int]:
@@ -803,8 +831,8 @@ class _Life:
                 reason = self._failure_reason(episode)
                 self.queue.mark(spec.id, "failed", reason=reason)
                 chat = f"Couldn't get {label}: {reason}"
-                if spec.source == "system" and spec.text.startswith("hunger:"):
-                    self._hunger_failed_at[spec.item] = time.monotonic()
+                if spec.source == "system" and spec.text.startswith(("hunger:", "arm:")):
+                    self._system_failed_at[spec.item] = time.monotonic()
         if interrupt is None:
             for rule, error in episode.blocked_rules.items():
                 if error == "missing_ingredients":
