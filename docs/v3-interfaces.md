@@ -534,9 +534,9 @@ Plan S0.10. Lanes: `station-dig`, `mobs-seen`, `panel-pid`, `explore-cap`; then 
 
 **Reaching home** (`yard-goto`, then `yard-reach`; bot API v3.0i)
 
-- `/goto` takes `stall_ms`. Every `unreachable` walk answer of `/goto`, `/deposit`, `/withdraw`, `/chest`, and
-  `/craft` and `/smelt`'s `station_unreachable`, gains `position`, where the walk ended. Python:
-  `Outcome.detail["position"]` (and the chest calls' `ChestResult` detail).
+- `/goto` takes `stall_ms`. Where a failed walk ended is the `position` (`{x, y, z}`) that `server.js` already adds to
+  every action answer. Python copies it into `Outcome.detail["position"]` for `goto`, `withdraw`, `craft` and `smelt`
+  (a deposit's result already had it).
 - `LifeBackend.reach(pos) -> Outcome` (stub on `main`): `/goto` with range 3 and `stall_ms` 8000. The simulator
   answers ok.
 - A walk blames the slot only when it ended within `places.SLOT_BLAME_BLOCKS = 6.0` of the cell's centre. A walk that

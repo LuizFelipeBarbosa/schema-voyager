@@ -564,8 +564,8 @@ See `docs/v3-interfaces.md`, v3.0i.
   candidate ending `escaped` with `protected: true`.
 - `/goto  {"x", "y", "z", "range", "stall_ms": 8000, "protect"}`: `stall_ms` (optional, an integer from 1000 to
   55000): no progress this long ends the walk `unreachable`. Without it, the walk is as before.
-- Every `unreachable` walk answer of `/goto`, `/deposit`, `/withdraw` and `/chest`, and `/craft` and `/smelt`'s
-  `station_unreachable`, gains `position: [x, y, z]`: the bot's position (floats) when the walk ended.
+- Where an `unreachable` walk ended is the answer's `position` (`{x, y, z}`), which every action answer already
+  carries (`server.js`).
 - `/explore` `direction: "up"` gives up after 60 s (was 100 s).
 
 ## v3.1: chat commands (S06, lane `chat-bot`)
