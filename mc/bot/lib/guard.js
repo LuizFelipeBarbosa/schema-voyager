@@ -25,7 +25,9 @@ const FIGHT_CLEANUP_MARGIN_MS = 5000 // the fight's own timeout ends this long b
 const RESPOND_BACKSTOP_MS = 10000 // past the cap: only if run() hangs
 const REACH_BLOCKS = 4.5 // pvp's attackRange is 3.5
 const OUT_OF_REACH_MS = 5000
+const RANGED_OUT_OF_REACH_MS = 8000 // ranged mobs keep their range, so the bot gets longer to close in
 
+const RANGED = new Set(['skeleton', 'stray', 'bogged', 'pillager', 'witch'])
 const EXTRA_HOSTILE = new Set(['slime', 'magma_cube', 'phantom'])
 const NEUTRAL = new Set(['enderman', 'zombified_piglin', 'piglin'])
 const MATERIALS = ['netherite', 'diamond', 'iron', 'stone', 'golden', 'wooden']
@@ -37,24 +39,34 @@ function isHostile (entity) {
   return entity.kind === 'hostile' || EXTRA_HOSTILE.has(entity.name)
 }
 
-// entities: [{id, name, kind, position, closing}]; recentAttackers: Map<id, lastHitSeconds>.
-// Returns {entity, mob, id, distance, reason: 'near' | 'attacked'} or null.
-function pickThreat (entities, botPos, recentAttackers, now, canSee = () => true) {
+// entities: [{id, name, kind, position, closing, playerDistance, playerClosing}]; recentAttackers and
+// playerAttackers (who hit the followed player): Map<id, lastHitSeconds>. playerDistance is set only while a
+// player is being protected. Returns {entity, mob, id, distance, reason: 'near' | 'attacked' | 'player_attacked'
+// | 'player_near'} or null. Players are never a threat for the two player_ reasons.
+function pickThreat (entities, botPos, recentAttackers, now, canSee = () => true, playerAttackers = new Map()) {
+  const isRecent = (hitAt) => hitAt !== undefined && now - hitAt <= ATTACKER_WINDOW_S
   const candidates = []
   for (const entity of entities) {
     const distance = botPos.distanceTo(entity.position)
     const hitAt = recentAttackers.get(entity.id)
-    if (hitAt !== undefined && now - hitAt <= ATTACKER_WINDOW_S) {
-      candidates.push({ entity, mob: entity.name, id: entity.id, distance, reason: 'attacked', hitAt })
-    } else if (isHostile(entity) && (distance <= NEAR_BLOCKS || (distance <= CLOSING_NEAR_BLOCKS && entity.closing)) &&
-        canSee(entity)) {
-      candidates.push({ entity, mob: entity.name, id: entity.id, distance, reason: 'near' })
+    const hitPlayerAt = playerAttackers.get(entity.id)
+    const candidate = { entity, mob: entity.name, id: entity.id, distance }
+    const hostile = isHostile(entity)
+    if (isRecent(hitAt)) {
+      candidates.push({ ...candidate, reason: 'attacked', hitAt })
+    } else if (isRecent(hitPlayerAt) && entity.kind !== 'player') {
+      candidates.push({ ...candidate, reason: 'player_attacked', hitAt: hitPlayerAt })
+    } else if (hostile && (distance <= NEAR_BLOCKS || (distance <= CLOSING_NEAR_BLOCKS && entity.closing)) && canSee(entity)) {
+      candidates.push({ ...candidate, reason: 'near' })
+    } else if (hostile && entity.playerDistance !== undefined &&
+        (entity.playerDistance <= NEAR_BLOCKS || (entity.playerDistance <= CLOSING_NEAR_BLOCKS && entity.playerClosing)) && canSee(entity)) {
+      candidates.push({ ...candidate, reason: 'player_near' })
     }
   }
-  const rank = (c) => (c.mob === 'creeper' ? 0 : c.reason === 'attacked' ? 1 : 2)
+  const rank = (c) => (c.mob === 'creeper' ? 0 : c.reason === 'attacked' ? 1 : c.reason === 'player_attacked' ? 2 : 3)
   candidates.sort((a, b) => {
     if (rank(a) !== rank(b)) return rank(a) - rank(b)
-    return rank(a) === 1 ? b.hitAt - a.hitAt : a.distance - b.distance
+    return rank(a) === 1 || rank(a) === 2 ? b.hitAt - a.hitAt : a.distance - b.distance
   })
   if (candidates.length === 0) return null
   const { entity, mob, id, distance, reason } = candidates[0]
@@ -230,15 +242,23 @@ function createGuard (bot, { eventLog, mode = process.env.BOT_GUARD || 'defend',
   assertMode(mode)
   const owners = parseOwners(process.env.BOT_OWNERS)
   const recentAttackers = new Map() // entity id -> seconds of its last hit on the bot
-  const distanceSamples = new Map() // entity id -> [{t, distance}], oldest first
+  const playerAttackers = new Map() // entity id -> seconds of its last hit on the protected player
+  const distanceSamples = new Map() // entity id -> [{t, distance}] to the bot, oldest first
+  const playerDistanceSamples = new Map() // the same, to the protected player
   const deadIds = new Set() // entities that died but are still in bot.entities until entityGone
   const beatenIds = new Set() // targets whose fight ended timeout, fled or out of reach, until entityGone
   let responding = false
   let fighting = null
   let quarryId = null // /attack's target: never a threat
+  let protectedName = null // the followed player, whose attackers and nearby hostiles are threats
 
   const onEntityHurt = (entity, source) => {
-    if (!source || !entity || (entity !== bot.entity && entity.id !== bot.entity.id)) return
+    if (!source || !entity) return
+    if (protectedName && entity.id === bot.players[protectedName]?.entity?.id) {
+      if (source.type !== 'player') playerAttackers.set(source.id, now())
+      return
+    }
+    if (entity !== bot.entity && entity.id !== bot.entity.id) return
     if (source.type === 'player' && owners.includes(String(source.username).toLowerCase())) return // never fight an owner
     recentAttackers.set(source.id, now())
   }
@@ -252,7 +272,7 @@ function createGuard (bot, { eventLog, mode = process.env.BOT_GUARD || 'defend',
   bot.on('entityGone', onEntityGone)
 
   // Distance to `entity` fell by CLOSING_DROP_BLOCKS or more since a sample at least CLOSING_SAMPLE_AGE_S old.
-  function sampleClosing (id, distance, t) {
+  function sampleClosing (distanceSamples, id, distance, t) {
     const samples = distanceSamples.get(id) ?? []
     const reference = samples.filter((sample) => t - sample.t >= CLOSING_SAMPLE_AGE_S).pop()
     samples.push({ t, distance })
@@ -263,6 +283,7 @@ function createGuard (bot, { eventLog, mode = process.env.BOT_GUARD || 'defend',
   function nearbyEntities () {
     const t = now()
     const botPos = bot.entity.position
+    const playerPos = protectedName ? bot.players[protectedName]?.entity?.position : undefined
     const list = []
     for (const ids of [deadIds, beatenIds]) for (const id of ids) if (!bot.entities[id]) ids.delete(id)
     for (const entity of Object.values(bot.entities)) {
@@ -270,10 +291,14 @@ function createGuard (bot, { eventLog, mode = process.env.BOT_GUARD || 'defend',
       const distance = botPos.distanceTo(entity.position)
       if (distance > SCAN_BLOCKS) continue
       const kind = entity.type === 'player' ? 'player' : bot.registry.entitiesByName[entity.name]?.type
-      list.push({ id: entity.id, name: entity.name, kind, position: entity.position, closing: sampleClosing(entity.id, distance, t) })
+      const playerDistance = playerPos?.distanceTo(entity.position)
+      list.push({
+        id: entity.id, name: entity.name, kind, position: entity.position, closing: sampleClosing(distanceSamples, entity.id, distance, t),
+        playerDistance, playerClosing: playerDistance !== undefined && sampleClosing(playerDistanceSamples, entity.id, playerDistance, t)
+      })
     }
     const ids = new Set(list.map((entity) => entity.id))
-    for (const id of distanceSamples.keys()) if (!ids.has(id)) distanceSamples.delete(id)
+    for (const samples of [distanceSamples, playerDistanceSamples]) for (const id of samples.keys()) if (!ids.has(id)) samples.delete(id)
     return list
   }
 
@@ -302,7 +327,8 @@ function createGuard (bot, { eventLog, mode = process.env.BOT_GUARD || 'defend',
     if (decision === 'fight') {
       const result = await fight(bot, target, {
         timeoutMs: remainingMs(respondCapMs - FIGHT_CLEANUP_MARGIN_MS), movements: movements(), eventLog,
-        shouldStop: () => mode === 'off', deadline, outOfReachMs
+        shouldStop: () => mode === 'off', deadline, sprint: true,
+        outOfReachMs: RANGED.has(threat.mob) ? RANGED_OUT_OF_REACH_MS : outOfReachMs
       })
       // fight() has already run the flight
       if (result.outcome === 'fled') recordFled(threat, 'low_health')
@@ -331,13 +357,19 @@ function createGuard (bot, { eventLog, mode = process.env.BOT_GUARD || 'defend',
     },
     status: () => ({ mode, fighting }),
     setQuarry (id) { quarryId = id },
+    setProtected (username) {
+      protectedName = username
+      playerAttackers.clear()
+      playerDistanceSamples.clear()
+    },
 
     // One look at bot.entities; null when there is nothing to do or a respond() is running.
     check () {
       if (responding || !bot.entity) return null
       const t = now()
       for (const [id, hitAt] of recentAttackers) if (t - hitAt > ATTACKER_WINDOW_S) recentAttackers.delete(id)
-      const threat = pickThreat(nearbyEntities(), bot.entity.position, recentAttackers, t, (entity) => canSee(bot, bot.entities[entity.id]))
+      for (const [id, hitAt] of playerAttackers) if (t - hitAt > ATTACKER_WINDOW_S) playerAttackers.delete(id)
+      const threat = pickThreat(nearbyEntities(), bot.entity.position, recentAttackers, t, (entity) => canSee(bot, bot.entities[entity.id]), playerAttackers)
       const decision = decide(mode, threat, bot.health, isArmed() && !beatenIds.has(threat?.id))
       return decision === 'ignore' ? null : { threat, decision }
     },
