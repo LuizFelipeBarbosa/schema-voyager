@@ -14,7 +14,8 @@
 //   ownsShield: true           pvp's shield routine is skipped; the tactic raises and lowers it itself
 // ctx: {bot, pvp, target, tick, ticksSinceStrike (Infinity before the first strike), cooldownTicks,
 //   distance (3D, as pvp measures it), horizontal, dy (target y - bot y), inReach (pvp.wasInRange)}.
-// Hooks run in the order of the names.
+// Hooks run in REGISTRY order, whatever the order of the names: movement shapers first, crit last so
+// its sprint and jump decisions win.
 
 const { goals } = require('mineflayer-pathfinder')
 const { Vec3 } = require('vec3')
@@ -39,6 +40,7 @@ const CRIT_FALLBACK_TICKS = 10 // full cooldown and in reach this long without a
 const CRIT_MARGIN_TICKS = 1 // aim the strike this many ticks after the first descending one
 const SHIELD_STRIKE_LEAD = 3 // gate open -> bot.attack: shield down (2 ticks) plus the lookAt
 const BARE_STRIKE_LEAD = 1 // the lookAt
+const WTAP_RELEASE_TICKS = 3 // ticks after a strike that forward and sprint stay released
 const HAZARDS = new Set(['lava', 'fire', 'soul_fire', 'magma_block', 'water', 'cactus', 'sweet_berry_bush', 'powder_snow'])
 
 // A flat-ground jump, in simulated ticks counted from the one that applies the jump (1): the first
@@ -59,6 +61,23 @@ const JUMP = jumpTimeline()
 
 // One entry per tactic, added by its own lane: name -> (bot) => hooks.
 const REGISTRY = {
+  // Sprint reset: release forward and sprint for a moment after each strike and press them again, so
+  // the server sees a fresh start-sprinting and every strike is a sprint hit (extra knockback).
+  // Between strikes it keeps walking into the target, which the baseline mover would not do within 2.5 blocks.
+  wtap (bot) {
+    return {
+      steer (ctx, controls) {
+        if (ctx.ticksSinceStrike <= WTAP_RELEASE_TICKS) {
+          controls.forward = false
+          controls.sprint = false
+        } else if (bot.entity.onGround) {
+          controls.forward = true
+          controls.sprint = true
+        }
+      }
+    }
+  },
+
   // Jump so that the strike lands while falling, with sprint released: a critical hit (1.5x damage).
   // The server needs the descent in the position packets and the stop-sprinting before the jump.
   // Ticks here are counted from the physicsTick that requested the jump (0); the jump is simulated in the next.
@@ -169,7 +188,10 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 function createTactics (bot, names = [], { pvp = bot.pvp, registry = REGISTRY } = {}) {
   const problem = validateTactics(names, registry)
   if (problem) throw new Error(problem)
-  const hooks = names.map((name) => registry[name](bot))
+  const registryOrder = Object.keys(registry)
+  const hooks = [...names]
+    .sort((a, b) => registryOrder.indexOf(a) - registryOrder.indexOf(b))
+    .map((name) => registry[name](bot))
   const ownsShield = hooks.some((hook) => hook.ownsShield)
 
   let target = null // set while attached
