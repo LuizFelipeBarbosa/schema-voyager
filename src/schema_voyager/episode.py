@@ -3,6 +3,7 @@ tolerant explore-and-retry policy, logging it, and building the result."""
 
 from __future__ import annotations
 
+import math
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable
@@ -77,6 +78,8 @@ class Episode:
     # the time.monotonic() moment after which the episode may not act.
     natural: bool = False
     deadline: float | None = None
+    # v3.0i: ((x, z), radius): a mob search does not explore while the bot is farther than this from the centre.
+    search_bound: tuple[tuple[float, float], float] | None = None
     _next_direction: int = 0
     # Compass directions whose explore got nowhere, for the rest of the goal.
     _dead_directions: set[str] = field(default_factory=set)
@@ -99,6 +102,14 @@ class Episode:
     @property
     def can_act(self) -> bool:
         return self.budget_left > 0 and not self.out_of_time and not self._search_exhausted
+
+    def outside_search_bound(self) -> bool:
+        """Whether a search bound is set and the bot is farther than its radius (horizontally) from its centre."""
+        if self.search_bound is None:
+            return False
+        (centre_x, centre_z), radius = self.search_bound
+        x, _, z = self.backend.observe().position
+        return math.hypot(x - centre_x, z - centre_z) > radius
 
     @property
     def counts(self) -> dict[str, int]:
@@ -217,7 +228,11 @@ class Episode:
         hit, and never into a dead direction (one that got nowhere this goal).
         With no live hit in sight: with nothing seen at all, first back up to open sky
         (once per target: most resources are at the surface), then the live compass direction
-        furthest from the dead ones; when every direction is dead, None."""
+        furthest from the dead ones; when every direction is dead, None. Outside the episode's search bound it
+        doesn't even look: None."""
+        if self.outside_search_bound():
+            self.log.event("search_bound", target=target, bound=self.search_bound)
+            return None
         if mob:  # a kill's target is a mob type: look for the entity, not block families
             hits = self.backend.look([], LOOK_RADIUS, mobs=[target])  # type: ignore[attr-defined]
         else:

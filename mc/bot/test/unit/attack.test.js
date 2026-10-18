@@ -3,7 +3,7 @@ const assert = require('node:assert/strict')
 const { EventEmitter } = require('node:events')
 const { Vec3 } = require('vec3')
 const registry = require('prismarine-registry')('1.21.1')
-const { attack, validateAttack } = require('../../lib/attack')
+const { attack, findCandidates, validateAttack } = require('../../lib/attack')
 const { createEventLog } = require('../../lib/events')
 const { fight, createGuard } = require('../../lib/guard')
 const { look } = require('../../lib/targets')
@@ -173,6 +173,48 @@ test('attack: lost is escaped, timeout is timeout, fled is interrupted, died is 
   died.bot.pvp.onAttack = () => later(20, () => died.bot.emit('death'))
   assert.equal((await died.run()).error, 'quarantined')
   assert.deepEqual(eventTypes(died.tracker), ['fight_start', 'fight_end'])
+})
+
+// ---- protect ----
+
+const PEN = [{ origin: [10, 60, -2], size: [4, 10, 4] }] // x 10..13 (half-open)
+
+test('findCandidates: a mob inside a protect box is skipped, one outside (or on the far edge) is kept', () => {
+  const bot = fakeAttackBot([mobAt(2, 'cow', 10.5), mobAt(3, 'cow', 14), mobAt(4, 'cow', 9.9), mobAt(5, 'cow', 13.9)])
+  assert.deepEqual(findCandidates(bot, 'cow', 32, PEN).map(({ entity }) => entity.id), [4, 3])
+  assert.deepEqual(findCandidates(bot, 'cow', 32).length, 4)
+})
+
+test('attack: the only mob in a protect box is not_found', async () => {
+  const { run, guard } = fixture([mobAt(2, 'cow', 11)], { protect: PEN })
+  assert.equal((await run()).error, 'not_found')
+  assert.deepEqual(guard.quarries, [])
+})
+
+test('attack: a target that walks into a protect box during the walk is escaped, protected', async () => {
+  const { bot, run } = fixture([mobAt(2, 'cow', 8)], { protect: PEN })
+  bot.pathfinder.goto = async () => { bot.entities[2].position = new Vec3(11, 64, 0) }
+  const result = await run()
+  assert.equal(result.error, 'escaped')
+  assert.equal(result.protected, true)
+  assert.equal(result.killed, false)
+})
+
+test('attack: a target that walks into a protect box during the fight is let go as escaped, protected', async () => {
+  const { bot, run, guard } = fixture([mobAt(2, 'cow', 8)], { protect: PEN })
+  bot.pvp.onAttack = (entity) => later(20, () => { entity.position = new Vec3(11, 64, 0) })
+  const result = await run()
+  assert.equal(result.error, 'escaped')
+  assert.equal(result.protected, true)
+  assert.deepEqual(guard.quarries, [2, null])
+})
+
+test('attack: an escape outside any protect box has no protected flag', async () => {
+  const { bot, run } = fixture([mobAt(2, 'cow', 4)], { protect: PEN })
+  bot.pvp.onAttack = () => later(20, () => { delete bot.entities[2] })
+  const result = await run()
+  assert.equal(result.error, 'escaped')
+  assert.equal('protected' in result, false)
 })
 
 // ---- the kill and its drops ----
