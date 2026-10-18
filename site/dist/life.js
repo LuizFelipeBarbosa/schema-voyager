@@ -12,6 +12,8 @@ const VERDICT_TEXT = {
   stochastic: '~ RANDOM DROP',
   done: 'done'
 };
+const VERDICT_GLYPH = { match: '✓', mismatch: '✕', failed: '!', quarantined: '⚠', stochastic: '~', done: '•' };
+const COMPACT_PLAN_AHEAD = 3; // the compact plan shows the running step and this many after it
 const CHANGE_NOTE = "the world's rules changed here (hidden from the agent)";
 const RECENT_CERTIFIED = 5;
 const RECENT_GOALS = 10; // the strip keeps this many goals (and the shown one) readable; older ones shrink to a dot
@@ -197,7 +199,7 @@ function changeStory(change, goals, now) {
 }
 
 // The newest change in full, the earlier ones as one line each. Empty before the first change.
-function worldChangesHtml(stories) {
+function worldChangesHtml(stories, compact = false) {
   if (!stories.length) return '';
   const latest = stories[stories.length - 1];
   const caught = latest.caught;
@@ -207,6 +209,15 @@ function worldChangesHtml(stories) {
     ['RECOVERED', latest.recovered && `goal ${latest.recovered.goal} · ${say(latest.recovered.action)} matched the revised rule`, 'the revised rule has not matched yet'],
     ['CERTIFIED', latest.certified && `goal ${latest.certified.goal} · ${say(latest.certified.rules.join(', '))}`, 'not certified yet']
   ];
+  if (compact) {
+    const progress = stages.filter(([, text]) => text).pop() || stages[0];
+    return `
+    <section class="change-card compact">
+      <div class="change-head"><b>⚡ WORLD CHANGE</b><span class="change-chips">${stages.filter(([name]) => name !== 'CLAUDE').map(([name, text]) => `<i class="${text ? 'done' : ''}">${text ? '✓' : '…'} ${name.toLowerCase()}</i>`).join('')}</span></div>
+      <div class="change-what">${esc(describeWorldChange(latest.change))}</div>
+      <div class="change-line">${progress[1] || progress[2]}</div>
+    </section>`;
+  }
   const rows = stages.map(([name, text, waiting]) => `
     <li class="${text ? 'done' : 'todo'}"><b>${name}</b><span>${text || waiting}</span></li>`);
   const earlier = stories.slice(0, -1).reverse().map((story) => `
@@ -246,9 +257,11 @@ function goalCardHtml(story, outcome) {
     <div class="goal-why"><b>WHY</b>${say(goal.reason)}</div>`;
 }
 
-function lifePlanHtml(story) {
+// `compact`: done steps fold into one line of verdicts, and only the step running now and
+// the next COMPACT_PLAN_AHEAD are listed.
+function lifePlanHtml(story, compact = false) {
   if (!story.rows.length) return `${cardHead('PLAN')}<p class="empty">No plan yet.</p>`;
-  const items = story.rows.map((row, i) => {
+  const rowHtml = (row, i) => {
     const tag = row.state === 'running' ? '▶ RUNNING' : row.state === 'done' ? VERDICT_TEXT[row.verdict] : '';
     const predicts = row.state !== 'done' && row.start && row.start.predicts ? `<small>${say(row.start.predicts)}</small>` : '';
     return `
@@ -257,8 +270,21 @@ function lifePlanHtml(story) {
         <span class="act">${say(row.action)}${predicts}</span>
         <span class="tag">${tag}</span>
       </li>`;
-  });
-  return `${cardHead('PLAN', plural(story.rows.length, 'step'))}<ol class="plan-rows">${items.join('')}</ol>`;
+  };
+  if (!compact) {
+    return `${cardHead('PLAN', plural(story.rows.length, 'step'))}<ol class="plan-rows">${story.rows.map(rowHtml).join('')}</ol>`;
+  }
+  const done = story.rows.filter((row) => row.state === 'done');
+  const ahead = story.rows.map((row, i) => ({ row, i })).filter(({ row }) => row.state !== 'done');
+  const folded = done.length ? `
+      <li class="done-summary">
+        <span>${done.length} done</span>
+        <span class="verdicts">${done.map((row) => `<i class="${row.verdict}" title="${esc(readable(row.action))}: ${esc(VERDICT_TEXT[row.verdict])}">${VERDICT_GLYPH[row.verdict]}</i>`).join('')}</span>
+      </li>` : '';
+  const listed = ahead.slice(0, 1 + COMPACT_PLAN_AHEAD);
+  const more = ahead.length - listed.length;
+  return `${cardHead('PLAN', `${plural(story.rows.length, 'step')}${more > 0 ? ` · ${more} more not shown` : ''}`)}
+    <ol class="plan-rows">${folded}${listed.map(({ row, i }) => rowHtml(row, i)).join('')}</ol>`;
 }
 
 function hypothesisHtml(story) {

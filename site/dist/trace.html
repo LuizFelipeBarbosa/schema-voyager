@@ -17,7 +17,15 @@
         </header>
 
         <section class="life" id="life" hidden>
-          <div class="life-follow" id="life-follow"></div>
+          <div class="life-top">
+            <div class="life-follow" id="life-follow"></div>
+            <div class="life-tools">
+              <span class="camera" id="camera" hidden>
+                <button data-camera="third" title="Third person: the camera follows the bot from behind">3rd person</button><button data-camera="first" title="First person: the bot's eyes">1st person</button>
+              </span>
+              <button class="pin" id="pin" title="Freeze the panel, the route map and the camera until clicked again"></button>
+            </div>
+          </div>
           <div class="goal-card" id="life-goal"></div>
           <div class="life-story">
             <div class="life-now">
@@ -27,6 +35,11 @@
             </div>
             <section class="card" id="life-plan"></section>
           </div>
+          <section class="route" id="life-route">
+            <div class="route-head"><b>ROUTE</b><span id="route-note"></span></div>
+            <canvas id="route-canvas" title="Click to pin or follow"></canvas>
+            <p class="empty" id="route-empty">no route data</p>
+          </section>
           <section class="strip" id="life-overview"></section>
         </section>
 
@@ -66,6 +79,7 @@
     </div>
     <div class="drop-hint" id="drop-hint" hidden><span>Drop a <code>.jsonl</code> episode trace</span></div>
     <script src="life.js"></script>
+    <script src="minimap.js"></script>
     <script src="trace.js"></script>
   </body>
 </html>

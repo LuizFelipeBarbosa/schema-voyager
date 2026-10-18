@@ -13,6 +13,7 @@ const { createUnreachableMemory, look } = require('./lib/targets')
 const { attachEventTracker, createEventLog } = require('./lib/events')
 const { DIRECTIONS } = require('./lib/geometry')
 const { hasOpenSky } = require('./lib/sky')
+const { VIEWER_MODES, createViewerControl, localCors } = require('./lib/viewer')
 const {
   inventoryCounts, positionOf, round, scanNearbyBlocks, sleepTicks, stopMoving
 } = require('./lib/world')
@@ -23,7 +24,8 @@ const config = {
   version: process.env.MC_VERSION || '1.21.1',
   username: process.env.BOT_USERNAME || 'SchemaBot',
   apiPort: Number(process.env.BOT_API_PORT || 3000),
-  viewerPort: Number(process.env.VIEWER_PORT ?? 3007) // 0 disables the viewer
+  viewerPort: Number(process.env.VIEWER_PORT ?? 3007), // 0 disables the viewer
+  viewerMode: VIEWER_MODES.includes(process.env.VIEWER_MODE) ? process.env.VIEWER_MODE : 'third'
 }
 const RECONNECT_DELAY_MS = 3000
 const ACTION_TIMEOUT_MS = 120000
@@ -84,6 +86,7 @@ function connect () {
   current.once('end', (reason) => {
     connected = false
     if (current.viewer) current.viewer.close()
+    viewerControl.detach(current)
     log(`disconnected (${reason}); reconnecting in ${RECONNECT_DELAY_MS / 1000} s`)
     setTimeout(connect, RECONNECT_DELAY_MS)
   })
@@ -103,10 +106,16 @@ function worldPreservingMovements (current) {
 // while idle; the walked-distance listener adds 0 for a zero-length move.
 const VIEWER_HEARTBEAT_MS = 1000
 
+const viewerControl = createViewerControl({
+  port: config.viewerPort,
+  mode: config.viewerMode,
+  launch: (current, options) => require('prismarine-viewer').mineflayer(current, options)
+})
+
 function startViewer (current) {
   if (!config.viewerPort) return
   try {
-    require('prismarine-viewer').mineflayer(current, { port: config.viewerPort, firstPerson: false, viewDistance: 4 })
+    viewerControl.attach(current)
   } catch (err) {
     log(`viewer failed to start: ${err.message}`)
     return
@@ -264,7 +273,11 @@ function action (path, validate, handler, { timeoutMs = ACTION_TIMEOUT_MS } = {}
 
     busy = true
     const startSeq = eventLog.lastSeq()
-    const respondWithEvents = (payload) => respond(200, { ...payload, events: eventLog.since(startSeq) })
+    const respondWithEvents = (payload) => respond(200, {
+      ...payload,
+      position: bot.entity ? positionOf(bot) : null,
+      events: eventLog.since(startSeq)
+    })
     tracker.beginAction()
     const death = tracker.rejectOnDeath()
     try {
@@ -292,15 +305,16 @@ function action (path, validate, handler, { timeoutMs = ACTION_TIMEOUT_MS } = {}
 }
 
 const app = express()
+app.use(localCors)
 app.use(express.json())
 
 app.get('/health', (req, res) => {
   res.json({ ok: true, connected, username: config.username, version: config.version })
 })
 
-// Answers while an action runs: it only reads.
-app.post('/status', (req, res) => {
-  const body = req.body || {}
+// Answers while an action runs: it only reads. GET takes ?since=, for the panel's live position.
+function status (req, res) {
+  const body = req.method === 'GET' && req.query.since != null ? { since: Number(req.query.since) } : req.body || {}
   const respond = responder('/status', body, res)
   const problem = validators.status(body)
   if (problem) return respond(400, { ok: false, error: 'bad_request', detail: problem })
@@ -315,6 +329,24 @@ app.post('/status', (req, res) => {
     events: eventLog.since(body.since ?? 0),
     last_seq: eventLog.lastSeq()
   })
+}
+app.post('/status', status)
+app.get('/status', status)
+
+// Restarts the viewer in another camera mode; doesn't take the action lock.
+app.post('/viewer', async (req, res) => {
+  const body = req.body || {}
+  const respond = responder('/viewer', body, res)
+  if (!VIEWER_MODES.includes(body.mode)) {
+    return respond(400, { ok: false, error: 'bad_request', detail: `"mode" must be one of ${VIEWER_MODES.join(', ')}` })
+  }
+  if (!config.viewerPort) return respond(200, { ok: false, error: 'viewer_disabled' })
+  try {
+    await viewerControl.setMode(body.mode)
+  } catch (err) {
+    return respond(500, { ok: false, error: 'internal', detail: err.message })
+  }
+  respond(200, { ok: true, mode: viewerControl.mode })
 })
 
 action('/observe', validators.none, () => observe())

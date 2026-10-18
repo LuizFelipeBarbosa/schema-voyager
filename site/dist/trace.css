@@ -307,3 +307,110 @@ select { background: var(--panel); border: 1px solid var(--line); border-radius:
 .change-earlier i.done { color: var(--mint); }
 .change-stages li:nth-child(2) > span { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .life-now .card-head, .life-now .empty { padding: 8px 22px 0; }
+
+/* Follow row, camera and pin buttons, route minimap */
+.life-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; border-bottom: 1px solid var(--line); }
+.life-top .life-follow { border-bottom: 0; min-width: 0; }
+.life-tools { display: flex; align-items: center; gap: 8px; padding-right: 14px; flex: none; }
+.life-tools button { padding: 3px 10px; background: transparent; border: 1px solid var(--line); border-radius: 3px; font-family: var(--mono); font-size: 11px; letter-spacing: .06em; cursor: pointer; white-space: nowrap; }
+.life-tools button:hover { border-color: var(--amber); color: var(--amber); }
+.life-tools button.on { background: var(--amber); border-color: var(--amber); color: var(--bg); font-weight: 700; }
+.camera { display: inline-flex; }
+.camera button:first-child { border-radius: 3px 0 0 3px; }
+.camera button:last-child { border-radius: 0 3px 3px 0; margin-left: -1px; }
+.route { padding: 8px 22px 10px; border-top: 1px solid var(--line); }
+.route-head { display: flex; justify-content: space-between; gap: 10px; margin-bottom: 6px; font-family: var(--mono); font-size: 11px; letter-spacing: .1em; color: var(--muted); }
+.route-head b { color: var(--ink); font-weight: 500; }
+#route-canvas { display: block; width: 100%; height: 170px; background: var(--panel); border: 1px solid var(--line); border-radius: 3px; cursor: pointer; }
+
+/* Compact stage view (on with ?viewer=, ?compact=1 / 0): the 3D viewer gets 75% of the
+   width at 1920 and 74% at 1440. The goal, the running step, the hypothesis under test
+   and the latest world change stay readable from 3 m; everything else shrinks. */
+/* (the viewer is the second grid item: `order: 2` above) */
+.layout.life-mode.with-viewer.compact { grid-template-columns: clamp(380px, 25%, 520px) minmax(0, 1fr); }
+.layout.compact { font-size: 13px; line-height: 1.3; }
+.layout.compact .bar { padding: 5px 12px; font-size: 10px; }
+.layout.compact .bar select { padding: 2px 6px; font-size: 10px; max-width: 45%; }
+.layout.compact .life-follow { padding: 3px 12px; font-size: 11px; }
+.layout.compact .life-follow .follow-text { display: none; }
+.layout.compact .life-follow button { padding: 1px 8px; }
+.layout.compact .life-tools { padding-right: 10px; gap: 5px; }
+.layout.compact .life-tools button { padding: 2px 7px; font-size: 10px; }
+
+.layout.compact .goal-card { padding: 7px 14px 8px; }
+.layout.compact .goal-top { gap: 10px; }
+.layout.compact .goal-no { font-size: 13px; }
+.layout.compact .goal-top .status { padding: 1px 7px; font-size: 11px; }
+.layout.compact .elapsed { font-size: 16px; }
+.layout.compact .goal-title { margin: 1px 0 2px; font-size: 34px; line-height: 1.05; }
+.layout.compact .goal-why { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.layout.compact .goal-why b { margin-right: 6px; font-size: 10px; }
+
+.layout.compact .life-now .card-head, .layout.compact .life-now .empty { padding: 5px 14px 0; }
+.layout.compact .hyp { padding: 7px 14px 8px; border-left-width: 5px; }
+.layout.compact .hyp-label { font-size: 10px; }
+.layout.compact .hyp-claim { margin: 1px 0; font-size: 22px; line-height: 1.15; }
+.layout.compact .hyp-prediction { margin-bottom: 3px; font-size: 18px; }
+.layout.compact .hyp-meta { gap: 6px; font-size: 11px; }
+.layout.compact .hyp-meta code { display: none; }
+.layout.compact .pill { padding: 0 6px; font-size: 10px; }
+.layout.compact .hyp-result { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 12px; margin-top: 4px; font-size: 12px; }
+.layout.compact .hyp-result b { font-size: 14px; }
+
+.layout.compact .mismatch-box { padding: 6px 14px 8px; }
+.layout.compact .mismatch-head { font-size: 22px; }
+.layout.compact .mismatch-body { margin-top: 3px; font-size: 14px; }
+.layout.compact .mismatch-body .demoted { font-size: 12px; }
+.layout.compact .rev-stage { padding: 5px 14px; font-size: 13px; }
+.layout.compact .rev-stage > b { margin-bottom: 2px; font-size: 10px; }
+.layout.compact .rev-stage li { grid-template-columns: 62px minmax(0, 1fr); gap: 6px; }
+.layout.compact .rev-stage li .badge { font-size: 10px; }
+.layout.compact .rev-stage.recovered, .layout.compact .rev-stage.certified { font-size: 14px; }
+
+.layout.compact .change-card { padding: 6px 14px 7px; border-left-width: 5px; }
+.layout.compact .change-head { align-items: baseline; font-size: 10px; white-space: nowrap; }
+.layout.compact .change-chips { display: flex; gap: 8px; }
+.layout.compact .change-chips i { font-style: normal; color: var(--dim); }
+.layout.compact .change-chips i.done { color: var(--mint); }
+.layout.compact .change-what { margin: 2px 0 2px; font-size: 19px; line-height: 1.15; }
+.layout.compact .change-line { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+.layout.compact .change-line span { color: var(--ink); }
+.layout.compact .change-line span.differs { color: var(--red); font-weight: 600; }
+.layout.compact .change-line small { color: var(--dim); }
+
+.layout.compact .card { padding: 6px 14px 7px; }
+.layout.compact .card-head { margin-bottom: 4px; font-size: 10px; }
+.layout.compact .plan-rows { max-height: none; font-size: 15px; overflow: visible; }
+.layout.compact .plan-rows .row { grid-template-columns: 20px minmax(0, 1fr) auto; gap: 6px; padding: 2px 6px; }
+.layout.compact .plan-rows .act small { font-size: 10px; }
+.layout.compact .plan-rows .tag { font-size: 10px; }
+.layout.compact .plan-rows .running { font-size: 20px; padding: 4px 6px; }
+.layout.compact .plan-rows .done-summary { display: flex; align-items: baseline; gap: 10px; padding: 1px 6px; font-family: var(--mono); font-size: 11px; color: var(--muted); }
+.layout.compact .verdicts { display: flex; gap: 5px; font-size: 13px; }
+.layout.compact .verdicts i { font-style: normal; color: var(--mint); }
+.layout.compact .verdicts i.mismatch { color: var(--red); font-weight: 700; }
+.layout.compact .verdicts i.failed, .layout.compact .verdicts i.quarantined { color: var(--amber); }
+.layout.compact .verdicts i.stochastic, .layout.compact .verdicts i.done { color: var(--muted); }
+
+.layout.compact .route { padding: 5px 14px 6px; }
+.layout.compact .route-head { margin-bottom: 3px; font-size: 10px; }
+.layout.compact #route-canvas { height: clamp(130px, 20vh, 240px); }
+
+.layout.compact .strip { padding: 5px 14px 7px; }
+.layout.compact .strip-head { margin-bottom: 4px; font-size: 10px; }
+.layout.compact .strip-head span { display: none; }
+.layout.compact .timeline { margin-bottom: 4px; }
+.layout.compact .chip { flex: 0 1 30px; min-width: 14px; padding: 2px 2px; border-bottom-width: 3px; }
+.layout.compact .chip i, .layout.compact .chip span { display: none; }
+.layout.compact .chip b { font-size: 11px; }
+.layout.compact .chip.compact { flex: 0 0 5px; min-width: 0; padding: 0; }
+.layout.compact .world-change { padding: 0 5px; border-left-width: 3px; }
+.layout.compact .world-change span { display: none; }
+.layout.compact .totals { display: flex; flex-wrap: wrap; gap: 4px 16px; }
+.layout.compact .total { display: flex; align-items: baseline; gap: 5px; }
+.layout.compact .total span { font-size: 9px; }
+.layout.compact .total strong { font-size: 15px; }
+.layout.compact .total small { display: none; }
+
+.layout.compact .controls { padding: 4px 10px; gap: 4px; }
+.layout.compact .controls button { min-width: 28px; height: 24px; }
