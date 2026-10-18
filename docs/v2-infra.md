@@ -37,6 +37,40 @@ Safety: refuses demo ports (25565, 25575, 3000, 3007); stops when a port is held
 by anything but this instance's pid file; only touches `sv2-<inst>-*` screens
 and pids from `run/`.
 
+## The instance lock
+
+One live owner per instance: `run/lock-<inst>` holds `{"pid", "session", "purpose", "started"}`.
+`v2-up.sh`, `v2-new-world.sh`, `world-restore.sh`, `v2-change.sh install|enable|disable`,
+`v2-seeds.sh`, `v2-demo.sh` and `life --backend mc` take it (`v2-down.sh` and
+`v2-change.sh status` don't; `life --backend sim` doesn't). A second taker dies naming
+the holder. A lock whose pid is dead is stale: it is taken over with a warning. The lock is
+released on normal exit, on errors and on SIGTERM/SIGINT.
+
+Hand-over: a script exports `SV2_LOCK_SESSION`; child scripts with the same session pass
+through, and a life with the same session takes the lock over (its pid and purpose `life`)
+and hands it back on exit if the previous holder is still alive, else removes it.
+Shell: `sv2_lock_acquire <purpose>` / `sv2_lock_release` in `v2-env.sh`; Python:
+`schema_voyager.instance_lock.hold(instance, purpose)`. A left-over lock of a live pid:
+stop that process, or `scripts/v2-demo.sh stop`.
+
+## The demo in one command
+
+```
+scripts/v2-demo.sh [start] [--run <name>]   # fresh world, packs, life in screen sv2-<inst>-life, panel
+scripts/v2-demo.sh stop [--all] [--panel]   # SIGINT the life (it saves), lock released; --all: v2-down.sh
+scripts/v2-demo.sh --rehearse N             # N fresh lives in the foreground, then change_report each
+```
+
+`start` refuses the live demo's ports, requires this instance's ports to be free or its own,
+takes the lock (purpose `demo`), runs `world-restore.sh fresh`, `v2-up.sh` and
+`v2-change.sh install`, then starts the life (`--llm live --change ${SV2_DEMO_CHANGE:-r2}
+--keep-going --minutes ${SV2_DEMO_MINUTES:-30}`, run `demo-<yyyymmdd-hhmm>`, log
+`logs/life-<run>.log`, pid `run/life-<inst>.pid`) with the same `SV2_LOCK_SESSION`. It waits up
+to 20 s until the lock shows the life's pid, starts the panel in screen `sv2-panel` on 8766
+(reused if it already answers), prints the panel and viewer URLs, the log and the stop command,
+and the seconds elapsed (target under 60 from a stopped instance). `SV2_SEED` defaults to 1001.
+Instance b: set the four port variables and `SV2_INSTANCE=b` on the command line.
+
 ## Scouting report
 
 `scripts/v2-scout.js` joins as VoyagerBot (stop the instance's bot first, run

@@ -7,6 +7,7 @@
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/v2-env.sh"
 sv2_check_settings
+sv2_lock_acquire seeds
 export SV2_INSTANCE SV2_MC_PORT SV2_RCON_PORT SV2_BOT_PORT SV2_VIEWER_PORT
 
 survey=false
