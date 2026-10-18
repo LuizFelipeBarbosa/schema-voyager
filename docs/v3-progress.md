@@ -45,7 +45,7 @@ pushed to `origin` until the user says so.
 | S08 combat and hunting | done | b | Contract v3.3; 12 lanes merged (pytest 1173, bot 357); live `runs/v3-m3-live` ALL PASS (cooked beef by kill and smelt with stochastic in-range kills and 0 mismatches, kill 3 zombies, guard me); soak `runs/v3-m3-soak` 25/28, 0 deaths; not pushed |
 | S09 building foundations | done | a | Contract v3.4a and bot API v3.4; 5 lanes merged (pytest 821, bot 258); `runs/s09-place-live` ALL PASS (16 checks) from `main`; not pushed |
 | S10 build goals | done | a | Contract v3.4b and bot API v3.4b; 12 lanes merged (pytest 997, bot 312); live `runs/v3-build-live` and `-easy`: Claude's house approved in the panel, built and matched (0 failed steps); protection checked live; not pushed |
-| S11 duels | running | b | Contract v3.6 (`/duel`, tactics, the duel protocol); lanes fight-core, duel-bot, duel-runner, then one per tactic |
+| S11 duels | done | b | Contract v3.6; 13 lanes merged (pytest 1326, bot 487 on 945c447); 7 duel series of 40 (A/A 51.2%; crit 93.8% and shield 100% kept; wtap, strafe, disengage dropped); `DEFAULT_TACTICS` crit,shield for guard fights, husk check no regression, guard live ALL PASS; not pushed |
 | S12 home, storage, composite goals | done | a | Contract v3.5; 12 lanes merged (pytest 1326, bot 471); live `runs/v3-m5-live-final` ALL PASS (junk stored in the home chest, 8 torches withdrawing the stored coal, get ready for night as 3 ordered children each checked); not pushed |
 | S13 mine reach (`unreachable` ore) | done | b | v3.0g; 4 lanes merged (pytest 997, bot 313); live `runs/v3-reach-2024` 1/44 ore `unreachable`, 11/12 iron goals, `runs/v3-reach-31337` 0/13, 4/4; `v2_iron.js` GATE PASS; not pushed |
 | S14 polish | done | a | Contract v3.0h; 11 lanes merged (pytest 1106 at 77b4bd1, 1147 on fed3117; bot 338/356); live `runs/v3-polish-live`: bot killed mid-goal -> `interrupted` `bot`, requeued, `done`; panel by `live.json`; second house leaves no scaffold; guard live test ALL PASS; not pushed |
@@ -664,3 +664,61 @@ pushed to `origin` until the user says so.
   - `stored` is only what the bot reported: a player's changes to the chest show at the next chest call.
   - The fake parser splits on " and ", " then " and commas (not for `build ...`); live texts go to Claude.
   - `screen -S sv2-a-life -X quit` leaves the life running with `run/lock-a`: SIGINT its pid (now in `docs/v2-infra.md`).
+
+## S11 duels (done 2026-10-18)
+
+- Contract v3.6 in `contracts/bot_api.md` and `docs/v3-interfaces.md` (f7f37f2, then 91ec089 `both_died`, 2f3fa99 `start_at`,
+  080486a `retreats`/hooks, 9339c65 line gate and `/guard` tactics): `POST /duel {player, tactics, timeout_s, duel_id, start_at}`,
+  `POST /duel/stop`, `duel_end`, `lib/tactics.js` (the baseline: a full-cooldown strike gate over pvp's `attemptAttack`, pvp's shield
+  routine, a close-range mover), `fight()` `tactics`/`fleeBelow`/`fleeMs`/`fleeDistance`, the duel protocol (VoyagerBot2 on 3218 with
+  `VIEWER_PORT=0`, an arena inside the border, an RCON reset, swapped sides and sets, a Wilson table, the keep rule).
+- Deviation from the prompt (the advisor's change): 40 duels a series instead of 20, because an even tactic reaches 12 of 20 one time
+  in four. Tactics live in `lib/tactics.js` (one `REGISTRY` entry each, hooks the baseline calls); only `disengage` touches `lib/duel.js`.
+- Merges: 1b4de81 `fight-core`, 9419261 `duel-bot`, a59ef9f `duel-runner`; 7100330 `double-ko`, b19b7cc `duel-sync` (live fixes);
+  8d08c2d `crit`, a319c9c `wtap`, 95edddd `strafe`, 0e1adef `shield`, 8b75b71 `disengage`; ac626b5 `guard-tactics`, 5d548e0
+  `mover-gate`, 945c447 `guard-set` (advisor follow-ups); 2ef7acb fixed the guard live test's exact `/guard` comparison.
+  Suite on 945c447: pytest 1326 (1 skipped), bot unit 487, panel pass.
+- Measurements, instance b, `fresh-2024`, peaceful with `naturalRegeneration false`, 40 duels each, 0 invalid in every series:
+
+  | Series | A's win rate | 95% CI | Verdict |
+  |---|---|---|---|
+  | `runs/v3-duel-aa` baseline vs baseline (requests sent in turn) | 58.8% | [43.4, 72.6] | biased: request order; fixed with `start_at` |
+  | `runs/v3-duel-aa2` baseline vs baseline (`start_at`) | 51.2% | [36.3, 65.9] | unbiased |
+  | `runs/v3-duel-crit` crit vs baseline | 93.8% | [81.8, 98.0] | **kept** |
+  | `runs/v3-duel-wtap` crit,wtap vs crit | 48.8% | [34.1, 63.7] | dropped |
+  | `runs/v3-duel-strafe` crit,strafe vs crit | 45.0% | [30.7, 60.2] | dropped |
+  | `runs/v3-duel-shield` crit,shield vs crit | 100.0% | [91.2, 100.0] | **kept** |
+  | `runs/v3-duel-disengage` crit,shield,disengage vs crit,shield | 35.0% | [22.1, 50.5] | dropped |
+
+  What the numbers say: equal bots strike in the same tick, so mirror duels end in double KOs (27 of 40 in the A/A) and a few ms of
+  head start decide the rest. Crit's win came mostly from the shield. Off the opponent's rhythm, its shield was up when the baseline
+  struck (5 blocks a duel); only 16% of its hits were crits. The shield tactic times the block from the opponent's last swing and strikes
+  just after it. It blocked every strike, and with pvp's 100 ms wait gone, 4.0 of 4.15 hits were crits. Retreating drops the shield,
+  so all 20 duels in which disengage retreated were lost.
+- **The best set `['crit', 'shield']` is `DEFAULT_TACTICS`, the guard's set** (`POST /guard {tactics}` changes it at runtime).
+  For the wild (advisor, consult 2), the mover takes over only on a clear straight line and hands back when stuck; the shield
+  predicts a mob's strike every 20 ticks. Checked live: `runs/v3-guard-tactics` (husks, 10 fights per set: `[]` 2.68 s and 0.00
+  damage, crit,shield 2.65 s and 0.25, all killed, no regression), `runs/v3-duel-shield-gated` (20/20 after the gate),
+  `v3_guard_live.js` ALL PASS, `runs/v3-duel-vs-check` (the `--vs` path, VoyagerBot2 as a stand-in player).
+- The S08 deferral "break line of sight against skeletons" became: the shield stays up while closing in on a skeleton, stray, bogged or
+  pillager (unit-tested; not measured live).
+- The user's duel against the best set: bring instance b up, join `localhost:25567` as Otopo in survival, then
+  `SV2_INSTANCE=b SV2_MC_PORT=25567 SV2_RCON_PORT=25577 SV2_BOT_PORT=3210 SV2_VIEWER_PORT=3217 scripts/v3-duel.sh --vs Otopo --a crit,shield --n 3`
+  (it clears and kits the player, teleports both into the arena, and prints the result).
+- Advisor (one Opus `Plan`, three consultations): design GO with changes (40 duels, golden apple only, the tick-counting gate, one
+  override, the mover); the mover in the wild GO with changes (the line gate, the stuck hand-back, passable cells, the mob
+  cooldown, the husk comparison; step-up dropped); final check DONE with follow-ups.
+- **Rollback:** `POST /guard {"tactics": []}` puts the guard back on the bare baseline. It survives reconnects but not a bot
+  restart. S12 and S15 run guard fights in the wild with the new default.
+- Instance b is down, with no lock. No S11 worktrees or `v3/*` branches are left. Not pushed.
+- Open, in priority order:
+  - A wild-terrain soak of the guard's default (trees, steps, water, slopes), watching the guard's `fight_end` for `lost` and
+    stuck hand-backs. The line gate and the stuck rule are unit-tested only; live fights were on flat floors.
+  - Re-measure `wtap` and `strafe` against `crit,shield`. They were dropped against `[crit]`, and the crit,shield mirror is a
+    different game (8.5 s, shield-heavy).
+  - A `BOT_GUARD_TACTICS` env var, like `BOT_GUARD`, so a rollback survives a restart.
+  - `lib/attack.js` (kill goals, `/attack`) doesn't use tactics.
+  - prismarine-physics has no shield slowdown, so the bot blocks at full speed (an edge over a human).
+  - A human can bait the shield's hold-to-block-first with feints.
+  - `/guard`'s `tactics` validation has no unit test (server.js routes aren't unit-tested).
+  - The runner's `clear` wipes each fighter's inventory, the user's too in `--vs`.
