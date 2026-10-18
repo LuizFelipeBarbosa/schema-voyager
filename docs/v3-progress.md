@@ -47,7 +47,7 @@ pushed to `origin` until the user says so.
 | S10 build goals | done | a | Contract v3.4b and bot API v3.4b; 12 lanes merged (pytest 997, bot 312); live `runs/v3-build-live` and `-easy`: Claude's house approved in the panel, built and matched (0 failed steps); protection checked live; not pushed |
 | S11 duels | not started | b | |
 | S12 home, storage, composite goals | not started | a | |
-| S13 mine reach (`unreachable` ore) | running | b | Diagnosing `mine iron_ore` `unreachable` and the underground blind-explore loop |
+| S13 mine reach (`unreachable` ore) | done | b | v3.0g; 4 lanes merged (pytest 997, bot 313); live `runs/v3-reach-2024` 1/44 ore `unreachable`, 11/12 iron goals, `runs/v3-reach-31337` 0/13, 4/4; `v2_iron.js` GATE PASS; not pushed |
 | S14 polish | running | a | Contract v3.0h; lanes backend-health, life-robust, panel-live, door-species, then life-polish, trace-interrupted, bot-polish, build-scaffold, readme |
 
 ## Log
@@ -123,6 +123,8 @@ pushed to `origin` until the user says so.
 - 04:55-05:12 S10 live `runs/v3-build-live` (instance a, `fresh-2024`, peaceful, `BOT_OWNERS=Otopo,Tester`, `--mode play --minutes 60 --cap-usd 3`; bot, panel (port 8768) and Python from `sv2` at 8118c7e, the run's `COMMIT`). Panel `POST /goals` "build a small wooden house with a door" -> u001 `awaiting_approval` in 7 s with Claude's "small house" 5 x 4 x 5 (12 `#log`, 59 `#planks`, 1 `oak_door`; preview saved, `trace.html` and `build_preview.js` served 200), `POST /goals/u001/approve`, then running -> `done` in 304 s: gathering 232 s, building 52 s (72 place steps, 0 failed, 1 pass), site [11, 67, 8] cut 0 fill 0. An independent `/scan` of the site box vs the blueprint: `mismatches` `[]`. $0.039. Clip: `runs/v3-build-live/build.mp4` and `build.gif` (`scripts/v3-clip.js`, headless Chrome screencast of the viewer on 3207). Then `runs/v3-build-live-easy` (same world restored, easy): the same blueprint and site, `done` in 368 s, 72 steps, 0 failed, no fights or deaths, `mismatches` `[]`, $0.040.
 - 05:13-05:16 S10 live protection check: `--resume` of `runs/v3-build-live-easy` (no world restore, the house standing), panel "get me 10 logs" -> u002 `done` in 70 s, 10 oak logs from trees 4+ blocks outside the house box, while an unprotected `/look` lists the house's own logs; a `/scan` of the site box before and after: every house cell identical, `mismatches` `[]`; six grass cells under the walls turned to dirt (vanilla grass decay under solid blocks). Instance a down, lock released.
 - 05:36 S14 0ede41b contract v3.0h after the advisor's review (GO with changes: every socket error is a `BackendError`, `Episode.finish` without the bot, requeue after a pass-level wait, scaffold cells from every attempt); stubs `LifeBackend.connected`, `Action.scaffold`, interrupt `bot`, `LifeConfig.bot_wait_s`/`bot_poll_s`. pytest 997 (1 skipped), bot 312, panel, goals and preview pass.
+- 04:35-05:29 S13 live on instance b (peaceful, `--change scramble --keep-going --cap-usd 2`, bot and Python from `main` with the fix, run `COMMIT` 3496bb1/8118c7e): `runs/v3-reach-2024` (fresh-2024, 30 min) 32 goals, 31 ok (iron_boots cut by the clock), $0.25, ore `unreachable` 1/44 (baseline-1 12/23), 11/12 iron goals; `runs/v3-reach-31337` (fresh-31337, 20 min) 45/45 ok, $0.23, ore `unreachable` 0/13, 4/4 iron goals. 0 Tracebacks. A first `v2_iron.js` ran on the stale `world-1001` (restore without `SV2_SEED`) and failed at planks.
+- 05:31-05:36 S13 live `node mc/bot/test/v2_iron.js` on a fresh `world-2024` (instance b, `main` 9e775d4's bot): GATE PASS, iron_pickaxe in 238 s, every check MATCH. 05:38 c03fce7 merge `v3/think-ms` (live finding: `think_ms` counted each A* search's cumulative time on every partial update). pytest 997 (1 skipped), bot 313, panel and goals pass.
 
 ## S01 setup and baseline (done 2026-10-17)
 
@@ -425,3 +427,58 @@ pushed to `origin` until the user says so.
   - Dirt scaffold pillars stay beside the house (`travel.placed` has names, not positions).
   - Grass under the walls decays to dirt: house checks must use `builder.mismatches`, not identical scans.
   - `!yes` answers "Approved" even if `mark` loses a race with a panel discard.
+
+## S13 mine reach (done 2026-10-18)
+
+- Diagnosis (five Explore reads of the code and eight lives; advisor reviewed): `unreachable` ore mines were 17/27 (s01-explorefast),
+  8/34 (preview-2005), 12/23 (v3-baseline-1), 12/37 (v3-baseline), 7/21, 21/41, 16/41 (soaks 1-3, after S07). About 75% were walks cut
+  off while still moving or digging: v2 `/mine` gave each of up to 4 candidates 11 s within 36 s (calls of 33.1 s and 36.1 s = three
+  or four cut attempts), toward candidates in different directions ("81 blocks walked, ~5 net"), and every cut-off block went into the
+  10-minute unreachable memory (12 of 38 baseline targets were mined within 2 blocks later). Contributing: deep ore (dy median -9 to
+  -17) reached only by a 3-5 dig staircase per level (`DiggingMovements` refused downward digs). Not the cause: `_explore_toward`
+  (no `look` preceded any ore failure), lava (none). Cancelled walks: 0 of the pre-S07 unreachables (no busy/interrupted, `events: []`
+  in all 38 baseline ones); after S07 guard cut-ins answer `interrupted`, deaths `quarantined`. Python: `unreachable` retried after
+  blind `/explore {}`, which fails in 55-100 ms underground (24 of 31 after a failed mine in the baselines), never `explore up`
+  (v3-baseline g020: 12 `mine #log` at y=50, ~4 min).
+- Contract: d617135 v3.0g in `contracts/bot_api.md` and `docs/v3-interfaces.md` (plan S0.8), after the advisor's review (`reach`
+  top-level; `no_path` read from the last `path_update` status since `goto` resolves on an empty path).
+- Merges: 0853c32 `mine-approach` (`lib/approach.js`: 60 s call; attempts end `reached`, `no_path`, `path_timeout`, `ended`, `stalled`,
+  `no_approach` after 10 s without getting 1 block closer, or `approaching` when the call's time runs out; only `no_path` in the
+  10-minute memory, `approaching` marks nothing; `gotoGoalDetailed`; top-level `reach` with per-attempt `target`, `end`, `ms`,
+  `start`, `closest`, `resets`, `think_ms`); ee4f6bb `dig-down` (stock downward dig kept, under the liquid, landing and protect
+  rules); d93456a `unreachable-retry` (an `approaching` mine retried at once, once per act; any other `unreachable` mine explores
+  toward the target, so `up` from underground, never blind); c03fce7 `think-ms` (live finding: each A* search's time counted once).
+  Existing tests changed: `mine_budget.test.js` (old 11 s/36 s and remember-everything expectations), the `movements.test.js`
+  downward-dig test (rule inverted). Suite on c03fce7: pytest 997 (1 skipped), bot unit 313, panel and goals pass.
+- Live, instance b, peaceful (as v3-baseline-1), `--change scramble --keep-going --cap-usd 2`, bot and Python from `main` with the fix:
+
+  | measure | `runs/v3-reach-2024` (30 min) | `runs/v3-reach-31337` (20 min) | `runs/v3-baseline-1` (30 min, seed 2024) |
+  |---|---|---|---|
+  | ore mines `unreachable` (iron) | 1/44 (1/33) | 0/13 (0/7) | 12/23 (10/15) |
+  | longest walk before an `unreachable` | 41.4 | none | 90.8 |
+  | most `unreachable` ore mines in a row in a goal | 1 | 0 | 5 (g014, g018) |
+  | iron goals | 11/12 ok: iron_ingot x2, bucket, iron_pickaxe, sword, axe, shovel, chestplate, helmet, shield, shears; iron_boots cut by the clock | 4/4: iron_ingot x2, iron_boots, iron_leggings | 4/5 (iron_pickaxe g018 failed at the 300 s clock) |
+  | goals ok, spend | 31/32, $0.25 | 45/45, $0.23 | 54/55, $0.25 |
+
+  `reach` ends over every `/mine` attempt: 2024 reached 77, stalled 14 (10 on `#log`), no_approach 2, path_timeout 1, approaching 1
+  (retried at once, ok); 31337 reached 21, no_approach 1; no `no_path` or `ended`. Ok ore mines take a median 12.9 s (baseline 10.2).
+  After an `unreachable`: 1 immediate retry, 2 `explore up` (g017 failed and the retry then worked; g028 climbed y 66 to 85 in about
+  100 s), 0 blind explores. No damage, no pit-like drops, no goal with 6 failed steps in a row.
+  `node mc/bot/test/v2_iron.js` on a fresh `world-2024`: GATE PASS, iron_pickaxe in 238 s, every check MATCH (`logs/s13-v2-iron-2.log`).
+- Ops: `world-restore.sh` needs `SV2_SEED` too. Without it the env falls back to `sv2/.env`'s seed and restarts on that level:
+  the first iron run (`logs/s13-v2-iron.log`) ran on the stale `world-1001` (bot stocked, `planks2` on) and failed at planks. Both
+  lives ran on the fresh snapshots copied into the `world-1001` folder (server-b's `world-1001` now holds fresh-31337's content
+  after a life).
+- Advisor (one Opus `Plan`, four consultations): diagnosis GO with changes (log why each attempt ended, only `no_path` remembered,
+  no resume target, `_explore_toward` instead of blind-then-up, `lib/approach.js` and `gotoGoalDetailed` for containment); contract
+  GO with two changes (above); final check DONE (re-parsed the runs: longest run of `unreachable` ore mines 1, 0, 5 in baseline-1).
+- Instance b is down with no lock; no S13 worktrees or `v3/*` branches are left. Not pushed.
+- Open:
+  - Peaceful only: dig-down shafts and the 60 s calls haven't met hostile mobs. Run one easy life (S08's first live run will).
+  - The remaining reach failures moved to `#log`: 10 of the 14 `stalled` attempts in `v3-reach-2024` (start 18.6, closest 16.6),
+    one `unreachable` each in g017 and g028. Surface pathing, a separate item from ore depth.
+  - `explore up` took about 100 s once (g028, y 66 to 85), a third of a curriculum goal's clock; consider a cap.
+  - Ore mines are slower: median 12.9 s against 10.2 s (the trade for 1 `unreachable` in 44 against 12 in 23).
+  - `v3-reach-31337` is thin (13 ore mines; the curriculum ran out after g018), and `v2_iron.js` passed once (one run, not a rate).
+  - `no_path` and `ended` never happened live, so the 10-minute memory is now nearly unused; `path_timeout` once.
+  - Report only, not investigated: v3-baseline g017's missed furnace drop (`furnace_retrieved: false`, no dig warning).
