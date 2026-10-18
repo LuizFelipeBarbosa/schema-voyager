@@ -49,6 +49,7 @@ pushed to `origin` until the user says so.
 | S12 home, storage, composite goals | done | a | Contract v3.5; 12 lanes merged (pytest 1326, bot 471); live `runs/v3-m5-live-final` ALL PASS (junk stored in the home chest, 8 torches withdrawing the stored coal, get ready for night as 3 ordered children each checked); not pushed |
 | S13 mine reach (`unreachable` ore) | done | b | v3.0g; 4 lanes merged (pytest 997, bot 313); live `runs/v3-reach-2024` 1/44 ore `unreachable`, 11/12 iron goals, `runs/v3-reach-31337` 0/13, 4/4; `v2_iron.js` GATE PASS; not pushed |
 | S14 polish | done | a | Contract v3.0h; 11 lanes merged (pytest 1106 at 77b4bd1, 1147 on fed3117; bot 338/356); live `runs/v3-polish-live`: bot killed mid-goal -> `interrupted` `bot`, requeued, `done`; panel by `live.json`; second house leaves no scaffold; guard live test ALL PASS; not pushed |
+| S15 polish, round 2 | running | a | From the review backlog round 2 and the S08/S12/S13/S14 reports; lanes station-dig, mobs-seen, bot-stuck, yard-reach, panel-pid, build-ring, hunt-bounds, explore-cap, ops |
 
 ## Log
 
