@@ -43,6 +43,7 @@ MINE_MAX_DISTANCE = 32
 KILL_MAX_DISTANCE = 32  # v3.3: how far /attack walks to its quarry
 EXPLORE_DISTANCE = 32
 GOTO_RANGE = 3
+REACH_STALL_MS = 8000
 
 
 class BackendError(RuntimeError):
@@ -159,12 +160,19 @@ class MineflayerBackend:
             Site(tuple(site["origin"]), site["cut"], site["fill"], float(site["distance"])) for site in body["sites"]
         ]
 
-    def _goto(self, action: Action) -> Outcome:
+    def reach(self, pos: tuple[int, int, int]) -> Outcome:
+        """v3.0i: walk near a cell, giving up after REACH_STALL_MS without progress."""
+        return self._goto(Action("goto", pos=pos), stall_ms=REACH_STALL_MS)
+
+    def _goto(self, action: Action, stall_ms: int | None = None) -> Outcome:
         """A walk near a cell, the same in both modes."""
         if action.pos is None:
             raise ValueError("a goto action needs a pos")
         x, y, z = action.pos
-        body = self._post("/goto", self._with_protect({"x": x, "y": y, "z": z, "range": GOTO_RANGE}))
+        payload: dict[str, Any] = {"x": x, "y": y, "z": z, "range": GOTO_RANGE}
+        if stall_ms is not None:
+            payload["stall_ms"] = stall_ms
+        body = self._post("/goto", self._with_protect(payload))
         inventory = self._inventory(body)
         before = body.get("inventory_before_step")
         travel = body.get("travel") or {}
@@ -174,7 +182,7 @@ class MineflayerBackend:
             inventory_delta=_difference(inventory, before) if before is not None else {},
             inventory=inventory,
             blocks_walked=travel.get("distance", 0.0),
-            detail=_detail(body, "arrived", "inventory_before_step", "detail") | {"target": {"x": x, "y": y, "z": z}},
+            detail=_detail(body, "arrived", "position", "inventory_before_step", "detail") | {"target": {"x": x, "y": y, "z": z}},
             travel=travel,
             events=body.get("events") or [],
         )
@@ -199,7 +207,7 @@ class MineflayerBackend:
             raise ValueError("a withdraw action needs a pos")
         x, y, z = action.pos
         body = self._post("/withdraw", self._with_protect({"pos": [x, y, z], "items": {action.target: action.times}}))
-        detail = _detail(body, "withdrawn", "chest", "inventory_full", "detail") | {"target": {"x": x, "y": y, "z": z}}
+        detail = _detail(body, "withdrawn", "chest", "inventory_full", "position", "detail") | {"target": {"x": x, "y": y, "z": z}}
         error = body.get("error")
         withdrawn = body.get("withdrawn") or {}
         taken = withdrawn.get(action.target, 0)
@@ -392,7 +400,7 @@ class MineflayerBackend:
         failed = next((body for body in bodies if not body["ok"]), None)
         detail = _detail(bodies[0], "item", "inventory_before_step")
         detail.update(_detail(bodies[-1], "position"))  # where the last call left the bot
-        for key in ("missing", "used_table", "table_retrieved", "detail"):
+        for key in ("missing", "used_table", "table_retrieved", "niche", "detail"):
             values = [body[key] for body in bodies if body.get(key) is not None]
             if values:
                 detail[key] = values[-1] if key != "table_retrieved" else all(values)
@@ -451,7 +459,7 @@ class MineflayerBackend:
             return Outcome(ok=False, error="missing_ingredients", inventory=inventory)
         body = self._post("/smelt", self._with_station(request, "furnace"), timeout=SMELT_TIMEOUT_S + SMELT_TIMEOUT_PER_ITEM_S * action.times)
         detail = _detail(
-            body, "position", "missing", "used_furnace", "furnace_retrieved", "used_home_station", "station_gone", "station_unreachable", "fuel", "fuel_used", "smelted", "item", "inventory_before_step", "detail"
+            body, "position", "missing", "used_furnace", "furnace_retrieved", "used_home_station", "station_gone", "station_unreachable", "niche", "fuel", "fuel_used", "smelted", "item", "inventory_before_step", "detail"
         )
         if body.get("tools_broken"):
             detail["tools_broken"] = body["tools_broken"]

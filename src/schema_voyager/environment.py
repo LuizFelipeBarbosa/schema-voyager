@@ -860,6 +860,10 @@ class NaturalWorld:
         travel, events = walk
         return self._built(delta={}, travel=travel, events=events, arrived=True, **detail)
 
+    def reach(self, pos: Pos) -> Outcome:
+        """v3.0i: the simulator's world has no stall to give up on, so reaching a cell is a goto that succeeds."""
+        return Outcome(ok=True, inventory=self._inventory(), detail={"target": _xyz(pos)})
+
     def _walk_near(self, pos: Pos, reach: int) -> tuple[dict[str, Any], list[dict[str, Any]]] | None:
         """Walk to the standable cell nearest to the bot within reach of pos: the travel and events, or None
         when there is none."""
