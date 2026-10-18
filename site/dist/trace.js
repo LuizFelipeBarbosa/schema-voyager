@@ -98,6 +98,8 @@ async function pollIndex() {
   } catch {
     return null; // no panel server: only dropped files
   }
+  // ?run=<run dir name> shows and follows that run only, when several write traces at once.
+  if (params.get('run')) episodes = episodes.filter((episode) => episode.run === params.get('run'));
   renderPicker(episodes);
   const newest = episodes[0];
   if (player.followNewest && newest && newest.path !== player.path) openPath(newest.path, true);
