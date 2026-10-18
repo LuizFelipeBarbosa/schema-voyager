@@ -199,6 +199,15 @@ test('onIdleTick does nothing while held, then runs once per 2 s', async () => {
   assert.equal(calls.filter((c) => c === 'eat').length, 2)
 })
 
+test('autoeat_error logs every error except "No food found."', (t) => {
+  const { bot } = setup()
+  const log = t.mock.method(console, 'log', () => {})
+  bot.emit('autoeat_error', new Error('No food found.'))
+  assert.equal(log.mock.callCount(), 0)
+  bot.emit('autoeat_error', new Error('Eating timed out'))
+  assert.deepEqual(log.mock.calls.map((call) => call.arguments), [['survival: autoeat_error: Eating timed out']])
+})
+
 test('records ate on autoeat_finished; autoeat_error does not throw', () => {
   const { bot, eventLog } = setup()
   bot.food = 18

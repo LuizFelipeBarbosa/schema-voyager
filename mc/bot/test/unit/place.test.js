@@ -236,6 +236,21 @@ test('/place walks with build movements: no digging, no doors, scaffold minus th
   assert.equal(bot.pathfinder.movements, 'previous')
 })
 
+test('/place build movements sprint only on peaceful', async () => {
+  const sprintOf = async (game) => {
+    const bot = buildBot({ cobbled_deepslate: 5 })
+    bot.placeAs = 'cobbled_deepslate'
+    if (game) bot.game = game
+    let seen = null
+    bot.pathfinder.goto = async () => { seen = bot.pathfinder.movements }
+    await place(bot, request({ block: 'cobbled_deepslate' }), newSession())
+    return seen.allowSprinting
+  }
+  assert.equal(await sprintOf({ difficulty: 'peaceful' }), true)
+  assert.equal(await sprintOf({ difficulty: 'easy' }), false)
+  assert.equal(await sprintOf(null), false)
+})
+
 test('/place with no scaffold held: no towers, nothing to place on the way', async () => {
   const bot = buildBot({ oak_planks: 1 })
   bot.placeAs = 'oak_planks'

@@ -7,9 +7,11 @@
 // run against the live demo's ports (3000, 25575). Environment variables are
 // loaded from $SV2_HOME/.env without overriding the ones already set.
 //
-// It builds a glass arena around the bot, raises the difficulty to easy (a mob
-// despawns on peaceful), uses husks (they don't burn in daylight) and puts the
-// world back at the end: no mobs, peaceful, guard mode defend. The arena stays.
+// It teleports the bot to a flat stone floor high above the terrain (over its
+// own x and z), builds a glass arena there, raises the difficulty to easy (a
+// mob despawns on peaceful), uses husks (they don't burn in daylight) and puts
+// the world back at the end: arena removed, bot teleported back, no mobs,
+// peaceful, guard mode defend.
 //
 // Usage: node mc/bot/test/v3_guard_live.js   (exit 0 = every check passed)
 
@@ -26,6 +28,11 @@ const NO_REFIGHT_WINDOW_MS = 3000
 const BUSY_RETRY_TIMEOUT_MS = 60000
 const NO_FIGHT_WINDOW_MS = 3000
 const BLOCK_UPDATE_DELAY_MS = 1000
+const ARENA_Y = 200 // the floor's altitude: above any terrain, below the 319 build limit
+const ARENA_RADIUS = 15
+const ARENA_HEIGHT = 7 // floor to ceiling: the glass box below spans ~-1 to ~5
+const TELEPORT_TIMEOUT_MS = 5000
+const ARRIVED_BLOCKS = 1
 
 const short = (value) => JSON.stringify(value)
 
@@ -82,6 +89,18 @@ async function main () {
   if (!status.connected) throw new Error('the bot is not connected to its server')
   await rcon.connect()
 
+  const start = (await getStatus()).position
+  const arenaX = Math.floor(start.x) // the bot's chunk is loaded, so the arena's is
+  const arenaZ = Math.floor(start.z)
+  const arenaMin = `${arenaX - ARENA_RADIUS} ${ARENA_Y - 1} ${arenaZ - ARENA_RADIUS}`
+  const arenaMax = `${arenaX + ARENA_RADIUS} ${ARENA_Y - 1 + ARENA_HEIGHT - 1} ${arenaZ + ARENA_RADIUS}`
+  const floorMax = `${arenaX + ARENA_RADIUS} ${ARENA_Y - 1} ${arenaZ + ARENA_RADIUS}`
+  const teleportBot = async (x, y, z) => {
+    await rcon.exec(`tp ${username} ${x} ${y} ${z}`)
+    const arrived = await pollStatus(0, TELEPORT_TIMEOUT_MS, (s) => distance(s.position, { x, y, z }) <= ARRIVED_BLOCKS)
+    if (!arrived) throw new Error(`the bot did not arrive at ${x} ${y} ${z} within ${TELEPORT_TIMEOUT_MS} ms`)
+  }
+
   const atBot = `execute at ${username} run`
   const killMobs = () => rcon.exec(`${atBot} kill @e[type=!player,type=!item,distance=..48]`)
   const topUpHealth = () => rcon.exec(`effect give ${username} minecraft:instant_health 1 5`)
@@ -99,10 +118,12 @@ async function main () {
     await rcon.exec(`clear ${username}`)
     await rcon.exec(`give ${username} minecraft:iron_sword`)
     await rcon.exec(`effect clear ${username}`)
-    // A flat arena, a glass box with a stone floor: the bot's surroundings may
-    // be rock, water or ice, where a mob is out of sight, a target out of reach
-    // and a dug-out space floods.
-    // 31 x 31 and 6 high: 6000 blocks, well under the 32768 of one fill. Big enough to back off in.
+    // A flat arena, a glass box with a stone floor, at a known spot: the bot's
+    // surroundings may be rock, water, ice or a tree, where a mob is out of
+    // sight, a target out of reach and a dug-out space floods.
+    // 31 x 31 and 6 high: under 6000 blocks, well under the 32768 of one fill. Big enough to back off in.
+    await rcon.exec(`fill ${arenaMin} ${floorMax} minecraft:stone`)
+    await teleportBot(arenaX + 0.5, ARENA_Y, arenaZ + 0.5)
     await rcon.exec(`${atBot} fill ~-15 ~-1 ~-15 ~15 ~5 ~15 minecraft:glass hollow`)
     await rcon.exec(`${atBot} fill ~-15 ~-1 ~-15 ~15 ~-1 ~15 minecraft:stone`)
     await resetBetweenChecks()
@@ -217,6 +238,9 @@ async function main () {
     console.log(`FAIL setup: ${err.message}`)
   } finally {
     await killMobs().catch(() => {})
+    // Back first: the bot's presence keeps the arena's chunks loaded for the fill.
+    await teleportBot(start.x, start.y, start.z).catch(() => {})
+    await rcon.exec(`fill ${arenaMin} ${arenaMax} minecraft:air`).catch(() => {})
     await rcon.exec('difficulty peaceful').catch(() => {})
     await post('/guard', { mode: 'defend' }).catch(() => {})
     rcon.close()
