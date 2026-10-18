@@ -9,6 +9,7 @@ from typing import Any
 
 from . import normalize
 from .adapter import DIRECTIONS, LookResult
+from .inventory import slots_used, stack_size
 from .layouts import ARENA_RADIUS, GROUND_Y, Layout
 from .models import Action, Observation, Outcome, Status, Task
 
@@ -34,6 +35,7 @@ PICKAXE_TIER = {
     "netherite_pickaxe": 4,
 }
 
+INVENTORY_SLOTS = 36
 VIEW_RADIUS = 16
 EXPLORE_LEG = 10
 _NEIGHBOURS = ((1, 0, 0), (-1, 0, 0), (0, 1, 0), (0, -1, 0), (0, 0, 1), (0, 0, -1))
@@ -347,9 +349,17 @@ class NaturalWorld:
         return Observation(
             position=self._position(),
             inventory=self._inventory(),
+            free_slots=_free_slots(self.inventory),
             nearby={block: count for block, count in sorted(nearby.items()) if count > 0},
             blocks_walked=round(self.blocks_walked, 1),
         )
+
+    def toss(self, items: dict[str, int]) -> dict[str, int]:
+        """Drop up to each count of what is held; the items are gone. Returns what left."""
+        tossed = {item: min(count, self.inventory[item]) for item, count in items.items()}
+        tossed = {item: count for item, count in tossed.items() if count > 0}
+        self.inventory.subtract(tossed)
+        return tossed
 
     def status(self, since: int = 0) -> Status:
         return Status(
@@ -419,14 +429,14 @@ class NaturalWorld:
         before_step = self._inventory()
         drops = self._drops(target.block, action.tool)
         self._changes[target.pos] = "air"
-        self.inventory.update(drops)
+        kept = self._keep(drops)
         self._roll_damage("step", STEP_DAMAGE_CHANCE, events)
         return Outcome(
             ok=True,
             block_removed=True,
             drops=dict(drops),
-            picked_up=dict(drops),
-            inventory_delta=dict(drops),
+            picked_up=dict(kept),
+            inventory_delta=dict(kept),
             inventory=self._inventory(),
             blocks_walked=round(self.blocks_walked, 1),
             detail={
@@ -434,6 +444,7 @@ class NaturalWorld:
                 "target": {"x": target.pos[0], "y": target.pos[1], "z": target.pos[2]},
                 "tool_used": action.tool,
                 "inventory_before_step": before_step,
+                **({"inventory_full": True} if kept != drops else {}),
             },
             travel=travel,
             events=events,
@@ -556,7 +567,7 @@ class NaturalWorld:
             dug[block] += 1
             picked_up.update(self._drops(block, best_pickaxe))
             self._changes[(x, level, z)] = "air"
-        self.inventory.update(picked_up)
+        kept = self._keep(picked_up)
         gained = (climb[-1] + 1 if sky else climb[-1]) - y if climb else 0  # stand on the top, or in the last cell dug
         self._cell = (x, y + gained, z)
         self.blocks_walked += gained
@@ -568,8 +579,12 @@ class NaturalWorld:
             ok=True,
             inventory=self._inventory(),
             blocks_walked=round(self.blocks_walked, 1),
-            detail={"position": {"x": position[0], "y": position[1], "z": position[2]}, "sky": sky},
-            travel={"distance": float(gained), "dug": dict(dug), "placed": {}, "picked_up": dict(picked_up)},
+            detail={
+                "position": {"x": position[0], "y": position[1], "z": position[2]},
+                "sky": sky,
+                **({"inventory_full": True} if kept != picked_up else {}),
+            },
+            travel={"distance": float(gained), "dug": dict(dug), "placed": {}, "picked_up": dict(kept)},
             events=events,
         )
 
@@ -603,6 +618,8 @@ class NaturalWorld:
         before_step = self._inventory()
         delta: Counter[str] = Counter(gains)
         delta.subtract(payment)
+        if _free_slots(self.inventory + delta, clamp=False) < 0:
+            return self._fail("craft_failed", inventory_full=True, detail="inventory_full")
         self.inventory.update(delta)
         self._roll_damage("step", STEP_DAMAGE_CHANCE, events)
         return Outcome(
@@ -614,6 +631,18 @@ class NaturalWorld:
             travel=_empty_travel(),
             events=events,
         )
+
+    def _keep(self, gains: dict[str, int]) -> Counter[str]:
+        """Add as much of each gain as fits (the rest is left on the ground); returns what was kept."""
+        kept: Counter[str] = Counter()
+        for item in sorted(gains):
+            size = stack_size(item)
+            room_in_last_stack = -self.inventory[item] % size
+            fits = min(gains[item], room_in_last_stack + _free_slots(self.inventory) * size)
+            if fits > 0:
+                self.inventory[item] += fits
+                kept[item] = fits
+        return kept
 
     def _output_count(self, item: str, count: int) -> int:
         if (item == "stick" and self.stick2) or (item == "#planks" and self.planks2):
@@ -690,12 +719,15 @@ class NaturalWorld:
                     picked_up.update(self._drops(block, best_pickaxe))
                     self._changes[cell] = "air"
             stand = target.path[-1] if target.path else self._cell
-        self.inventory.update(picked_up)
+        kept = self._keep(picked_up)
 
         distance = math.hypot(stand[0] - self._cell[0], stand[2] - self._cell[2])
         self.blocks_walked += distance
         self._cell = stand
-        return {"distance": round(distance, 1), "dug": dict(dug), "placed": {}, "picked_up": dict(picked_up)}
+        return {
+            "distance": round(distance, 1), "dug": dict(dug), "placed": {}, "picked_up": dict(kept),
+            **({"inventory_full": True} if kept != picked_up else {}),
+        }
 
     def _dig_path(self, pos: Pos) -> list[Pos]:
         """The straight line of cells between the bot and pos, both excluded."""
@@ -942,6 +974,12 @@ class NaturalWorld:
             travel=_empty_travel(),
             events=events or [],
         )
+
+
+def _free_slots(inventory: dict[str, int], *, clamp: bool = True) -> int:
+    """Empty slots of an inventory; negative (unless clamped to 0) when it holds more than fits."""
+    free = INVENTORY_SLOTS - slots_used(inventory)
+    return max(0, free) if clamp else free
 
 
 def _empty_travel() -> dict[str, Any]:
