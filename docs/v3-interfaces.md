@@ -1875,3 +1875,221 @@ for several. It returns the completed steps (for the skill), and records, revise
 | `build_runner.py`, `agent.py` (`pursue`), `planner.py` (`make_plan_for`), `episode.py` (`BUILD_KINDS`), `tests/test_v3_build_run.py` | `build-run` | After group 1 and the design check; alongside `doors` |
 | `life.py`, `llm.py` (`parse_goal`), `goals.py` (`accept`, `goal_label`), `tests/test_v3_build_life.py` | `build-life` | After `build-run` and `doors` |
 ## v3.5 Places, chests, composite goals
+
+S12 (plan S5.1-S5.3). The bot has a home, the house it built. It keeps its crafting table, furnace and chest standing
+there, stores junk and spare materials in the chest instead of dropping them, fetches from the chest when a plan needs
+it, and takes goals such as "get ready for night" that break into several goals, each checked on its own. The bot side
+is `contracts/bot_api.md` v3.5. D1 holds: `withdraw`, like `goto` and `place`, is never a rule kind and never reaches
+`store.record_transition`; chest contents are a planner input outside the rule system.
+
+### v3.5a The way in: the bot never enters the house
+
+Walks keep `canOpenDoors` off (v3.4a). The home's stations and chest stand in the **yard**, outside the walls: the
+cells within `YARD = 2` blocks of the house's footprint. Nothing the bot uses is inside the house, so no walk ever
+needs the door. The door's outside cell stays free. Why not a door step: a bot left inside a closed house is walled in
+for its next `/mine` (protected walls are never dug), so every visit would have to be enter-act-leave in one call,
+and every `/craft` near home would need it.
+
+### v3.5b Places (`places.py`, new; `life_state.json` `places`)
+
+```json
+"places": {
+  "home": {"goal_id": "u003", "name": "small house", "origin": [4, 76, 31], "size": [5, 4, 5], "door": [6, 76, 35]},
+  "stations": {"chest": [7, 76, 36], "crafting_table": [3, 76, 34]},
+  "stored": {"coal": 64, "dirt": 120}
+}
+```
+
+- `home` is `null` until set. It is set when a build goal ends `done` and there is no home yet (the first house is
+  home): `goal_id`, `name`, `origin` and `size` from its protected entry, `door` from its blueprint
+  (`door_cell(bp, origin)`: the lower cell of the first door value, layers bottom-up, then z, then x; `null` without a
+  door). Chat: "This is my home now: small house at 4 76 31." Event `home_set {home}`.
+- `--resume` of a life saved before v3.5 (no `places` key): `home` comes from the last `built` protected entry, its
+  blueprint read from `goals.jsonl` by `goal_id`. `places` is saved with the rest of `life_state.json`.
+- `stations`: at most one per kind of `HOME_STATION_KINDS = ("chest", "crafting_table", "furnace")`, only ones the
+  life placed in the yard (v3.5c). A station `/craft` or `/smelt` places for one step is dug up again and never
+  recorded. `stored`: the home chest's contents (raw ids), as the bot last reported them; `{}` without a chest.
+- A station or chest the bot finds gone (`station_gone` on `/craft` or `/smelt`, `not_found` on a chest call) is
+  removed from `stations` (and `stored` emptied for the chest). Event `home_lost {kind, pos}`.
+
+```python
+YARD = 2
+HOME_RANGE = models.HOME_RANGE  # 48 blocks, 3D, bot to station: a home station or the chest counts for planning this close
+HOME_STATION_KINDS = ("chest", "crafting_table", "furnace")
+
+@dataclass(frozen=True)
+class Home:
+    goal_id: str
+    name: str
+    origin: Pos
+    size: tuple[int, int, int]
+    door: Pos | None
+
+@dataclass
+class Places:
+    home: Home | None = None
+    stations: dict[str, Pos] = field(default_factory=dict)
+    stored: dict[str, int] = field(default_factory=dict)
+    def to_json(self) -> dict: ...
+    @classmethod
+    def from_json(cls, data: dict | None) -> "Places": ...
+    def stock(self) -> HomeStock: ...   # models.HomeStock for the Episode (v3.5d)
+
+def door_cell(blueprint: dict, origin: Pos) -> Pos | None: ...
+def home_box(home: Home) -> Box: ...       # the site box grown by YARD in x and z: ((ox-2, oy-1, oz-2), (w+4, h+1, d+4))
+def yard_scan_box(home: Home) -> Box: ...  # ((ox-2, oy-2, oz-2), (w+4, 5, d+4)): the yard, its support layer, headroom
+def yard_slots(home: Home, scan: dict[Pos, str | None], taken: Iterable[Pos] = ()) -> list[Pos]: ...
+```
+
+- `yard_slots`: the free cells for a station, best first. A cell qualifies when it is in the ring one block outside
+  the footprint (x in `[ox-1, ox+w]`, z in `[oz-1, oz+d]`, not inside the footprint), its y is `oy-1`, `oy` or
+  `oy+1`, it is air or `blueprint.REPLACEABLE`, the cell under it is solid (not air, not replaceable, not a liquid,
+  not `None`), the cell above it is air, it is not the door's outside cell (one step out from the door, away from
+  the footprint) and not in `taken`. Per column only the lowest qualifying y. Ordered by horizontal distance to the
+  door's outside cell (to `(ox, oz)` without a door), then y, z, x.
+
+### v3.5c Furnishing, the chest goal and storing (`life.py`, `inventory.py`)
+
+- **Furnishing**, at the start of every goal (after `begin_episode`, before the junk check), when `home` is set, the
+  bot is within `HOME_RANGE` of the home origin, and it holds a `HOME_STATION_KINDS` item that `stations` lacks: one
+  `scan(*yard_scan_box(home))`, then for each such kind, in the order chest, crafting_table, furnace, the first
+  `yard_slots` cell (earlier placements in `taken`): `episode.act(Action("place", target=kind, pos=cell))` with
+  `keep_out` unset. On ok: add it to `stations` (`stored = {}` for a chest), save, `set_stations`, event
+  `home_placed {kind, pos}`, chat "I put a chest by my house at 7 76 36." On a failure: event
+  `home_place_failed {kind, pos, error}`, no retry until the next goal.
+- **The chest goal**: when `home` is set (a build `done`, or the resume migration) and the home has no chest and the
+  bot holds none, the life accepts one system goal `GoalSpec(kind="obtain", source="system", item="chest", count=1,
+  text="a chest for my home")`. Only then; furnishing places it at the next goal's start.
+- **Storing instead of tossing.** `_make_room` keeps its trigger (`free_slots < MIN_FREE_SLOTS`). With a home chest
+  within `HOME_RANGE` of the bot it stores first: `items = junk_to_store(...)` (same arguments as `junk_to_toss`),
+  `backend.deposit(chest, items)`, `stored = result.contents`, save, event `stored {items, free_slots_before,
+  free_slots_after}`, goal record `stored`, chat "Putting coal x64, dirt x120 in my chest." If free slots are still
+  short (chest full) or the deposit has an `error`, it falls back to S04's toss on a fresh observation. Without a
+  home chest, or beyond `HOME_RANGE`, it tosses as before.
+- `inventory.junk_to_store(inventory, rules, wanted, free_slots, min_free=4, scaffold_reserve=64) -> dict[str, int]`:
+  `junk_to_toss`'s junk plus every rule item's surplus beyond one stack (always, not only when still short: nothing
+  is lost in a chest). Never a tool, a kept item, a wanted item or food, and the scaffold reserve stays held.
+- At `--resume`, with a home chest within `HOME_RANGE`, the life refreshes `stored` with `backend.chest(pos)`
+  (an `error` other than `not_found` leaves `stored` as saved).
+- The curriculum's held-station skip (v3.0b) counts a home station as held.
+
+### v3.5d Home stations and chest contents in the planner (`planner.py`, `agent.py`, `episode.py`, `models.py`)
+
+```python
+@dataclass(frozen=True)
+class HomeStock:  # models.py
+    """v3.5: what the bot can use at home without carrying it."""
+    stations: dict[str, tuple[int, int, int]] = field(default_factory=dict)  # "crafting_table"/"furnace" -> pos
+    chest: tuple[int, int, int] | None = None
+    stored: dict[str, int] = field(default_factory=dict)  # the chest's contents, raw ids
+    def near(self, position: tuple[float, float, float], reach: float = HOME_RANGE) -> tuple[frozenset[str], dict[str, int]]:
+        """The station kinds within reach of position, and the stored items if the chest is within reach."""
+
+@dataclass(frozen=True)
+class ChestResult:  # models.py
+    moved: dict[str, int]                 # deposited or withdrawn, raw ids
+    contents: dict[str, int]              # the chest after the call, raw ids
+    error: str | None = None              # not_found, unreachable, interrupted, timeout; never a lost bot
+    detail: dict[str, Any] = field(default_factory=dict)  # chest_full, inventory_full, travel
+
+class Episode:  # episode.py, new field
+    home: HomeStock | None = None  # set by the life for every goal; the agent updates stored after a withdraw
+```
+
+- `make_plan(..., stations=frozenset())` and `make_plan_for(..., stations=frozenset())`: a station in `stations` is
+  available without holding one, so `_craft` and `_smelt` add no `{station: 1}` need for it. Held stays available.
+- `planner.withdrawals(plan: list[PlanStep], start: dict[str, int], held: dict[str, int]) -> dict[str, int]`: for a
+  plan made from `start` (held plus stored, normalized), how much of each item the plan draws beyond what is held:
+  `max(0, start[i] - low[i] - held[i])`, where `low[i]` is the lowest count of `i` over `start` and every step's
+  `expected_inventory`. Zero entries are left out.
+- `agent.pursue` (every obtain, build-material and arming plan goes through it), at each plan: `stations, stored =
+  episode.home.near(position)` (position from the latest observation). Plans always get `stations`. When `stored` is
+  not empty: plan once from held plus stored, take `withdrawals`, map each family back to the chest's raw ids
+  (largest stack first), and `episode.act(Action("withdraw", target=raw_id, times=n, pos=chest))` for each; then
+  plan again from the real inventory and run that plan as today. A raw id whose withdraw came back short is not asked
+  again in the same `pursue`. After every withdraw, `episode.home` gets `stored` from the outcome's `detail["chest"]`.
+- `ActionKind` gains `"withdraw"`: `describe()` gives `"withdraw coal x2 from 7 76 36"`. It joins `BUILD_KINDS`
+  (no explores, one in-place retry on `unreachable`/`timeout`). The outcome is ok when `times` of `target` came out;
+  short is `not_found` with `detail["withdrawn"]` and `detail["chest"]`.
+- `LifeBackend` gains `deposit(pos, items) -> ChestResult`, `chest(pos) -> ChestResult` and
+  `set_stations(stations: dict[str, Pos]) -> None` (the home crafting_table and furnace; like `set_protected`, sent
+  with every request it applies to, so a restart loses nothing). Chest calls answer action errors in
+  `ChestResult.error`; only a lost bot, a 400 or a 500 raises `BackendError`.
+- `MineflayerBackend`: `/deposit`, `/withdraw` (from `act`), `/chest`, all with `protect`; `/craft` gets `"station"`
+  (the home crafting_table) and `/smelt` gets `"station"` (the home furnace) when set, and both get `protect`.
+  `station_gone` and `used_home_station` go into the outcome's detail.
+- `NaturalWorld`: a chest is a `place`d `chest` cell with contents (27 slots, `stack_size`); `clear` of a chest cell
+  moves its contents into the inventory (what fits). Chest calls walk like `goto` (range 2) and answer `not_found`
+  when the cell isn't a chest. `craft`/`smelt` without the station held use the `set_stations` one when the cell
+  still holds it (walk there, `used_home_station: true`, `table_retrieved`/`furnace_retrieved` `None`), else
+  `missing_crafting_table`/`missing_furnace` with `station_gone: true` if a station was given. `withdraw` joins
+  `THREATENED_ACTIONS`.
+
+### v3.5e Protected boxes: the home's yard and a cap of 32
+
+- The home's protected entry is sent as `home_box(home)` (the yard is protected too: no `/mine` target, dig or
+  scaffold there); every other entry as its site box.
+- `blueprint.merge_boxes(boxes: list[Box], limit: int = 32) -> list[Box]`: unchanged when there are `limit` or
+  fewer; else repeatedly replace the pair whose bounding box adds the least volume (union volume minus both volumes,
+  ties by the lower index pair) with that bounding box, until `limit` are left. The life sends
+  `merge_boxes(boxes)`; `life_state.json` keeps every entry.
+- `/craft` and `/smelt` place a step's station outside every `protect` box (`contracts/bot_api.md` v3.5). The home
+  stations stand in the yard because the life placed them there with `/place`, which may target a protected cell.
+
+### v3.5f Composite goals (`goals.py`, `llm.py`, `life.py`)
+
+- `parse_goal(text, inventory, known_items, *, goal_id, home=False) -> GoalSpec | list[GoalSpec] | Unsupported`. A
+  list is 2 to 6 children in the order to run, each a `GoalSpec` with `id=""`, `source="user"`, its own short `text`
+  ("8 torches"), kind obtain, build, kill or guard (no nested lists), at most one build. A build child gets its
+  `design_blueprint`; a child that fails the usual checks or the design is dropped. One child left: that child alone,
+  as a plain goal with `id=goal_id`. None left: `Unsupported`. With `home=True` the prompt says the bot has a home,
+  so a shelter needs no build child.
+  - Live: the JSON schema's `kind` gains `"composite"` with a `children` array of goal objects; the prompt says when
+    to use it (several things asked at once, or a preparation like "get ready for night").
+  - Fake: text with " and ", " then " or ", " splits into parts, each parsed by the fake parser (all must parse, else
+    the whole text is parsed as one goal); "ready for night" anywhere gives `[obtain torch 8, obtain stone_sword 1]`,
+    with `build` of the fake hut first when `home` is False.
+- `replan_children(text, done: list[GoalSpec], failed: GoalSpec, reason: str, remaining: list[GoalSpec], inventory,
+  known_items, *, home=False) -> list[GoalSpec] | Unsupported`: one JSON call; 0 to 6 children replacing the
+  remaining ones (it may retry or swap the failed one); `[]` means give up. Fake: `remaining` as it was (ids `""`).
+- `goals.jsonl` gains three keys on every line: `parent` (the parent's id or `null`), `children` (ids, in order,
+  including replaced ones; `[]`) and `replanned` (`false`). A parent's `kind` is `"composite"`, its `item`, `count`,
+  `target` and `blueprint` `null`.
+- `GoalQueue.accept_children(parent_id, specs) -> list[GoalSpec]`: gives each child the next `u###` id, writes it
+  `queued` (a build `awaiting_approval`) with `parent`, appends the ids to the parent's `children`, and moves the
+  parent `submitted -> queued` the first time. Returns the specs with their ids.
+- `GoalQueue.next()` never returns a parent, and returns a child only when every earlier child of its parent is
+  terminal (a build waiting for approval holds back the later ones). Otherwise the order is unchanged.
+- A parent moves `queued -> running` when its first child starts. `GoalQueue.settle(parent_id) -> GoalStatus | None`:
+  once no child is `submitted`, `queued`, `running` or `awaiting_approval`, the parent becomes `done` if a child is
+  `done`, else `cancelled`; it returns the new status, or `None` while children are pending or the parent is already
+  terminal. `cancel(parent)` cancels every non-terminal child (a running one by the usual late cancel).
+  `mark` accepts `replanned`.
+- The life (`_parse_pending`): a list goes to `accept_children`; event `goal_children {goal_id, children: [{id,
+  label}]}`; chat "Queued u004: get ready for night: u005 8 torches, then u006 4 cooked beef, then u007 an iron
+  sword." Build children follow the usual approval.
+- The life (`_end_goal`, after the child's own status): a child `failed` while its parent has `replanned: false` ->
+  `replan_children` once; mark the parent `replanned: true`; cancel its queued children with reason `"replaced"`;
+  `accept_children` the new list; event `goal_replanned {goal_id, failed, reason, children}`. An empty list, an
+  `Unsupported` or an `LLMError`, or a second failure after a replan: the parent is `failed` with the reason
+  `"<child label>: <child reason>"`, and its queued children are cancelled with reason `"parent failed"`. Then
+  `settle`. When the parent ends: event `goal_parent_end {goal_id, status}`, chat "Done u004: get ready for night."
+  (or "Couldn't finish u004: ..."). A preempted, died-in or bot-lost child is requeued as today and changes nothing.
+- The panel's goals list shows children under their parent, indented, and the parent's progress ("2 of 4 done").
+  The trace renders `withdraw` steps and `stored`, `home_*` and `goal_children`/`goal_replanned` events.
+
+### v3.5g Who owns what (S12)
+
+| File | Owner | Note |
+|---|---|---|
+| `models.py` (`withdraw` in `ActionKind` and `describe`, `HomeStock` fields, `ChestResult`), `episode.py` (`Episode.home`), `adapter.py` (`deposit`, `chest`, `set_stations`), `places.py` (signatures) | S12 stubs on `main` | |
+| `mc/bot/lib/chest.js` (new), `mc/bot/server.js` (three routes), `mc/bot/test/unit/chest.test.js` | `chest-bot` | Group 1 |
+| `places.py`, `blueprint.py` (`merge_boxes`), `tests/test_v3_places.py` | `places` | Group 1 |
+| `goals.py`, `llm.py` (`parse_goal`, `replan_children`), `tests/test_v3_composite.py`, `tests/test_v3_goals.py` (the key list) | `composite-queue` | Group 1 |
+| `adapter.py`, `mineflayer_backend.py`, `environment.py`, `tests/test_v3_chest.py` | `chest-backend` | Group 1 |
+| `mc/bot/lib/station.js`, `lib/craft.js`, `lib/smelt.js`, `mc/bot/server.js` (craft and smelt validators), `mc/bot/test/unit/station_home.test.js` | `station-bot` | Group 2, after `chest-bot` |
+| `planner.py`, `agent.py`, `episode.py`, `models.py` (`HomeStock.near`), `tests/test_v3_home_plan.py` | `home-plan` | Group 2, after `chest-backend` |
+| `life.py` (composite), `tests/test_v3_composite_life.py` | `composite-life` | Group 2, after `composite-queue` |
+| `site/dist/goals.js`, `site/dist/goals.test.mjs`, `site/dist/trace.js`, `site/dist/trace.css`, `site/dist/trace.test.mjs` | `composite-panel` | Group 2, after `composite-queue` |
+| `life.py` (places, furnishing, storing, the chest goal, protected boxes, `Episode.home`, `set_stations`), `inventory.py`, `curriculum.py`, `tests/test_v3_home_life.py` | `home-life` | Group 3, after group 2 |
+| `mc/bot/test/v3_home_live.js` | `home-live` (live, instance a) | Group 4 |
