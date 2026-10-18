@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Installs and switches the v2 M3 datapacks of one instance (SV2_INSTANCE).
 #   v2-change.sh install            copy mc/datapacks/v2_* into the world, reload, leave all disabled
-#   v2-change.sh enable r2|stick2   switch a rule change on
-#   v2-change.sh disable r2|stick2  switch it off
+#   v2-change.sh enable r2|stick2|planks2   switch a rule change on
+#   v2-change.sh disable r2|stick2|planks2  switch it off
 #   v2-change.sh status             which v2 packs are enabled / available
 # install, enable and disable take the instance lock; status does not.
 set -euo pipefail
@@ -14,7 +14,8 @@ pack_for() {
   case "$1" in
     r2) echo "file/v2_coal_tool" ;;
     stick2) echo "file/v2_stick2" ;;
-    *) die "unknown change '$1'; use r2 or stick2" ;;
+    planks2) echo "file/v2_planks2" ;;
+    *) die "unknown change '$1'; use r2, stick2 or planks2" ;;
   esac
 }
 
@@ -40,5 +41,5 @@ case "${1:-}" in
     echo "enabled:   $(sv2_rcon "datapack list enabled")"
     echo "available: $(sv2_rcon "datapack list available")"
     ;;
-  *) die "usage: v2-change.sh install | enable <r2|stick2> | disable <r2|stick2> | status" ;;
+  *) die "usage: v2-change.sh install | enable <r2|stick2|planks2> | disable <r2|stick2|planks2> | status" ;;
 esac

@@ -19,7 +19,7 @@ from schema_voyager.llm import LLM
 from schema_voyager.models import Action
 
 ROOT = Path(__file__).resolve().parents[1]
-PACKS = {"r2": "file/v2_coal_tool", "stick2": "file/v2_stick2"}
+PACKS = {"r2": "file/v2_coal_tool", "stick2": "file/v2_stick2", "planks2": "file/v2_planks2"}
 
 
 # -- the trigger on hand-made steps ---------------------------------------------------
@@ -45,6 +45,7 @@ def _trigger(tmp_path, change, resume=False):
     ("r2", _step("mine", "coal_ore", "wooden_pickaxe")),
     ("r2", _step("mine", "deepslate_coal_ore", "wooden_pickaxe")),
     ("stick2", _step("craft", "stick")),
+    ("planks2", _step("craft", "oak_planks")),
 ])
 def test_the_trigger_fires_once_before_the_step_it_changes(tmp_path, change, step):
     trigger, switched = _trigger(tmp_path, change)
@@ -58,7 +59,7 @@ def test_the_trigger_fires_once_before_the_step_it_changes(tmp_path, change, ste
     (line,) = [json.loads(text) for text in (tmp_path / "changes.jsonl").read_text().splitlines()]
     assert set(line) == {"t", "change", "action", "subject", "goal"}
     assert (line["change"], line["goal"]) == (change, "g012")
-    assert (line["action"], line["subject"]) == (("mine", "coal_ore") if change == "r2" else ("craft", "stick"))
+    assert (line["action"], line["subject"]) == {"r2": ("mine", "coal_ore"), "stick2": ("craft", "stick"), "planks2": ("craft", "#planks")}[change]
     assert [kind for kind, _ in events] == ["world_change"]
 
 
@@ -68,6 +69,7 @@ def test_the_trigger_fires_once_before_the_step_it_changes(tmp_path, change, ste
     ("r2", _step("mine", "iron_ore", "wooden_pickaxe")),
     ("stick2", _step("craft", "stick", status="hypothesis")),
     ("stick2", _step("craft", "torch")),
+    ("planks2", _step("craft", "#planks", status="hypothesis")),
 ])
 def test_the_trigger_ignores_steps_the_change_does_not_touch(tmp_path, change, step):
     trigger, switched = _trigger(tmp_path, change)
@@ -183,7 +185,7 @@ def test_the_change_comes_from_the_environment_when_the_flag_is_absent(tmp_path,
 
 def test_the_datapacks_exist_for_1_21_1():
     packs = ROOT / "mc" / "datapacks"
-    for name in ("v2_coal_tool", "v2_stick2"):
+    for name in ("v2_coal_tool", "v2_stick2", "v2_planks2"):
         assert json.loads((packs / name / "pack.mcmeta").read_text())["pack"]["pack_format"] == 48
 
     for ore in ("coal_ore", "deepslate_coal_ore"):
@@ -199,7 +201,7 @@ def test_the_datapacks_exist_for_1_21_1():
 # -- a whole simulated life per change ------------------------------------------------
 
 
-@pytest.mark.parametrize("change, goals", [("r2", 25), ("stick2", 25)])
+@pytest.mark.parametrize("change, goals", [("r2", 25), ("stick2", 25), ("planks2", 25)])
 def test_a_simulated_life_passes_all_five_criteria(tmp_path, capsys, change, goals):
     world = NaturalWorld(seed=2)
     trigger = ChangeTrigger(change, tmp_path, lambda name: world.set_world_rules((name,)))
@@ -208,8 +210,9 @@ def test_a_simulated_life_passes_all_five_criteria(tmp_path, capsys, change, goa
 
     capsys.readouterr()  # the life's own trace
     assert change_report.main([str(tmp_path)]) == 0
-    verdicts = [line.split()[0] for line in capsys.readouterr().out.splitlines()[1:]]
-    assert verdicts == ["PASS"] * 5
+    lines = capsys.readouterr().out.splitlines()
+    assert [line.split()[0] for line in lines[1:6]] == ["PASS"] * 5
+    assert lines[6] == "changes: 1/1 PASS"
 
 
 def test_the_report_fails_without_a_change(tmp_path, capsys):

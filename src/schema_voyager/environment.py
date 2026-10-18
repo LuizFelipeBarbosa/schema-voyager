@@ -326,6 +326,7 @@ class NaturalWorld:
     def set_world_rules(self, rules: Iterable[str]) -> None:
         self.r2 = "r2" in rules
         self.stick2 = "stick2" in rules
+        self.planks2 = "planks2" in rules
 
     def say(self, message: str) -> None:
         pass
@@ -462,7 +463,7 @@ class NaturalWorld:
         gains: Counter[str] = Counter()
         if key == "#planks":  # planks take the species of the log consumed
             for log, count in payment.items():
-                gains[f"{normalize.species(log)}_planks"] += output * count
+                gains[f"{normalize.species(log)}_planks"] += self._output_count(key, output) * count
             item = max(gains, key=lambda planks: gains[planks])
         else:
             gains[item] = self._output_count(key, output) * action.times
@@ -615,7 +616,9 @@ class NaturalWorld:
         )
 
     def _output_count(self, item: str, count: int) -> int:
-        return 2 if item == "stick" and self.stick2 else count
+        if (item == "stick" and self.stick2) or (item == "#planks" and self.planks2):
+            return 2
+        return count
 
     # --- mining helpers ------------------------------------------------------
 

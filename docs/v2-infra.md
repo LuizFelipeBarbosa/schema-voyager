@@ -63,12 +63,17 @@ scripts/v2-demo.sh --rehearse N             # N fresh lives in the foreground, t
 
 `start` refuses the live demo's ports, requires this instance's ports to be free or its own,
 takes the lock (purpose `demo`), runs `world-restore.sh fresh`, `v2-up.sh` and
-`v2-change.sh install`, then starts the life (`--llm live --change ${SV2_DEMO_CHANGE:-r2}
+`v2-change.sh install`, then starts the life (`--llm live --change ${SV2_DEMO_CHANGE:-scramble}
 --keep-going --minutes ${SV2_DEMO_MINUTES:-30}`, run `demo-<yyyymmdd-hhmm>`, log
 `logs/life-<run>.log`, pid `run/life-<inst>.pid`) with the same `SV2_LOCK_SESSION`. It waits up
 to 20 s until the lock shows the life's pid, starts the panel in screen `sv2-panel` on 8766
 (reused if it already answers), prints the panel and viewer URLs, the log and the stop command,
 and the seconds elapsed (target under 60 from a stopped instance). `SV2_SEED` defaults to 1001.
+`SV2_DEMO_CHANGE` is a comma list of rule changes (`stick2`, `planks2`, `r2`) or `scramble`
+(= `stick2,planks2,r2`): the life switches them on one at a time, mid-life, each only after the
+previous one has been revised or 120 s have passed. `v2-change.sh install` copies every
+`mc/datapacks/v2_*` pack (including `v2_planks2`), and `v2-change.sh enable|disable
+r2|stick2|planks2` switches one by hand. `change_report` prints one block per change fired.
 Instance b: set the four port variables and `SV2_INSTANCE=b` on the command line.
 
 ## Scouting report

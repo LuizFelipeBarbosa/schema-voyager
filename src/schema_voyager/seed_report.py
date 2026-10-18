@@ -29,7 +29,7 @@ COLUMNS = (
     ("seed", "seed"), ("biome", "spawn biome"), ("wood", "wood species"), ("highest", "highest goal"),
     ("certified", "rules certified"), ("contradictions", "contradictions"),
     ("false_contradictions", "false contradictions"), ("quarantined", "quarantined"),
-    ("stuck", "stuck causes"), ("llm_calls", "LLM calls"), ("tokens", "tokens"), ("spend_usd", "spend USD"),
+    ("changes", "changes fired"), ("stuck", "stuck causes"), ("llm_calls", "LLM calls"), ("tokens", "tokens"), ("spend_usd", "spend USD"),
 )
 
 
@@ -121,8 +121,13 @@ def run_row(run_dir: Path) -> dict[str, Any]:
         "llm_calls": sum(goal.get("llm_calls", 0) for goal in goals),
         "tokens": sum(goal.get("tokens", 0) for goal in goals),
         "spend_usd": goals[-1]["spend_usd"] if goals else 0.0,
+        "changes": ",".join(change["change"] for change in changes) or "-",
         "has_changes": bool(changes),
-        "change_caught": bool(matching),
+        "change_caught": bool(changes) and all(
+            any(_rule_key(c["rule"], rules_by_id) == _subject_key(change["action"], change["subject"]) and change["t"] <= c["t"]
+                for c in contradictions)
+            for change in changes
+        ),
     }
 
 

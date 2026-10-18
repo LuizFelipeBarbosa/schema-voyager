@@ -6,7 +6,7 @@
 #   v2-demo.sh [start] [--run <name>]   restore seed 1001 snapshot fresh, start the life + panel
 #   v2-demo.sh stop [--all] [--panel]   stop the life (SIGINT, so it saves); --all: v2-down.sh too
 #   v2-demo.sh --rehearse N             N fresh lives back to back, in the foreground
-# Environment: SV2_DEMO_MINUTES (default 30), SV2_DEMO_CHANGE (default r2).
+# Environment: SV2_DEMO_MINUTES (default 30), SV2_DEMO_CHANGE (default scramble: stick2,planks2,r2).
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/v2-env.sh"
 sv2_check_settings
@@ -19,7 +19,7 @@ PANEL_SCREEN="sv2-panel"
 PANEL_PORT=8766
 PANEL_PAGE="http://127.0.0.1:$PANEL_PORT/site/dist/trace.html"
 MINUTES="${SV2_DEMO_MINUTES:-30}"
-CHANGE="${SV2_DEMO_CHANGE:-r2}"
+CHANGE="${SV2_DEMO_CHANGE:-scramble}"
 
 usage() { die "usage: v2-demo.sh [start] [--run <name>] | stop [--all] [--panel] | --rehearse N"; }
 

@@ -50,13 +50,17 @@ class LifeConfig:
 class LifeHooks:
     before_step: Callable[[Episode, PlanStep, list[PlanStep]], None] | None = None
     after_goal: Callable[[dict[str, Any]], None] | None = None
+    # Called once, with the life's schema store (loaded, on resume), before the first goal.
+    bind_store: Callable[[SchemaStore], None] | None = None
 
 
 # -- the M3 trigger -----------------------------------------------------------
 
 # Each rule change, with the planned step it first bites: (action kind, subject) in a plan step.
-CHANGE_STEPS = {"r2": ("mine", "coal_ore"), "stick2": ("craft", "stick")}
-CHANGE_PACKS = {"r2": "file/v2_coal_tool", "stick2": "file/v2_stick2"}
+CHANGE_STEPS = {"r2": ("mine", "coal_ore"), "stick2": ("craft", "stick"), "planks2": ("craft", "#planks")}
+CHANGE_PACKS = {"r2": "file/v2_coal_tool", "stick2": "file/v2_stick2", "planks2": "file/v2_planks2"}
+SCRAMBLE = ("stick2", "planks2", "r2")
+CHANGE_OPEN_S = 120.0  # a fired change blocks the next one for at most this long
 DEMO_RCON_PORT = 25575
 PACK_POLL_TIMEOUT_S = 10.0
 
@@ -113,47 +117,83 @@ def _listed(pack: str, reply: str) -> bool:
     return f"[{pack} (" in reply or f"[{pack}]" in reply
 
 
+def parse_changes(text: str) -> list[str]:
+    """"stick2,r2" -> ["stick2", "r2"]; "scramble" -> every change, in priority order."""
+    names = [name.strip() for name in text.split(",") if name.strip()]
+    names = [change for name in names for change in (SCRAMBLE if name == "scramble" else (name,))]
+    unknown = [name for name in names if name not in CHANGE_STEPS]
+    if unknown or not names:
+        raise ValueError(f"unknown change {', '.join(unknown) or repr(text)}; use scramble or a list of {', '.join(CHANGE_STEPS)}")
+    return list(dict.fromkeys(names))
+
+
 class ChangeTrigger:
-    """A `LifeHooks.before_step` that switches one rule change on right before the first
-    planned step it changes, once per life, and logs it to changes.jsonl. The agent is not told.
+    """A `LifeHooks.before_step` that switches rule changes on, each right before the first
+    planned step it changes, once per life, and logs each to changes.jsonl. The agent is not told.
 
     r2: mining coal ore with a wooden pickaxe, by a rule that already has a confirmation.
-    stick2: crafting sticks, by a certified rule."""
+    stick2, planks2: crafting sticks / planks, by a certified rule.
 
-    def __init__(self, change: str, run_dir: Path, switch_on: Callable[[str], None], resume: bool = False):
-        self.change, self.switch_on = change, switch_on
+    `changes` is in priority order. A change may fire only while no earlier-fired change is
+    open: open from firing until a revised rule for its (action, subject) is certified, or
+    CHANGE_OPEN_S have passed. At most one change fires per step. It reads the certified
+    revisions from the store `bind_store` gives it."""
+
+    def __init__(self, changes: str | list[str], run_dir: Path, switch_on: Callable[[str], None], resume: bool = False):
+        self.changes = parse_changes(changes) if isinstance(changes, str) else list(changes)
+        self.switch_on = switch_on
         self.log_path = run_dir / "changes.jsonl"
+        self.store: SchemaStore | None = None
         if not resume:
             self.log_path.unlink(missing_ok=True)
-        self.fired = self._logged()
+        self.logged = self._read_log()
+
+    @property
+    def fired(self) -> list[str]:
+        return [line["change"] for line in self.logged]
+
+    def bind_store(self, store: SchemaStore) -> None:
+        self.store = store
 
     def __call__(self, episode: Episode, step: PlanStep, plan: list[PlanStep]) -> None:
-        if self.fired or not self._bites(step):
+        change = next((c for c in self.changes if c not in self.fired and self._bites(c, step)), None)
+        if change is None or self._open_change() is not None:
             return
-        self.fired = True
-        self.switch_on(self.change)
-        kind, subject = CHANGE_STEPS[self.change]
-        line = {"t": time.time(), "change": self.change, "action": kind, "subject": subject, "goal": episode.task.task_id}
+        self.switch_on(change)
+        kind, subject = CHANGE_STEPS[change]
+        line = {"t": time.time(), "change": change, "action": kind, "subject": subject, "goal": episode.task.task_id}
+        self.logged.append(line)
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
         with self.log_path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(line) + "\n")
         episode.log.event("world_change", **{k: v for k, v in line.items() if k != "t"})
 
-    def _bites(self, step: PlanStep) -> bool:
-        kind, subject = CHANGE_STEPS[self.change]
+    def _bites(self, change: str, step: PlanStep) -> bool:
+        kind, subject = CHANGE_STEPS[change]
         action = step.action
         if action.kind != kind or normalize.family(action.target or "") != subject:
             return False
-        if self.change == "r2":
+        if change == "r2":
             # A contradiction opens an epoch only for a rule with confirmations (certify() keeps them in evidence).
             return action.tool == "wooden_pickaxe" and bool(step.rule.evidence.get("confirmed"))
         return step.rule.status == "certified"
 
-    def _logged(self) -> bool:
+    def _open_change(self) -> str | None:
+        """The first fired change that is still open, if any."""
+        for line in self.logged:
+            revised = self.store is not None and any(
+                rule.source == "revision" and rule.status == "certified" and rule.epoch >= 1
+                and (rule.kind, rule.subject) == (line["action"], line["subject"])
+                for rule in self.store.rules.values()
+            )
+            if not revised and time.time() - line["t"] < CHANGE_OPEN_S:
+                return line["change"]
+        return None
+
+    def _read_log(self) -> list[dict[str, Any]]:
         if not self.log_path.exists():
-            return False
-        lines = self.log_path.read_text(encoding="utf-8").splitlines()
-        return any(json.loads(line)["change"] == self.change for line in lines if line.strip())
+            return []
+        return [json.loads(line) for line in self.log_path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
 def run_life(
@@ -202,6 +242,8 @@ class _Life:
         self._calls_marked = len(llm.calls)
         self._certified_marked = self._certified_ids()
         self._repairs_unreported: list[dict[str, Any]] = []  # shown in the next goal's trace and record
+        if hooks.bind_store is not None:
+            hooks.bind_store(self.store)
 
     # -- the loop ---------------------------------------------------------
 

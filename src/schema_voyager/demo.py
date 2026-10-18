@@ -34,7 +34,7 @@ from .episode import Episode
 from .evaluator import summarize
 from .layouts import load_layout
 from .life import (
-    CHANGE_STEPS, ChangeTrigger, LifeConfig, LifeHooks, check_pack_ready, rcon_factory, rcon_switch, run_life,
+    ChangeTrigger, LifeConfig, LifeHooks, check_pack_ready, parse_changes, rcon_factory, rcon_switch, run_life,
 )
 from .llm import LLM, LLMError, fixture_prior_rules
 from .models import EpisodeResult, Task
@@ -256,17 +256,20 @@ def run_life_command(args: argparse.Namespace) -> None:
 
 
 def _run_life(args: argparse.Namespace) -> None:
-    change = args.change or os.environ.get("SV2_M3_CHANGE") or None
-    if change is not None and change not in CHANGE_STEPS:
-        sys.exit(f"unknown change {change!r}; use one of {', '.join(CHANGE_STEPS)}.")
+    requested = args.change or os.environ.get("SV2_M3_CHANGE") or ""
+    try:
+        changes = parse_changes(requested) if requested else []
+    except ValueError as error:
+        sys.exit(str(error))
     if args.backend == "mc":
         bot_port, rcon_port = check_instance_ports()
         from .mineflayer_backend import MineflayerBackend
 
-        if change is not None:
+        if changes:
             connect = rcon_factory(rcon_port)
             try:
-                check_pack_ready(change, connect)
+                for change in changes:
+                    check_pack_ready(change, connect)
             except ValueError as error:
                 sys.exit(str(error))
             switch_on = rcon_switch(connect)
@@ -277,7 +280,7 @@ def _run_life(args: argparse.Namespace) -> None:
 
         backend = NaturalWorld(seed=args.sim_seed)
         seed = args.seed or f"sim{args.sim_seed}"
-        switch_on = lambda name: backend.set_world_rules((name,))
+        switch_on = lambda name: backend.set_world_rules((*trigger.fired, name))
 
     if args.resume and not args.run_dir:
         sys.exit("--resume needs --run-dir: the life to continue.")
@@ -289,7 +292,10 @@ def _run_life(args: argparse.Namespace) -> None:
         wall_clock_s=args.minutes * 60, spend_cap_usd=args.cap_usd, keep_going=getattr(args, "keep_going", False),
     )
     print(f"SchemaVoyager life: backend={args.backend} llm={args.llm} model={llm.model} run_dir={run_dir}")
-    hooks = LifeHooks(before_step=ChangeTrigger(change, run_dir, switch_on, args.resume)) if change else None
+    hooks = None
+    if changes:
+        trigger = ChangeTrigger(changes, run_dir, switch_on, args.resume)
+        hooks = LifeHooks(before_step=trigger, bind_store=trigger.bind_store)
     summary = run_life(backend, llm, config, hooks, resume=args.resume)
     _banner(f"Life over: {summary['stop_reason']}")
     print(json.dumps(summary, indent=2))
@@ -415,7 +421,7 @@ def main(argv: list[str] | None = None) -> None:
     life.add_argument("--minutes", type=float, default=30, help="wall-clock limit of this session")
     life.add_argument("--cap-usd", type=float, default=10, help="LLM spend cap")
     life.add_argument("--seed", help="the running world's level seed, for the world id")
-    life.add_argument("--change", choices=list(CHANGE_STEPS), help="rule change to switch on mid-life (M3); default $SV2_M3_CHANGE")
+    life.add_argument("--change", help="rule changes to switch on mid-life (M3), comma-separated in priority order: stick2, planks2, r2, or scramble for all; default $SV2_M3_CHANGE")
     life.add_argument("--sim-seed", type=int, default=1, help="seed of the simulated natural world")
 
     arena = sub.add_parser("arena", help="build a layout on the server and set its world rules")
