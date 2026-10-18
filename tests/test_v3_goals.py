@@ -12,7 +12,7 @@ from schema_voyager.models import GoalSpec
 STATUSES = ["submitted", "queued", "running", "done", "failed", "cancelled", "unsupported", "awaiting_approval"]
 
 ALLOWED = {
-    "submitted": {"queued", "unsupported", "cancelled"},
+    "submitted": {"queued", "awaiting_approval", "unsupported", "cancelled"},
     "queued": {"running", "cancelled", "awaiting_approval"},
     "awaiting_approval": {"queued", "cancelled"},
     "running": {"done", "failed", "cancelled", "queued"},

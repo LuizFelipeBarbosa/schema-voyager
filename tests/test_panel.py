@@ -277,7 +277,7 @@ def _hut_goal(root, run="new", status="awaiting_approval", blueprint_=FAKE_HUT):
     goal_id = queue.submit("small hut", "user")
     spec = GoalSpec(id=goal_id, kind="build", source="user", text="small hut", blueprint=blueprint_)
     assert queue.accept(spec)
-    if status != "queued":
+    if queue.get(goal_id).status != status:
         assert queue.mark(goal_id, status)
     return queue, goal_id
 

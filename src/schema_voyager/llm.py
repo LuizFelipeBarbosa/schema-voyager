@@ -176,7 +176,7 @@ ITEMS_SCHEMA = {
 FAKE_EXPANSION_SIZE = 3
 
 # v3.1e: parsing what the user typed.
-SUPPORTED_GOAL_KINDS: frozenset[GoalKind] = frozenset({"obtain"})  # M3 adds kill and guard, M4 build
+SUPPORTED_GOAL_KINDS: frozenset[GoalKind] = frozenset({"obtain", "build"})  # M3 adds kill and guard
 MAX_GOAL_COUNT = 256
 
 PARSE_GOAL_SYSTEM = """You turn a request typed to a Minecraft Java Edition 1.21.1 bot into one goal.
@@ -266,7 +266,6 @@ class BlueprintDesignError(Exception):
 _TRY_FETCH = 'I can fetch items: try "get me 10 torches".'
 _DEFAULT_UNSUPPORTED_REPLY = 'I can only fetch items for now: try "get me 10 torches".'
 _UNSUPPORTED_KIND_REPLIES = {
-    "build": f"I can't build yet. {_TRY_FETCH}",
     "kill": f"I can't hunt yet. {_TRY_FETCH}",
     "guard": f"I can't guard anyone yet. {_TRY_FETCH}",
 }
@@ -495,7 +494,7 @@ class LLM:
 
     def parse_goal(self, text: str, inventory: dict[str, int], known_items: frozenset[str], *,
                    goal_id: str) -> GoalSpec | Unsupported:
-        """Turn typed text into an obtain goal, or say why the bot can't do it. `known_items` is
+        """Turn typed text into an obtain or build goal, or say why the bot can't do it. `known_items` is
         what an obtain item may be (besides the groups); LLMError from the call propagates."""
         if self.mode == "fake":
             self._meter_fake("parse_goal", text)
@@ -505,6 +504,12 @@ class LLM:
             user = f"Request: {text}\nInventory: {json.dumps(inventory, sort_keys=True)}"
             payload = self._json_call("parse_goal", PARSE_GOAL_SYSTEM, user, PARSE_GOAL_SCHEMA)
             kind, item, count, reply = payload["kind"], payload["item"], payload["count"], payload["reply"]
+        if kind == "build":
+            try:
+                blueprint = self.design_blueprint(text)
+            except BlueprintDesignError:
+                return Unsupported("I couldn't design that. Try \"build a small wooden house with a door\".")
+            return GoalSpec(id=goal_id, kind="build", source="user", text=text, blueprint=blueprint)
         return _checked_goal(goal_id, text, kind, item, count, reply, known_items)
 
     def design_blueprint(self, text: str, limits: BlueprintLimits = BlueprintLimits()) -> dict[str, Any]:
