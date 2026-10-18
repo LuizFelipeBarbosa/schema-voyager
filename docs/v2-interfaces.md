@@ -569,3 +569,37 @@ JSON line `{"pid", "session", "purpose", "started"}`.
 - Python (`src/schema_voyager/instance_lock.py`): `hold(instance, purpose)`, a
   context manager with the same file format and rules, used by
   `life --backend mc` for the whole life.
+
+## v2.4: several rule changes per life (lane `scramble`)
+
+The user (2026-10-17, evening) asked to scramble more rules than coal. A life
+can switch on a list of changes, one at a time, each hidden from the agent.
+
+| change | pack | what changes | bites (the planned step it first changes) |
+|---|---|---|---|
+| `stick2` | `file/v2_stick2` | 2 planks craft 2 sticks (vanilla 4) | `craft stick`, by a certified rule |
+| `planks2` | `file/v2_planks2` | a log of any species crafts 2 planks (vanilla 4) | `craft #planks`, by a certified rule |
+| `r2` | `file/v2_coal_tool` | coal ore (and deepslate) drops coal only with a stone-tier or better pickaxe | `mine coal_ore` with `wooden_pickaxe`, by a rule with a confirmation |
+
+- **Packs:** `mc/datapacks/v2_*` (pack_format 48, 1.21.1 layout `data/minecraft/recipe/`,
+  `data/minecraft/loot_table/blocks/`). `v2_planks2` overrides every vanilla
+  `*_planks` recipe that yields 4 (one file per species, same ingredients,
+  result count 2). `scripts/v2-change.sh install` installs all, disabled.
+- **CLI:** `life --change <list>`: a comma-separated list, in priority order
+  (`--change stick2,planks2,r2`); `--change scramble` is the alias for
+  `stick2,planks2,r2`; a single name keeps working. `SV2_M3_CHANGE` takes the
+  same values. Every listed pack must be installed and disabled at start
+  (`check_pack_ready` per pack).
+- **Schedule:** a change may fire only while no earlier-fired change is
+  *open*. A change is open from the moment it fires until a revised rule for
+  its (action, subject) is certified in the new epoch, or 120 s have passed.
+  Among armed changes, the planned step that bites one fires it (list order
+  breaks ties); at most one change fires per step. Each fired change writes
+  one `changes.jsonl` line (same format as today) and one `world_change`
+  event. Resume keeps which changes fired.
+- **Simulator:** `environment.py` implements `planks2` like `stick2` and `r2`,
+  so `life --backend sim --llm fake --change scramble` exercises all three.
+- **`change_report`:** one block per `changes.jsonl` line, the same 5 checks
+  each, scoped to that change's rule (the revision call and the epoch of its
+  own (action, subject)), then `changes: <passed>/<fired> PASS`; exit 1 if any
+  check fails or nothing fired. `seed_report` lists every fired change.
