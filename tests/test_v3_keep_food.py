@@ -74,7 +74,7 @@ def test_a_food_goal_keeps_the_raw_item_until_the_goal_ends(tmp_path, ending):
     run_goal(life_, "cooked_beef", runner)
 
     keep_calls = [c for c in world.calls if c[0] == "keep_food"]
-    assert keep_calls == [("keep_food", ["beef"]), ("keep_food", [])]
+    assert keep_calls == [("keep_food", ["beef", "cooked_beef"]), ("keep_food", [])]
     if ending != "interrupted":
         assert world.calls.index(keep_calls[0]) < world.calls.index(("act", "mine"))
     assert world.calls[-1] == ("keep_food", [])
@@ -89,7 +89,7 @@ def test_every_usable_smelt_rule_for_the_food_adds_its_ingredient_but_not_the_fu
 
     run_goal(life_, "cooked_beef", acting(world, True))
 
-    assert world.calls[0] == ("keep_food", ["beef", "mutton"])
+    assert world.calls[0] == ("keep_food", ["beef", "cooked_beef", "mutton"])
 
 
 def test_a_goal_for_a_non_food_item_calls_nothing(tmp_path):
@@ -102,13 +102,13 @@ def test_a_goal_for_a_non_food_item_calls_nothing(tmp_path):
     assert [c for c in world.calls if c[0] == "keep_food"] == []
 
 
-def test_a_food_with_no_smelt_rule_calls_nothing(tmp_path):
+def test_a_food_with_no_smelt_rule_keeps_just_itself(tmp_path):
     world = RecordingWorld()
     life_ = make_life(tmp_path, world)
 
     run_goal(life_, "bread", acting(world, True))
 
-    assert [c for c in world.calls if c[0] == "keep_food"] == []
+    assert [c for c in world.calls if c[0] == "keep_food"] == [("keep_food", ["bread"]), ("keep_food", [])]
 
 
 def test_with_the_bot_gone_the_clear_is_skipped(tmp_path):
@@ -122,7 +122,7 @@ def test_with_the_bot_gone_the_clear_is_skipped(tmp_path):
 
     run_goal(life_, "cooked_beef", runner)
 
-    assert [c for c in world.calls if c[0] == "keep_food"] == [("keep_food", ["beef"])]
+    assert [c for c in world.calls if c[0] == "keep_food"] == [("keep_food", ["beef", "cooked_beef"])]
 
 
 def test_a_failed_clear_is_only_printed(tmp_path, capsys):
