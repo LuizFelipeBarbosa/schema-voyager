@@ -34,8 +34,9 @@ MAX_PREDICTS_CHARS = 120
 
 BeforeStep = Callable[[Episode, PlanStep, list[PlanStep]], None]
 
-# Search and travel failures are handled by Episode.act and the life's exploration round, never by blocking.
-_NEVER_BLOCKED_ERRORS = frozenset({"not_found", "unreachable", "hazard", "timeout", "not_connected"})
+# Search and travel failures are handled by Episode.act and the life's exploration round, never by blocking,
+# and a fight (interrupted, v3.2) says nothing about the rule.
+_NEVER_BLOCKED_ERRORS = frozenset({"not_found", "unreachable", "hazard", "timeout", "not_connected", "interrupted"})
 
 
 def run_schemavoyager(

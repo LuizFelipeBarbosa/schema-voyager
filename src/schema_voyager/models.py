@@ -7,6 +7,10 @@ from typing import Any, Literal
 ActionKind = Literal["mine", "craft", "explore", "smelt"]
 RuleStatus = Literal["hypothesis", "certified", "demoted"]
 RuleCheck = Literal["exact", "stochastic"]
+# v3 goals (docs/v3-interfaces.md, v3.1)
+GoalKind = Literal["obtain", "build", "kill", "guard"]
+GoalSource = Literal["user", "curriculum", "system"]  # system: hunger, later threats
+GoalStatus = Literal["submitted", "queued", "running", "done", "failed", "cancelled", "unsupported", "awaiting_approval"]
 
 
 @dataclass(frozen=True)
@@ -53,6 +57,8 @@ class Observation:
     nearby: dict[str, int]  # block type -> count within the 16-block view
     blocks_walked: float = 0.0
     free_slots: int | None = None  # v3: empty main and hotbar slots (0-36); None when not reported
+    # v3.2: entity type -> {"count": int, "nearest": float, "kind": str} within 16 blocks
+    entities: dict[str, dict] = field(default_factory=dict)
 
 
 @dataclass
@@ -97,6 +103,27 @@ class Task:
     world_rules: tuple[str, ...]  # changed rules switched on, e.g. ("r2",)
     budget: int  # adapter actions
     description: str
+
+
+@dataclass(frozen=True)
+class GoalSpec:
+    """A goal of any source (v3.1): typed by the user, picked by the curriculum, or queued by the life itself."""
+
+    id: str  # "u003" user, "s001" system, "g012" curriculum (the life's goal name)
+    kind: GoalKind
+    source: GoalSource
+    text: str = ""  # what the user typed; a short label for system goals ("hunger: 4 bread")
+    item: str | None = None  # obtain: normalized name (normalize.family), such as "#planks" or "torch"
+    count: int = 1  # obtain: how many more than held (D5); kill: how many
+    target: str | None = None  # kill: mob type; guard: player name
+    blueprint: dict | None = None  # build (M4)
+
+
+@dataclass(frozen=True)
+class Unsupported:
+    """parse_goal's answer for a goal the bot can't do (yet)."""
+
+    reply: str  # what the bot says back, at most 240 characters, no "#"
 
 
 @dataclass
