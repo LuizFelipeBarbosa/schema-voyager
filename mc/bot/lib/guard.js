@@ -84,9 +84,10 @@ function bestWeapon (items) {
 }
 
 // Equips the weapon (or the bare hand) and a shield; equip errors never end the fight.
-async function equipForFight (bot) {
+// `preferred`: an item name that wins over bestWeapon when the bot holds it.
+async function equipForFight (bot, preferred = null) {
   const items = bot.inventory.items()
-  const weapon = bestWeapon(items)
+  const weapon = items.find((item) => item.name === preferred) ?? bestWeapon(items)
   try {
     if (weapon) await bot.equip(weapon, 'hand')
     else await bot.unequip('hand')
@@ -148,14 +149,16 @@ function watchFight (bot, target, { timeoutMs, shouldStop, outOfReachMs }) {
 }
 
 // Fights `target` until an outcome. Resolves {outcome, damage_taken, duration_s, out_of_reach}; never rejects.
-// After a `fled`, or a `lost` because the target stayed out of reach, it flees from the target.
-async function fight (bot, target, { pvp = bot.pvp, timeoutMs = 30000, movements = null, eventLog = null, shouldStop = () => false, deadline = Infinity, outOfReachMs = OUT_OF_REACH_MS } = {}) {
+// After a `fled`, or a `lost` because the target stayed out of reach (unless `flee` is false), it flees from the target.
+// `sprint`: the fight paths with a copy of `movements` that may sprint; the copy is never set back.
+// `weapon`: the item name to prefer over the best sword or axe.
+async function fight (bot, target, { pvp = bot.pvp, timeoutMs = 30000, movements = null, eventLog = null, shouldStop = () => false, deadline = Infinity, outOfReachMs = OUT_OF_REACH_MS, flee: fleeAfterLost = true, sprint = false, weapon: preferredWeapon = null } = {}) {
   // `deadline` (ms since the epoch) bounds the whole call: the window wait, the fight and the flight after a `fled`.
   const startedAt = Date.now()
   const windowDeadline = Math.min(startedAt + WINDOW_WAIT_MS, deadline)
   while (bot.currentWindow && Date.now() < windowDeadline) await sleep(POLL_MS)
 
-  const weapon = await equipForFight(bot)
+  const weapon = await equipForFight(bot, preferredWeapon)
   eventLog?.record('fight_start', {
     target: target.name, id: target.id, distance: round(bot.entity.position.distanceTo(target.position), 1), weapon
   })
@@ -163,7 +166,7 @@ async function fight (bot, target, { pvp = bot.pvp, timeoutMs = 30000, movements
   const watch = watchFight(bot, target, { timeoutMs: Math.max(0, Math.min(timeoutMs, deadline - Date.now())), shouldStop, outOfReachMs })
   let outcome
   try {
-    if (movements) pvp.movements = movements
+    if (movements) pvp.movements = sprint ? sprintingCopy(movements) : movements
     pvp.attack(target)
     outcome = bot.health < LOW_HEALTH ? 'fled' : await watch.outcome
   } catch {
@@ -181,9 +184,15 @@ async function fight (bot, target, { pvp = bot.pvp, timeoutMs = 30000, movements
     duration_s: round((Date.now() - startedAt) / 1000, 1)
   }
   const outOfReach = outcome === 'lost' && watch.wasOutOfReach()
-  eventLog?.record('fight_end', { target: target.name, ...result })
-  if (outcome === 'fled' || outOfReach) await flee(bot, target, { minDistance: SCAN_BLOCKS, timeoutMs: Math.max(0, Math.min(10000, deadline - Date.now())), movements })
+  eventLog?.record('fight_end', { target: target.name, id: target.id, ...result })
+  if (outcome === 'fled' || (outOfReach && fleeAfterLost)) await flee(bot, target, { minDistance: SCAN_BLOCKS, timeoutMs: Math.max(0, Math.min(10000, deadline - Date.now())), movements })
   return { ...result, out_of_reach: outOfReach }
+}
+
+function sprintingCopy (movements) {
+  const copy = Object.assign(Object.create(Object.getPrototypeOf(movements)), movements)
+  copy.allowSprinting = true
+  return copy
 }
 
 // Moves away from `from` until it is minDistance away, the time is up or the bot dies.
@@ -226,6 +235,7 @@ function createGuard (bot, { eventLog, mode = process.env.BOT_GUARD || 'defend',
   const beatenIds = new Set() // targets whose fight ended timeout, fled or out of reach, until entityGone
   let responding = false
   let fighting = null
+  let quarryId = null // /attack's target: never a threat
 
   const onEntityHurt = (entity, source) => {
     if (!source || !entity || (entity !== bot.entity && entity.id !== bot.entity.id)) return
@@ -256,7 +266,7 @@ function createGuard (bot, { eventLog, mode = process.env.BOT_GUARD || 'defend',
     const list = []
     for (const ids of [deadIds, beatenIds]) for (const id of ids) if (!bot.entities[id]) ids.delete(id)
     for (const entity of Object.values(bot.entities)) {
-      if (entity === bot.entity || !entity.position || deadIds.has(entity.id)) continue
+      if (entity === bot.entity || !entity.position || deadIds.has(entity.id) || entity.id === quarryId) continue
       const distance = botPos.distanceTo(entity.position)
       if (distance > SCAN_BLOCKS) continue
       const kind = entity.type === 'player' ? 'player' : bot.registry.entitiesByName[entity.name]?.type
@@ -320,6 +330,7 @@ function createGuard (bot, { eventLog, mode = process.env.BOT_GUARD || 'defend',
       mode = next
     },
     status: () => ({ mode, fighting }),
+    setQuarry (id) { quarryId = id },
 
     // One look at bot.entities; null when there is nothing to do or a respond() is running.
     check () {

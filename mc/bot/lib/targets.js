@@ -110,9 +110,18 @@ function chooseTargets (bot, { blockNames, maxDistance, buried, skipped, unreach
   return { positions: ranked.map((entry) => entry.pos), hazard }
 }
 
+// Health is entity metadata index 9; a mob at 0 is dying and is no target. Entities that
+// have been removed (entityGone) have isValid false.
+const HEALTH_METADATA_INDEX = 9
+
+function isAlive (entity) {
+  return entity.isValid !== false && !(entity.metadata?.[HEALTH_METADATA_INDEX] <= 0)
+}
+
 // For each of the 8 sectors around the bot, the nearest block of each id in
-// `blockNames` within `radius` (default 64, at most 96), leaving out blocks inside a `protect` box.
-function look (bot, { blocks: blockNames, radius = LOOK_DEFAULT_RADIUS, protect = [] }) {
+// `blockNames` within `radius` (default 64, at most 96), leaving out blocks inside a `protect` box,
+// and the nearest living entity of each name in `mobNames` (from bot.entities, floored coordinates).
+function look (bot, { blocks: blockNames = [], mobs: mobNames = [], radius = LOOK_DEFAULT_RADIUS, protect = [] }) {
   const searchRadius = Math.min(LOOK_MAX_RADIUS, Math.max(1, radius))
   const origin = bot.entity.position
   const directions = Object.fromEntries(DIRECTIONS.map((name) => [name, {}]))
@@ -135,7 +144,20 @@ function look (bot, { blocks: blockNames, radius = LOOK_DEFAULT_RADIUS, protect 
       }
     }
   }
+  const entities = Object.values(bot.entities)
+    .filter((entity) => entity !== bot.entity && entity.position && isAlive(entity))
+    .map((entity) => ({ entity, distance: origin.distanceTo(entity.position) }))
+    .sort((a, b) => a.distance - b.distance)
+  for (const name of mobNames) {
+    for (const { entity, distance } of entities) {
+      if (entity.name !== name || distance > searchRadius) continue
+      const sector = directions[sectorOf(entity.position.x - origin.x, entity.position.z - origin.z)]
+      if (sector[name]) continue
+      const { x, y, z } = entity.position.floored()
+      sector[name] = { x, y, z, distance: round(distance, 1) }
+    }
+  }
   return { ok: true, position: { x: round(origin.x), y: round(origin.y), z: round(origin.z) }, radius: searchRadius, directions }
 }
 
-module.exports = { chooseTargets, createUnreachableMemory, hazardNear, look }
+module.exports = { chooseTargets, createUnreachableMemory, hazardNear, isAlive, look }
