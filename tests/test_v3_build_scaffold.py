@@ -100,33 +100,32 @@ def test_the_scaffold_the_build_placed_outside_the_house_is_cleared(scaffold_wor
 
     assert outcome.reason == "" and outcome.result.success
     assert builder.mismatches(HUT, plan.origin, _site_scan(world, plan)) == []
-    swept = world.failed_cells + world.pillar_cells[:2]
-    assert len(swept) == 5
+    swept = world.gathering_cells + world.failed_cells + world.pillar_cells[:2]
+    assert len(swept) == 8  # the pillar raised while gathering counts too (v3.0i)
     assert all(world.block_at(cell) == "air" for cell in swept)
     done = _events(episode, "build_done")[0]
-    assert done["scaffold_cleared"] == 5
+    assert done["scaffold_cleared"] == 8
     assert done["scaffold_left"] == 1  # the stone where dirt was recorded
     assert world.block_at(world.changed_cell) == "stone"
 
 
-def test_cells_inside_the_house_inside_protected_boxes_or_from_gathering_stay(scaffold_world, llm, store):
+def test_cells_inside_the_house_or_inside_protected_boxes_stay(scaffold_world, llm, store):
     world = scaffold_world
     plan, episode, outcome = _build(world, llm, store)
     assert outcome.result.success
     assert world.block_at(world.inside_cell) == world.inside_block
     assert world.block_at(world.protected_cell) == "dirt"
-    assert all(world.block_at(cell) == "cobblestone" for cell in world.gathering_cells)
     cleared = {event["action_obj"]["pos"] and tuple(event["action_obj"]["pos"])
                for event in _steps_of(episode, "clear")}
-    assert not cleared & ({world.inside_cell, world.protected_cell} | set(world.gathering_cells))
+    assert not cleared & ({world.inside_cell, world.protected_cell})
 
 
 def test_the_clear_actions_carry_scaffold_false_highest_first_after_the_build(scaffold_world, llm, store):
     world = scaffold_world
     plan, episode, outcome = _build(world, llm, store)
-    swept = set(world.failed_cells + world.pillar_cells[:2])
+    swept = set(world.gathering_cells + world.failed_cells + world.pillar_cells[:2])
     clears = [event for event in _steps_of(episode, "clear") if tuple(event["action_obj"]["pos"]) in swept]
-    assert len(clears) == 5
+    assert len(clears) == 8
     assert all(event["action_obj"]["scaffold"] is False for event in clears)
     heights = [event["action_obj"]["pos"][1] for event in clears]
     assert heights == sorted(heights, reverse=True)
@@ -171,7 +170,7 @@ def test_a_failed_scan_or_clear_leaves_the_cell_and_goes_on(scaffold_world, llm,
     plan, episode, outcome = _build(world, llm, store, check=flaky)
     assert outcome.result.success
     done = _events(episode, "build_done")[0]
-    assert done["scaffold_cleared"] == 3 and done["scaffold_left"] == 3  # 2 failed + the changed one
+    assert done["scaffold_cleared"] == 6 and done["scaffold_left"] == 3  # 2 failed + the changed one
 
 
 # --- the ring around the site (a net for pillars the bot did not report) --------------------------
@@ -197,7 +196,7 @@ class RingWorld(NaturalWorld):
     def act(self, action):
         if action.kind == "mine" and not self.mined and self.plan:
             self.mined = True
-            self.gathering = self.cells(-3, 0)
+            self.gathering = self.cells(4, -3)
             self.set(self.gathering, "dirt")
         if action.kind == "place" and not self.placed and self.plan:
             self.placed = True
@@ -260,27 +259,27 @@ def test_a_pillar_the_bot_did_not_report_is_cleared_through_the_ring(llm, store)
     assert outcome.result.success and len(ring_scans) == 2
     assert all(world.block_at(cell) == "air" for cell in world.pillar)
     done = _events(episode, "build_done")[0]
-    assert done["scaffold_from"] == {"walks": 0, "ring": 3}
-    assert (done["scaffold_cleared"], done["scaffold_left"]) == (3, 0)
+    assert all(world.block_at(cell) == "air" for cell in world.gathering)  # raised while gathering
+    assert done["scaffold_from"] == {"walks": 0, "ring": 6}
+    assert (done["scaffold_cleared"], done["scaffold_left"]) == (6, 0)
 
 
 def test_a_pillar_both_reported_and_in_the_ring_is_cleared_once(llm, store):
     world = RingWorld(7, reported=True)
     episode, outcome, _ = _ring_build(world, llm, store)
     assert outcome.result.success
-    assert sorted(_clears(episode)) == sorted(world.pillar)
+    assert sorted(_clears(episode)) == sorted(world.pillar + world.gathering)
     done = _events(episode, "build_done")[0]
-    assert done["scaffold_from"] == {"walks": 3, "ring": 3}
-    assert (done["scaffold_cleared"], done["scaffold_left"]) == (3, 0)
+    assert done["scaffold_from"] == {"walks": 3, "ring": 6}  # the gathering pillar is the ring's alone
+    assert (done["scaffold_cleared"], done["scaffold_left"]) == (6, 0)
 
 
-def test_the_ring_never_clears_natural_ground_other_blocks_protected_or_site_cells_or_gathering_scaffold(llm, store):
+def test_the_ring_never_clears_natural_ground_other_blocks_protected_or_site_cells(llm, store):
     world = RingWorld(7, reported=False)
     episode, outcome, _ = _ring_build(world, llm, store)
     assert outcome.result.success
     kept = [(world.not_scaffold[0], "oak_log"), (world.not_scaffold[1], "torch"),
             (world.protected_pillar[0], "dirt"), (world.inside_cell, "dirt")]
-    kept += [(cell, "dirt") for cell in world.gathering]
     assert all(world.block_at(cell) == block for cell, block in kept)
     assert not set(_clears(episode)) & {cell for cell, _ in kept}
     ground = world.pillar[0][0], world.pillar[0][1] - 1, world.pillar[0][2]
@@ -343,3 +342,4 @@ def test_merge_travel_concatenates_placed_cells_in_order():
     merged = _merge_travel([first, second, older])
     assert merged["placed_cells"] == [[1, 2, 3, "dirt"], [4, 5, 6, "dirt"]]
     assert merged["placed"] == {"dirt": 2} and merged["distance"] == 3.5
+

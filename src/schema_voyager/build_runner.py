@@ -103,11 +103,12 @@ def prepare_build(
 
 def run_build(
     episode: Episode, store: SchemaStore, plan: BuildPlan, *, before_step: BeforeStep,
-    check_interrupts: Callable[[], None], excluded: frozenset[str],
+    check_interrupts: Callable[[], None], excluded: frozenset[str], ring_scans: dict[str, tuple[Box, dict]] | None = None,
 ) -> BuildOutcome:
     """Run the build in `episode`: materials, walk back, build passes, final scan. `GoalInterrupted` from the
-    hooks propagates; the life finishes the episode then."""
-    run = _BuildRun(episode, store, plan, before_step, check_interrupts, excluded)
+    hooks propagates; the life finishes the episode then. `ring_scans` is the life's: the goal's first attempt
+    stores its scan of the ring there (box, blocks) and later attempts compare against it (v3.0i)."""
+    run = _BuildRun(episode, store, plan, before_step, check_interrupts, excluded, {} if ring_scans is None else ring_scans)
     episode.log.event(
         "episode_start", system=episode.system, task=episode.task.task_id, description=episode.task.description,
         world_id=episode.world_id, budget=episode.task.budget, layout=episode.layout_seed,
@@ -180,6 +181,7 @@ class _BuildRun:
     before_step: BeforeStep
     check_interrupts: Callable[[], None]
     excluded: frozenset[str]
+    ring_scans: dict[str, tuple[Box, dict]] = field(default_factory=dict)  # the life's (v3.0i)
     states: dict[Pos, str | None] = field(default_factory=dict)  # the cells as last scanned or acted on
     steps: list[BuildStep] = field(default_factory=list)
     mismatched: list[Pos] = field(default_factory=list)  # from the latest scan
@@ -209,11 +211,10 @@ class _BuildRun:
             cut=plan.site.cut if plan.site else 0, fill=plan.site.fill if plan.site else 0,
         )
         self.announce()
+        ring_before = self.first_ring_scan()
         reason = self.gather_materials(plan.needs)
         if reason:
             return reason
-        placed_before_build = len(episode.placed_cells)
-        ring_before = self.scan_ring()
         for number in range(1, MAX_BUILD_PASSES + 1):
             reason = self.scan_on_site(number)
             if reason:
@@ -225,9 +226,22 @@ class _BuildRun:
                 return reason
             self.scan(number)  # the final scan
             if not self.mismatched:
-                self.clear_scaffold(episode.placed_cells[placed_before_build:], self.ring_candidates(ring_before))
+                self.clear_scaffold(episode.placed_cells, self.ring_candidates(ring_before))
                 return ""
         return f"{len(self.mismatched)} cells don't match"
+
+    def first_ring_scan(self) -> dict[Pos, str | None]:
+        """The ring as it was when the goal's first attempt started: scanned now by that attempt, kept by the life
+        for later ones (a requeued attempt may find scaffold the earlier one left). Gap: a resumed life (process
+        restarted) has no stored scan and scans again, so scaffold left by an earlier process stays."""
+        goal_id = self.plan.spec.id
+        stored = self.ring_scans.get(goal_id)
+        if stored and stored[0] == self.box:
+            return stored[1]
+        ring = self.scan_ring()
+        if ring:  # a failed scan is not kept: the next attempt tries again
+            self.ring_scans[goal_id] = (self.box, ring)
+        return ring
 
     def scan_ring(self) -> dict[Pos, str | None]:
         """The blocks of the ring around the site box; empty if the scan fails."""
