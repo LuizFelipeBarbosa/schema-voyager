@@ -553,9 +553,16 @@ JSON line `{"pid", "session", "purpose", "started"}`.
 - Shell (`scripts/v2-env.sh`): `sv2_lock_acquire <purpose>` takes the lock or
   dies naming the holder (a lock whose pid is dead is stale and is taken over
   with a warning); `sv2_lock_release` removes it only if this shell's
-  session holds it. `SV2_LOCK_SESSION` names the session (default
-  `$$-<purpose>`); a child script that inherits the same `SV2_LOCK_SESSION`
-  passes through instead of refusing (so `v2-demo.sh` can call `world-restore.sh`).
+  session holds it and its pid is this shell's. `SV2_LOCK_SESSION` names the
+  session (default `$$-<purpose>`).
+- **Hand-over:** a process whose `SV2_LOCK_SESSION` equals the holder's session
+  doesn't refuse. A child *script* passes through (it neither writes nor
+  removes the lock), so `v2-demo.sh` can call `world-restore.sh`.
+  `instance_lock.hold` takes the lock over (writes its own pid and purpose,
+  same session) and on exit hands it back to the previous holder if that pid
+  is alive, else removes it. So a life started in screen by `v2-demo.sh` owns
+  the lock after the script exits; `v2-demo.sh` waits (up to 20 s) until the
+  lock shows the life's pid before it exits.
 - Scripts that take it: `v2-up.sh`, `v2-new-world.sh`, `world-restore.sh`,
   `v2-change.sh` (install, enable, disable), `v2-seeds.sh`, `v2-demo.sh`.
   `v2-down.sh` and `v2-change.sh status` don't.
