@@ -36,7 +36,6 @@ test('judge: both timeout is a draw', () => {
 test('judge: inconsistent or missing answers are invalid, with a reason', () => {
   const busy = { status: 409, body: { ok: false, error: 'busy' } }
   const cases = {
-    'both died': [ok('died'), ok('died')],
     'a missing duel_end': [ok('timeout'), { status: 200, body: { ok: false, error: 'not_found', events: [] } }],
     'a 409': [busy, ok('timeout')],
     'an http error': [ok('timeout'), { error: 'fetch failed' }],
@@ -51,6 +50,39 @@ test('judge: inconsistent or missing answers are invalid, with a reason', () => 
     assert.equal(result.result, null, name)
     assert.ok(result.reason.length > 0, name)
   }
+})
+
+test('judge: a double KO is a draw, from reasons or event-log flags', () => {
+  const cases = {
+    'both flags': [judge(ok('killed'), ok('killed'), ID, { diedA: true, diedB: true }), 'double KO'],
+    'both_died and died': [judge(ok('both_died'), ok('died'), ID), 'double KO'],
+    'both both_died': [judge(ok('both_died'), ok('both_died'), ID), 'double KO'],
+    'died and died': [judge(ok('died'), ok('died'), ID), 'double KO']
+  }
+  for (const [name, [result, reason]] of Object.entries(cases)) {
+    assert.deepEqual([result.valid, result.result, result.reason], [true, 'draw', reason], name)
+  }
+})
+
+test('judge: one death wins as before, with or without a flag', () => {
+  assert.deepEqual(['A', true], [judge(ok('killed'), ok('died'), ID).result, true])
+  assert.equal(judge(ok('killed'), ok('killed'), ID, { diedB: true }).result, 'A')
+  assert.equal(judge(ok('killed'), ok('killed'), ID, { diedA: true }).result, 'B')
+  const neither = judge(ok('killed'), ok('killed'), ID)
+  assert.deepEqual([neither.valid, neither.result], [false, null])
+})
+
+test('judge: both_died from a bot whose opponent survived is invalid', () => {
+  for (const [a, b] of [[ok('both_died'), ok('killed')], [ok('killed'), ok('both_died')]]) {
+    const result = judge(a, b, ID)
+    assert.deepEqual([result.valid, result.result], [false, null])
+    assert.match(result.reason, /both_died/)
+  }
+})
+
+test('judge --vs: both_died is a draw, a died flag makes the player win', () => {
+  assert.equal(judge(ok('both_died'), null, ID).result, 'draw')
+  assert.equal(judge(ok('killed'), null, ID, { diedA: true }).result, 'B')
 })
 
 test('judge: a quarantined answer still carries the duel_end in its events', () => {

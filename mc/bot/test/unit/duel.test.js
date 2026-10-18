@@ -73,6 +73,63 @@ test('runDuel: the opponent dying ends it killed, with one duel_end equal to the
   assert.deepEqual(eventLog.events, [{ type: 'duel_end', ...result }])
 })
 
+test('runDuel: the opponent dying records killed only after the grace', async () => {
+  const { bot } = fakeBot()
+  const eventLog = fakeEventLog()
+  const promise = run(bot, {}, { fight: waitingFight(), eventLog, killGraceMs: 200 })
+  await new Promise((resolve) => setTimeout(resolve, 30))
+  bot.emit('entityDead', { id: OPPONENT_ID })
+  assert.equal(eventLog.events.length, 0)
+  await new Promise((resolve) => setTimeout(resolve, 100))
+  assert.equal(eventLog.events.length, 0)
+  const { result } = await promise
+  assert.equal(result.reason, 'killed')
+  assert.equal(result.winner, 'Voyager')
+  assert.deepEqual(eventLog.events, [{ type: 'duel_end', ...result }])
+})
+
+test('runDuel: the bot dying within the grace after the opponent is both_died, recorded in the death emit', async () => {
+  const { bot } = fakeBot()
+  const eventLog = fakeEventLog()
+  const promise = run(bot, {}, { fight: waitingFight(), eventLog, killGraceMs: 300 })
+  await new Promise((resolve) => setTimeout(resolve, 30))
+  bot.emit('entityDead', { id: OPPONENT_ID })
+  bot.health = 0
+  bot.emit('death')
+  assert.equal(eventLog.events.length, 1)
+  assert.equal(eventLog.events[0].reason, 'both_died')
+  const { result } = await promise
+  await new Promise((resolve) => setTimeout(resolve, 400))
+  assert.equal(result.winner, null)
+  assert.deepEqual(eventLog.events, [{ type: 'duel_end', ...result }])
+})
+
+test('runDuel: the bot dying first is died, and the opponent dying after changes nothing', async () => {
+  const { bot } = fakeBot()
+  const eventLog = fakeEventLog()
+  const promise = run(bot, {}, { fight: waitingFight(), eventLog, killGraceMs: 50 })
+  await new Promise((resolve) => setTimeout(resolve, 30))
+  bot.emit('death')
+  bot.emit('entityDead', { id: OPPONENT_ID })
+  const { result } = await promise
+  await new Promise((resolve) => setTimeout(resolve, 150))
+  assert.equal(result.reason, 'died')
+  assert.equal(result.winner, 'Rival')
+  assert.deepEqual(eventLog.events, [{ type: 'duel_end', ...result }])
+})
+
+test('runDuel: after the opponent dies the fight is told to stop and is not called again', async () => {
+  const { bot } = fakeBot()
+  const fight = waitingFight()
+  const promise = run(bot, {}, { fight, killGraceMs: 400 })
+  await new Promise((resolve) => setTimeout(resolve, 30))
+  assert.equal(fight.calls[0].options.shouldStop(), false)
+  bot.emit('entityDead', { id: OPPONENT_ID })
+  assert.equal(fight.calls[0].options.shouldStop(), true)
+  await promise
+  assert.equal(fight.calls.length, 1)
+})
+
 test('runDuel: the bot dying records duel_end inside the death emit', async () => {
   const { bot } = fakeBot()
   const fight = waitingFight()
