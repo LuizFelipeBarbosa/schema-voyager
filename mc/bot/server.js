@@ -11,6 +11,7 @@ const { craft } = require('./lib/craft')
 const { explore, newSpiral, trackWorldBorder } = require('./lib/explore')
 const { probe } = require('./lib/probe')
 const { smelt } = require('./lib/smelt')
+const { validateStation } = require('./lib/station')
 const { validateProtect } = require('./lib/protect')
 const { clear, place, validateClear, validatePlace } = require('./lib/place')
 const { scan, validateScan } = require('./lib/scan')
@@ -271,7 +272,7 @@ const validators = {
   craft: (body) => {
     if (!isName(body.item)) return '"item" must be a non-empty string'
     if (body.times != null && !(Number.isInteger(body.times) && body.times > 0)) return '"times" must be a positive integer'
-    return null
+    return validateStation(body.station) || validateProtect(body.protect)
   },
   explore: (body) => {
     const directions = [...DIRECTIONS, 'up']
@@ -288,7 +289,8 @@ const validators = {
   },
   smelt: (body) => {
     if (!isName(body.ingredient) || !isName(body.item) || !isName(body.fuel)) return '"ingredient", "item" and "fuel" must be non-empty strings'
-    return body.times != null && !(Number.isInteger(body.times) && body.times > 0) ? '"times" must be a positive integer' : null
+    if (body.times != null && !(Number.isInteger(body.times) && body.times > 0)) return '"times" must be a positive integer'
+    return validateStation(body.station) || validateProtect(body.protect)
   },
   probe: (body) => {
     const { grid } = body

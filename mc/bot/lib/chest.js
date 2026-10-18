@@ -1,12 +1,12 @@
 // POST /deposit, /withdraw and /chest: walk next to a chest outside the walls, open it, move items, close it.
 // See contracts/bot_api.md (v3.5).
 
-const { Movements, goals } = require('mineflayer-pathfinder')
+const { goals } = require('mineflayer-pathfinder')
 const { Vec3 } = require('vec3')
 const { withTimeout } = require('./grid')
-const { sprintAllowed } = require('./movements')
 const { validateProtect } = require('./protect')
 const { tossableStacks, validateToss } = require('./toss')
+const { withWalkingMovements } = require('./goto')
 const { recordTravel } = require('./travel')
 const { freeSlots, gotoGoal, inventoryCounts, settleInventory } = require('./world')
 
@@ -27,23 +27,6 @@ function validateDeposit (body) {
 }
 
 const validateWithdraw = validateDeposit
-
-// World-preserving movements, as goto.js's (which does not export them): never digs, places or opens doors.
-async function withWalkingMovements (bot, fn) {
-  const previous = bot.pathfinder.movements
-  const movements = new Movements(bot)
-  movements.canDig = false
-  movements.canOpenDoors = false
-  movements.allow1by1towers = false
-  movements.scafoldingBlocks = []
-  movements.allowSprinting = sprintAllowed(bot)
-  bot.pathfinder.setMovements(movements)
-  try {
-    return await fn()
-  } finally {
-    bot.pathfinder.setMovements(previous)
-  }
-}
 
 // Walks next to the chest at `body.pos`, opens it and runs `useChest(window)`, whose result (merged
 // with `chest`, `chest_free_slots` and `travel`) is the answer. The window is closed whatever happens.

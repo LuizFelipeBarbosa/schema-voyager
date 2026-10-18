@@ -12,14 +12,29 @@ const { countDelta, heldOutsideInventory, inventoryCounts, settleInventory } = r
 // `session`: {tracker, episode, signal}. An abort throws `signal.reason`; a
 // table the bot placed (or must still dig up) is then remembered in the
 // episode instead of being dug up.
-async function craft (bot, { item: itemName, times = 1 }, { tracker, episode = null, signal = null }) {
+async function craft (bot, { item: itemName, times = 1, station = null, protect = [] }, { tracker, episode = null, signal = null }) {
   signal?.throwIfAborted()
   // Items stranded in a grid by an earlier action would show up as a gain
   await clearCraftingGrids(bot)
   await settleInventory(bot)
   const before = inventoryCounts(bot)
   tracker.log.setPhase('step') // a craft has no travel: its step starts now
-  const result = { item: itemName, times, used_table: false, table_retrieved: null, tools_broken: [] }
+  const result = {
+    item: itemName,
+    times,
+    used_table: false,
+    used_home_station: false,
+    table_retrieved: null,
+    tools_broken: [],
+    travel: emptyTravel()
+  }
+  let tableWasRemembered = false
+  // the table of an earlier action, dug up now, is not this step's gain
+  const inventoryDelta = () => {
+    const delta = countDelta(before, inventoryCounts(bot))
+    if (tableWasRemembered && delta.crafting_table === 1) delete delta.crafting_table
+    return delta
+  }
   const finish = (error, extra = {}) => {
     const inventory = inventoryCounts(bot)
     return {
@@ -27,10 +42,9 @@ async function craft (bot, { item: itemName, times = 1 }, { tracker, episode = n
       error: error || null,
       ...result,
       ...extra,
-      inventory_delta: countDelta(before, inventory),
+      inventory_delta: inventoryDelta(),
       inventory,
       held_outside_inventory: heldOutsideInventory(bot),
-      travel: emptyTravel(),
       inventory_before_step: before
     }
   }
@@ -43,11 +57,15 @@ async function craft (bot, { item: itemName, times = 1 }, { tracker, episode = n
 
   let table = null
   let placedTablePos = null
-  let tableWasRemembered = false
   if ((recipe || mixedPlan.recipe).requiresTable) {
     result.used_table = true
-    const acquired = await acquireTable(bot, { episode, signal })
-    if (acquired.error) return finish(acquired.error, acquired.detail ? { detail: acquired.detail } : {})
+    const acquired = await acquireTable(bot, { station, protect, episode, signal })
+    if (acquired.error) {
+      const { error, ...extra } = acquired
+      return finish(error, extra)
+    }
+    if (acquired.travel) result.travel = acquired.travel
+    result.used_home_station = Boolean(acquired.usedHome)
     table = acquired.table
     placedTablePos = acquired.placedPos
     tableWasRemembered = acquired.remembered
@@ -99,9 +117,8 @@ async function craft (bot, { item: itemName, times = 1 }, { tracker, episode = n
   }
   if (craftError) return finish('craft_failed', { detail: craftError })
 
-  const delta = countDelta(before, inventoryCounts(bot))
+  const delta = inventoryDelta()
   if (result.table_retrieved === false && delta.crafting_table === -1) delete delta.crafting_table // the placed table is left standing
-  if (tableWasRemembered && delta.crafting_table === 1) delete delta.crafting_table // an earlier action's table, dug up now
   if (!isWholeRuns(delta, itemName, times, bot.recipesAll(itemInfo.id, null, true), bot.registry)) {
     return finish('craft_failed', { detail: 'partial_delta' })
   }
