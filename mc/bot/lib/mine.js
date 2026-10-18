@@ -3,13 +3,14 @@
 // (tolerant). A target the bot could not reach or dig is skipped for the rest
 // of the episode, and one it could not reach is also remembered across
 // episodes (see createUnreachableMemory), so a later call does not retry the
-// same block. A v2 call tries up to a few candidates, best first, each with a
-// short path budget, so a call stays under about 40 s. With dig_through (v2) the path may dig and pillar, the
+// same block. A v2 call tries up to a few candidates, best first, within a 60 s
+// budget (see approach.js). With dig_through (v2) the path may dig and pillar, the
 // target may be buried, and the step's window starts only after the travel has
 // settled. See contracts/bot_api.md.
 
 const { goals } = require('mineflayer-pathfinder')
 const { watchServerBlockChange } = require('./blockchange')
+const { approachTarget } = require('./approach')
 const { GoalBesideBlock } = require('./movements')
 const { insideAny } = require('./protect')
 const { chooseTargets } = require('./targets')
@@ -23,12 +24,7 @@ const DIG_REACH = 4 // stay inside the 4.5 block survival reach
 const DROP_WINDOW_TICKS = 20
 const CONFIRM_TIMEOUT_MS = 2000 // for the server's block update after the dig
 const DEFAULT_MAX_DISTANCE = 16
-// Path budget per call: v1 makes one 30 s attempt; v2 tries up to 4 candidates,
-// giving up on one after 11 s or 4 s without moving or digging, all within 36 s.
-const V1_PATH_LIMITS = { attempts: 1, attemptMs: 30000, callMs: 30000, failFast: null }
-const V2_PATH_LIMITS = { attempts: 4, attemptMs: 11000, callMs: 36000, failFast: { stallMs: 4000 } }
-const MIN_ATTEMPT_MS = 3000 // no new candidate is tried with less call budget than this
-const SAME_POCKET_BLOCKS = 4 // candidates this close to a failed one are skipped for the call
+const V1_PATH_MS = 30000 // v1 makes one attempt, with no failFast
 
 function parseRequest (body) {
   const blockNames = Array.isArray(body.blocks) && body.blocks.length > 0 ? body.blocks : [body.block]
@@ -75,9 +71,10 @@ async function mine (bot, body, { episode, tracker, unreachable, signal = null }
     travel: emptyTravel(),
     inventory_before_step: before
   }
+  // `no_path` is also remembered across episodes; other ends only for this one.
   const skipTarget = (pos, error) => {
     episode.skippedTargets.add(pos.toString())
-    if (error === 'unreachable') unreachable.remember(bot, pos)
+    if (error === 'unreachable' || error === 'no_path') unreachable.remember(bot, pos)
   }
   const finish = (errorCode, detail) => {
     const inventory = inventoryCounts(bot)
@@ -114,32 +111,31 @@ async function mine (bot, body, { episode, tracker, unreachable, signal = null }
 
   // Travel into position, trying the next candidate when one cannot be
   // reached; digging and pillaring only with dig_through.
-  const limits = v2 ? V2_PATH_LIMITS : V1_PATH_LIMITS
-  const callDeadline = Date.now() + limits.callMs
   const recording = recordTravel(bot, episode)
-  const failed = []
   let targetPos = null
   let reached = false
   try {
-    for (const candidate of positions) {
-      const remainingMs = callDeadline - Date.now()
-      if (failed.length >= limits.attempts || (failed.length > 0 && remainingMs < MIN_ATTEMPT_MS)) break
-      if (failed.some((pos) => pos.distanceTo(candidate) <= SAME_POCKET_BLOCKS)) continue
-      targetPos = candidate
-      result.block = blockNameAt(bot, targetPos)
-      result.target = { x: targetPos.x, y: targetPos.y, z: targetPos.z }
-      const timeoutMs = Math.min(limits.attemptMs, remainingMs)
-      reached = digThrough
-        ? await withDiggingMovements(bot, { scaffoldNames: scaffold, protectedBlock: targetPos, protect },
-          () => gotoGoal(bot, new GoalBesideBlock(targetPos), timeoutMs, { failFast: limits.failFast, signal }))
-        : await gotoGoal(bot, new goals.GoalLookAtBlock(targetPos, bot.world, { reach: DIG_REACH }), timeoutMs, { failFast: limits.failFast, signal })
-      if (reached) {
-        await recording.settle()
-        break
+    if (v2) {
+      const approach = await approachTarget(bot, positions, {
+        goalFor: (pos) => digThrough ? new GoalBesideBlock(pos) : new goals.GoalLookAtBlock(pos, bot.world, { reach: DIG_REACH }),
+        withMovements: (pos, walk) => digThrough
+          ? withDiggingMovements(bot, { scaffoldNames: scaffold, protectedBlock: pos, protect }, walk)
+          : walk(),
+        mark: skipTarget,
+        signal
+      })
+      ;({ reached, targetPos } = approach)
+      if (approach.attempts.length > 0) {
+        result.reach = { reason: approach.attempts.at(-1).end, attempts: approach.attempts }
       }
-      skipTarget(targetPos, 'unreachable')
-      failed.push(targetPos)
+    } else {
+      targetPos = positions[0]
+      reached = await gotoGoal(bot, new goals.GoalLookAtBlock(targetPos, bot.world, { reach: DIG_REACH }), V1_PATH_MS, { signal })
+      if (!reached) skipTarget(targetPos, 'unreachable')
     }
+    result.block = blockNameAt(bot, targetPos)
+    result.target = { x: targetPos.x, y: targetPos.y, z: targetPos.z }
+    if (reached) await recording.settle()
   } finally {
     result.travel = recording.finish()
   }
