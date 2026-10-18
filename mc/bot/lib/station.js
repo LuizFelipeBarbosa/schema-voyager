@@ -40,42 +40,50 @@ async function placeStation (bot, itemName) {
   let lastProblem = null
   for (const spot of spots) {
     lastProblem = await tryPlace(bot, itemName, spot)
-    if (!lastProblem) return bot.blockAt(spot)
-    console.log(`warn: ${itemName} not placed at ${spot}: ${lastProblem}`)
+    if (!lastProblem) return bot.blockAt(spot.pos)
+    console.log(`warn: ${itemName} not placed at ${spot.pos}: ${lastProblem}`)
     await sleepTicks(RETRY_TICKS)
   }
   throw new Error(`refused at ${spots.length} cells, last: ${lastProblem}`)
 }
 
-// Null when the station stands at `spot`, else what went wrong.
+// Null when the station stands at `spot.pos`, else what went wrong.
 async function tryPlace (bot, itemName, spot) {
   try {
     await bot.equip(findInventoryItem(bot, itemName), 'hand')
-    await bot.placeBlock(bot.blockAt(spot.offset(0, -1, 0)), new Vec3(0, 1, 0))
+    await bot.placeBlock(bot.blockAt(spot.pos.minus(spot.faceToCell)), spot.faceToCell)
   } catch (err) {
     return err.message
   }
-  const placed = bot.blockAt(spot)
-  return placed?.name === itemName ? null : `found ${placed?.name} at ${spot} after placing`
+  const placed = bot.blockAt(spot.pos)
+  return placed?.name === itemName ? null : `found ${placed?.name} at ${spot.pos} after placing`
 }
 
-// Air cells at the bot's feet level, on a full solid block, that do not
-// overlap the bot's hitbox; closest first, at most 2 blocks out.
+// Cells where a station can go: air within 2 blocks of the bot's feet (one
+// below to one above), next to a full solid block to place against, not
+// overlapping the bot's hitbox. Returns [{pos, faceToCell}], where faceToCell
+// is the face of that block the station goes on. Cells on the ground come
+// first, then the closest; the others are for a bot standing on a pillar or a
+// ledge, with nothing solid at its own level.
 function findSpots (bot) {
   const feet = bot.entity.position.floored()
+  const botPos = bot.entity.position
+  // the face to place on, preferring the top of the block below the cell
+  const faces = [new Vec3(0, 1, 0), new Vec3(1, 0, 0), new Vec3(-1, 0, 0), new Vec3(0, 0, 1), new Vec3(0, 0, -1), new Vec3(0, -1, 0)]
   const candidates = []
-  for (let dx = -2; dx <= 2; dx++) {
-    for (let dz = -2; dz <= 2; dz++) {
-      const pos = feet.offset(dx, 0, dz)
-      if (!AIR_BLOCKS.has(bot.blockAt(pos)?.name)) continue
-      if (bot.blockAt(pos.offset(0, -1, 0))?.boundingBox !== 'block') continue
-      if (overlapsBot(bot, pos)) continue
-      candidates.push(pos)
+  for (let dy = -1; dy <= 1; dy++) {
+    for (let dx = -2; dx <= 2; dx++) {
+      for (let dz = -2; dz <= 2; dz++) {
+        const pos = feet.offset(dx, dy, dz)
+        if (!AIR_BLOCKS.has(bot.blockAt(pos)?.name)) continue
+        if (dy >= 0 && overlapsBot(bot, pos)) continue
+        const faceToCell = faces.find((face) => bot.blockAt(pos.minus(face))?.boundingBox === 'block')
+        if (faceToCell) candidates.push({ pos, faceToCell, onGround: faceToCell.y === 1 && dy === 0 })
+      }
     }
   }
-  const botPos = bot.entity.position
-  candidates.sort((a, b) => botPos.distanceTo(a.offset(0.5, 0, 0.5)) - botPos.distanceTo(b.offset(0.5, 0, 0.5)))
-  return candidates
+  const distance = (spot) => botPos.distanceTo(spot.pos.offset(0.5, 0.5, 0.5))
+  return candidates.sort((a, b) => (b.onGround - a.onGround) || (distance(a) - distance(b)))
 }
 
 function overlapsBot (bot, cell) {
@@ -106,4 +114,4 @@ async function retrieveStation (bot, pos, itemName, countBefore, { withBestTool 
   return (inventoryCounts(bot)[itemName] || 0) >= countBefore
 }
 
-module.exports = { acquireTable, findPlacedStation, placeStation, retrieveStation }
+module.exports = { acquireTable, findPlacedStation, findSpots, placeStation, retrieveStation }

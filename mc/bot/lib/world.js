@@ -45,6 +45,16 @@ function inventoryCounts (bot) {
   return counts
 }
 
+// Item name -> count of what the player window holds outside slots 5..45:
+// the output and crafting grid (slots 0..4) and the cursor. Empty once a
+// craft or probe has put everything back.
+function heldOutsideInventory (bot) {
+  const counts = {}
+  const held = [...bot.inventory.slots.slice(0, 5), bot.inventory.selectedItem]
+  for (const item of held.filter(Boolean)) counts[item.name] = (counts[item.name] || 0) + item.count
+  return counts
+}
+
 function addCount (counts, name, amount = 1) {
   counts[name] = (counts[name] || 0) + amount
 }
@@ -321,6 +331,7 @@ module.exports = {
   findNearestExposedBlock,
   gotoGoal,
   hasAirNeighbour,
+  heldOutsideInventory,
   inventoryCounts,
   pickUpEntities,
   positionOf,

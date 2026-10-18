@@ -4,16 +4,25 @@
 // everything back, and checks the inventory is unchanged.
 // See contracts/bot_api.md.
 
-const { probeGrid } = require('./grid')
+const { clearCraftingGrids, probeGrid } = require('./grid')
 const { acquireTable, retrieveStation } = require('./station')
-const { addCount, countDelta, inventoryCounts, resyncWindow, settleInventory } = require('./world')
+const { addCount, countDelta, heldOutsideInventory, inventoryCounts, settleInventory } = require('./world')
 
 async function probe (bot, { grid }, { tracker }) {
+  await clearCraftingGrids(bot)
+  await settleInventory(bot)
   const before = inventoryCounts(bot)
   tracker.log.setPhase('step')
   const finish = (error, extra = {}) => {
     const inventory = inventoryCounts(bot)
-    return { ok: !error, error: error || null, output: null, ...extra, inventory_delta: countDelta(before, inventory) }
+    return {
+      ok: !error,
+      error: error || null,
+      output: null,
+      ...extra,
+      inventory_delta: countDelta(before, inventory),
+      held_outside_inventory: heldOutsideInventory(bot)
+    }
   }
 
   const needed = {}
@@ -43,7 +52,7 @@ async function probe (bot, { grid }, { tracker }) {
   } catch (err) {
     probeError = err.message
   }
-  await resyncWindow(bot, bot.inventory)
+  await clearCraftingGrids(bot)
   if (placedTablePos) {
     await retrieveStation(bot, placedTablePos, 'crafting_table', before.crafting_table || 0, {
       onDrop: (entity) => tracker.ownDrops.add(entity.id)
