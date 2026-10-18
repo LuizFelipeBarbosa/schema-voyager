@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import asdict, dataclass, field
 from typing import Any, Literal
 
@@ -151,8 +152,17 @@ class HomeStock:
         self, position: tuple[float, float, float], reach: float = HOME_RANGE
     ) -> tuple[frozenset[str], dict[str, int]]:
         """The station kinds within reach of position, and the stored items if the chest is within reach; never a
-        lost or skipped kind."""
-        raise NotImplementedError("v3.5 stub: lane home-plan")
+        lost or skipped kind. Distances are 3D Euclidean, from position to the centre of the station's or chest's cell."""
+        unusable = self.lost | self.skipped
+
+        def within_reach(cell: tuple[int, int, int]) -> bool:
+            return math.dist(position, (cell[0] + 0.5, cell[1] + 0.5, cell[2] + 0.5)) <= reach
+
+        stations = frozenset(
+            kind for kind, cell in self.stations.items() if kind not in unusable and within_reach(cell)
+        )
+        chest_in_reach = self.chest is not None and "chest" not in unusable and within_reach(self.chest)
+        return stations, dict(self.stored) if chest_in_reach else {}
 
 
 @dataclass(frozen=True)

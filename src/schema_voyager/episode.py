@@ -31,8 +31,8 @@ MAX_RETRIES = 2
 # v3.0g: a natural mine that ran out of time while still getting closer ("approaching") is retried at once, in place.
 MAX_APPROACH_RETRIES = 1
 # v3.4b: place, clear and goto never explore (the site is where it is); a walk or dig that failed or timed out
-# gets one retry in place. Any other error is the build runner's to handle.
-BUILD_KINDS = frozenset({"place", "clear", "goto"})
+# gets one retry in place. Any other error is the build runner's to handle. v3.5: so does a withdraw (the chest's cell).
+BUILD_KINDS = frozenset({"place", "clear", "goto", "withdraw"})
 BUILD_RETRIED_ERRORS = frozenset({"unreachable", "timeout"})
 # An interrupted step is retried in place, on a budget of its own: several fights can land on one step at night.
 MAX_INTERRUPTS = 4

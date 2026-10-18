@@ -8,6 +8,8 @@ revise a contradicted rule. While predictions hold, execution makes no calls.
 
 from __future__ import annotations
 
+from collections import Counter
+from dataclasses import replace
 from typing import Callable
 
 from . import normalize
@@ -15,7 +17,7 @@ from .episode import Episode
 from .goals import goal_label
 from .llm import LLM, LLMError
 from .models import Action, EpisodeResult, GoalSpec, Outcome, Rule, Skill
-from .planner import PlanningError, PlanStep, make_plan, make_plan_for
+from .planner import PlanningError, PlanStep, make_plan, make_plan_for, withdrawals
 from .schema_store import MIN_CONFIRMATIONS, MIN_EPISODES, SchemaStore, Transition, applies
 from .tasks import CRAFTABLE_ITEMS, MINEABLE_BLOCKS
 from .verifier import Check, check, predict
@@ -95,19 +97,29 @@ def pursue(
     first_plan = True  # v1 narrates every plan; a natural goal is announced once
     awaiting_recovery = False  # natural: a revision was proposed, no step has run under it yet
     failed_steps: set[tuple[str, str, tuple[tuple[str, int], ...]]] = set()
+    refused_raw_ids: set[str] = set()  # chest items a withdraw came back short of: not asked for again (v3.5)
 
     while not _all_held(episode, needs) and episode.can_act:
         try:
-            visible = _visible(episode) if episode.natural else None
+            observation = episode.backend.observe() if episode.natural else None
+            visible = _visible(episode, observation) if observation else None
             rules = [
                 rule for rule in store.usable_rules(episode.world_id)
                 if rule.id not in excluded and rule.id not in episode.blocked_rules
             ]
-            if len(needs) == 1:
-                (item, count), = needs.items()
-                plan = make_plan(item, count, episode.counts, rules, store.skill_for, visible=visible)
-            else:
-                plan = make_plan_for(needs, episode.counts, rules, store.skill_for, visible=visible)
+            stations, stored = frozenset(), {}
+            if episode.home is not None and observation is not None:
+                stations, stored = episode.home.near(observation.position)
+            stored = {raw_id: n for raw_id, n in stored.items() if raw_id not in refused_raw_ids}
+            if stored:
+                held = episode.counts
+                start = dict(Counter(held) + Counter(normalize.counts(stored)))
+                plan_from_stock = _plan(needs, start, rules, store, visible, stations)
+                to_withdraw = withdrawals(plan_from_stock, start, held, needs)
+                _withdraw_from_chest(episode, to_withdraw, refused_raw_ids)
+                if _all_held(episode, needs):
+                    continue
+            plan = _plan(needs, episode.counts, rules, store, visible, stations)
         except PlanningError as error:
             episode.log.event("plan_failed", reason=str(error))
             break
@@ -129,6 +141,7 @@ def pursue(
                 )
             verdict: dict[str, Check] = {}
             outcome = episode.act(step.action, annotate=lambda o, s=step: _annotate(s, o, verdict))
+            _note_unusable_station(episode, step.action, outcome)
             result = verdict["check"]
             if result.status == "failed":
                 _block_repeated_failure(episode, step, outcome, failed_steps)
@@ -156,9 +169,60 @@ def pursue(
     return completed
 
 
-def _visible(episode: Episode) -> dict[str, int]:
-    """Counts in view now: block families, and mobs by name (v3.3)."""
-    observation = episode.backend.observe()
+def _plan(
+    needs: dict[str, int], inventory: dict[str, int], rules: list[Rule], store: SchemaStore,
+    visible: dict[str, int] | None, stations: frozenset[str],
+) -> list[PlanStep]:
+    if len(needs) == 1:
+        (item, count), = needs.items()
+        return make_plan(item, count, inventory, rules, store.skill_for, visible=visible, stations=stations)
+    return make_plan_for(needs, inventory, rules, store.skill_for, visible=visible, stations=stations)
+
+
+def _withdraw_from_chest(episode: Episode, to_withdraw: dict[str, int], refused_raw_ids: set[str]) -> None:
+    """Take the planned families out of the home chest (v3.5d), the largest stacks first. A withdraw is not a
+    rule's step: it is never checked or recorded. The chest's contents in `episode.home` follow every outcome."""
+    for family, wanted in to_withdraw.items():
+        raw_ids = sorted(
+            (raw_id for raw_id in episode.home.stored if normalize.family(raw_id) == family),
+            key=lambda raw_id: -episode.home.stored[raw_id],
+        )
+        for raw_id in raw_ids:
+            if wanted <= 0 or not episode.can_act:
+                break
+            times = min(wanted, episode.home.stored[raw_id])
+            outcome = episode.act(Action("withdraw", target=raw_id, times=times, pos=episode.home.chest))
+            wanted -= sum(outcome.detail.get("withdrawn", {}).values())
+            chest = outcome.detail.get("chest")
+            home = episode.home
+            if chest is not None:
+                home = replace(home, stored=chest)
+            if outcome.error == "not_found" and chest is None:
+                home = replace(home, lost=home.lost | {"chest"})
+            elif outcome.error in ("unreachable", "interrupted", "timeout"):
+                home = replace(home, skipped=home.skipped | {"chest"})
+            episode.home = home
+            if not outcome.ok:
+                refused_raw_ids.add(raw_id)
+            if "chest" in home.lost | home.skipped:
+                return
+
+
+def _note_unusable_station(episode: Episode, action: Action, outcome: Outcome) -> None:
+    """A home station a craft or smelt found gone is lost, one it couldn't reach is skipped (v3.5d): the next
+    plan no longer counts on it."""
+    kind = {"craft": "crafting_table", "smelt": "furnace"}.get(action.kind)
+    if episode.home is None or kind is None:
+        return
+    if outcome.detail.get("station_gone"):
+        episode.home = replace(episode.home, lost=episode.home.lost | {kind})
+    elif outcome.detail.get("station_unreachable"):
+        episode.home = replace(episode.home, skipped=episode.home.skipped | {kind})
+
+
+def _visible(episode: Episode, observation=None) -> dict[str, int]:
+    """Counts in view now: block families, and mobs by name (v3.3). `observation` is one already made."""
+    observation = observation or episode.backend.observe()
     mobs = {mob: info["count"] for mob, info in observation.entities.items()}
     return normalize.counts(observation.nearby) | mobs
 

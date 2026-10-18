@@ -43,10 +43,12 @@ def make_plan(
     rules: list[Rule],
     skill_for: Callable[[str], Skill | None] = lambda item: None,
     visible: dict[str, int] | None = None,
+    stations: frozenset[str] = frozenset(),
 ) -> list[PlanStep]:
     """`visible` (natural worlds): normalized counts of the block families the agent
-    sees now; among rules producing one item, those it can reach come first."""
-    planner = _Planner(rules, skill_for, visible)
+    sees now; among rules producing one item, those it can reach come first. `stations` (v3.5): the home
+    stations within reach, usable without holding one."""
+    planner = _Planner(rules, skill_for, visible, stations)
     return planner.achieve(goal_item, goal_count, Counter(inventory), [])
 
 
@@ -56,15 +58,19 @@ def make_plan_for(
     rules: list[Rule],
     skill_for: Callable[[str], Skill | None] = lambda item: None,
     visible: dict[str, int] | None = None,
+    stations: frozenset[str] = frozenset(),
 ) -> list[PlanStep]:
     """Steps that leave every need (item -> count to hold) held at once, deeper items first; a need that spends
     another (sticks spend planks) is gathered again. Several needs are what a build asks for (v3.4b)."""
-    planner = _Planner(rules, skill_for, visible)
+    planner = _Planner(rules, skill_for, visible, stations)
     return planner._gather(needs, Counter(inventory), [], "could not hold every need at once")
 
 
 class _Planner:
-    def __init__(self, rules: list[Rule], skill_for: Callable[[str], Skill | None], visible: dict[str, int] | None):
+    def __init__(
+        self, rules: list[Rule], skill_for: Callable[[str], Skill | None], visible: dict[str, int] | None,
+        stations: frozenset[str] = frozenset(),
+    ):
         self.producers: dict[str, list[Rule]] = {}
         for rule in rules:
             for item, count in rule.yields().items():
@@ -72,6 +78,7 @@ class _Planner:
                     self.producers.setdefault(item, []).append(rule)
         self.skill_for = skill_for
         self.visible = visible
+        self.stations = stations
 
     def achieve(self, item: str, count: int, inv: Counter, stack: list[str]) -> list[PlanStep]:
         if inv[item] >= count:
@@ -123,7 +130,7 @@ class _Planner:
         runs = math.ceil((count - inv[item]) / rule.yields()[item])
         needs = {ingredient: n * runs for ingredient, n in rule.preconditions.get("consumes", {}).items()}
         station = rule.preconditions.get("station")
-        if station:
+        if station and station not in self.stations:
             needs_with_station = {station: 1, **needs}
         else:
             needs_with_station = needs
@@ -153,7 +160,7 @@ class _Planner:
         needs = {ingredient: n * runs for ingredient, n in rule.preconditions.get("consumes", {}).items()}
         station = rule.preconditions.get("station")
         steps = self._gather(
-            {station: 1, **needs} if station else needs, inv, stack, f"could not hold every ingredient for {item} at once"
+            {station: 1, **needs} if station and station not in self.stations else needs, inv, stack, f"could not hold every ingredient for {item} at once"
         )
         fuel, fuel_steps = self._cheapest_fuel(rule.preconditions.get("fuel_any", []), runs, inv, stack)
         steps += fuel_steps
@@ -227,6 +234,29 @@ class _Planner:
             return 0
         ingredients = crafts[0].preconditions.get("consumes", {})
         return 1 + max((self._depth(i, seen | {item}) for i in ingredients), default=0)
+
+
+def withdrawals(plan: list[PlanStep], start: dict[str, int], held: dict[str, int], needs: dict[str, int]) -> dict[str, int]:
+    """How much of each item must come out of the home chest (v3.5d) for `plan`, made from `start` (held plus
+    stored), to leave `needs` held: what the plan draws below what is held, or what the end state is short of
+    the needs, capped at what is stored. All in the planner's names."""
+    low = dict(start)
+    for step in plan:
+        for item in start:
+            low[item] = min(low[item], step.expected_inventory.get(item, 0))
+    final = plan[-1].expected_inventory if plan else start
+
+    result: dict[str, int] = {}
+    for item, have in start.items():
+        stored = have - held.get(item, 0)
+        draw = max(
+            0,
+            have - low[item] - held.get(item, 0),
+            have - final.get(item, 0) + needs.get(item, 0) - held.get(item, 0),
+        )
+        if min(stored, draw) > 0:
+            result[item] = min(stored, draw)
+    return result
 
 
 def _items_per_fuel(fuel: str) -> float | None:
