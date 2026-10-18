@@ -5,6 +5,7 @@ const express = require('express')
 const mineflayer = require('mineflayer')
 const { pathfinder, Movements } = require('mineflayer-pathfinder')
 const { mine } = require('./lib/mine')
+const { attack, validateAttack } = require('./lib/attack')
 const { sprintAllowed } = require('./lib/movements')
 const { craft } = require('./lib/craft')
 const { explore, newSpiral, trackWorldBorder } = require('./lib/explore')
@@ -254,6 +255,7 @@ const validators = {
       ? '"max_distance" must be a positive number'
       : validateProtect(body.protect))
   },
+  attack: validateAttack,
   craft: (body) => {
     if (!isName(body.item)) return '"item" must be a non-empty string'
     if (body.times != null && !(Number.isInteger(body.times) && body.times > 0)) return '"times" must be a positive integer'
@@ -266,7 +268,10 @@ const validators = {
     return validateDigOptions(body) || validateProtect(body.protect)
   },
   look: (body) => {
-    if (!isNameList(body.blocks) || body.blocks.length === 0) return '"blocks" must be a non-empty list of strings'
+    if (body.blocks != null && !isNameList(body.blocks)) return '"blocks" must be a list of strings'
+    if (body.mobs != null && !isNameList(body.mobs)) return '"mobs" must be a list of strings'
+    if (body.mobs?.includes('player')) return '"mobs" cannot contain "player"'
+    if (!body.blocks?.length && !body.mobs?.length) return '"blocks" or "mobs" must be a non-empty list of strings'
     return body.radius != null && !isPositiveNumber(body.radius) ? '"radius" must be a positive number' : validateProtect(body.protect)
   },
   smelt: (body) => {
@@ -422,9 +427,10 @@ app.post('/viewer', async (req, res) => {
 
 action('/observe', validators.none, () => observe())
 action('/mine', validators.mine, async (body, session) => ({ ...await mine(bot, body, session), blocks_walked: walked() }), { cutIn: true })
+action('/attack', validators.attack, async (body, session) => ({ ...await attack(bot, body, { ...session, guard, movements: pvpMovements }), blocks_walked: walked() }), { cutIn: true })
 action('/craft', validators.craft, async (body, session) => ({ ...await craft(bot, body, session), blocks_walked: walked() }), { cutIn: true })
 action('/explore', validators.explore, async (body, session) => ({ ...await explore(bot, session, body), blocks_walked: walked() }), { cutIn: true })
-action('/look', validators.look, (body) => look(bot, body))
+action('/look', validators.look, (body) => look(bot, { ...body, blocks: body.blocks ?? [], mobs: body.mobs ?? [] }))
 action('/smelt', validators.smelt, async (body, session) => ({ ...await smelt(bot, body, session), blocks_walked: walked() }), {
   timeoutMs: (body) => SMELT_TIMEOUT_BASE_MS + SMELT_TIMEOUT_PER_ITEM_MS * (body.times ?? 1),
   cutIn: true
