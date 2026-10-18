@@ -1,5 +1,7 @@
 import json
 import os
+import subprocess
+import sys
 import threading
 import urllib.error
 import urllib.request
@@ -372,6 +374,62 @@ def test_goals_json_previews_build_goals(tmp_path):
         assert goals[broken_id]["preview"] is None
         assert "preview" not in goals[obtain_id]
         assert "preview" not in _goal_lines(tmp_path, "new")[0]  # computed by the panel, never stored
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def _live(root, run, pid, started="2026-10-18T09:00:00"):
+    (root / "runs" / run / "live.json").write_text(json.dumps({"pid": pid, "started": started, "mode": "play"}))
+
+
+def _dead_pid():
+    process = subprocess.Popen([sys.executable, "-c", "pass"])
+    process.wait()
+    return process.pid
+
+
+def test_live_run_beats_newer_goals_file(tmp_path):
+    _two_runs(tmp_path)
+    _live(tmp_path, "old", os.getpid())
+    server = _start_panel(tmp_path)
+    port = server.server_address[1]
+    try:
+        assert _request(port, "POST", "/goals", {"text": "a"})[1]["run"] == "old"
+        assert _request(port, "GET", "/goals.json")[1]["run"] == "old"
+        assert _request(port, "POST", "/goals", {"text": "b", "run": "new"})[1]["run"] == "new"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_dead_or_malformed_live_json_falls_back_to_newest_goals_file(tmp_path):
+    _two_runs(tmp_path)
+    _live(tmp_path, "old", _dead_pid())
+    (tmp_path / "runs" / "new" / "live.json").write_text("{not json")
+    server = _start_panel(tmp_path)
+    port = server.server_address[1]
+    try:
+        assert _request(port, "GET", "/goals.json")[1]["run"] == "new"
+        assert _request(port, "POST", "/goals", {"text": "a"})[1]["run"] == "new"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_several_live_runs_are_ambiguous(tmp_path):
+    _two_runs(tmp_path)
+    _live(tmp_path, "old", os.getpid(), started="2026-10-18T10:00:00")
+    _live(tmp_path, "new", os.getpid(), started="2026-10-18T09:00:00")
+    server = _start_panel(tmp_path)
+    port = server.server_address[1]
+    ambiguous = (409, {"ok": False, "error": "ambiguous_run", "runs": ["old", "new"]})
+    try:
+        assert _request(port, "GET", "/goals.json") == ambiguous
+        assert _request(port, "POST", "/goals", {"text": "a"}) == ambiguous
+        assert _request(port, "POST", "/goals/u001/cancel", {}) == ambiguous
+        assert _request(port, "GET", "/goals.json?run=new")[0] == 200
+        assert _request(port, "POST", "/goals", {"text": "a", "run": "new"})[0] == 201
     finally:
         server.shutdown()
         server.server_close()

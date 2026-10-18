@@ -15,6 +15,7 @@ POST accepts only application/json from the panel's own origin. It binds 127.0.0
 from __future__ import annotations
 
 import json
+import os
 import posixpath
 import re
 from functools import partial
@@ -75,12 +76,38 @@ def list_runs(root: Path) -> list[dict[str, Any]]:
     return sorted(runs, key=lambda run: -run["mtime"])
 
 
-def _find_run(root: Path, requested: Any) -> str | None:
-    """The run to steer: `requested`, else the run whose goals.jsonl changed last (None: there is none).
+def _live_runs(root: Path) -> list[str]:
+    """The runs whose live.json names a running process, newest `started` first (ties by name)."""
+    live = []
+    for path in root.glob("runs/*/live.json"):
+        try:
+            info = json.loads(path.read_text())
+            pid, started = info["pid"], str(info.get("started", ""))
+            if type(pid) is not int or pid <= 0:
+                continue
+            os.kill(pid, 0)
+        except PermissionError:
+            pass  # the process exists, it's just not ours
+        except (OSError, ValueError, KeyError, TypeError):
+            continue  # unreadable, malformed or dead
+        live.append((started, path.parent.name))
+    live.sort(key=lambda item: item[1])
+    live.sort(key=lambda item: item[0], reverse=True)
+    return [name for _, name in live]
 
-    Raises no_live_run for a name that isn't a run directory under runs/.
+
+def _find_run(root: Path, requested: Any) -> str | None:
+    """The run to steer: `requested`, else the one live run, else the run whose goals.jsonl changed last.
+
+    Raises no_live_run for a name that isn't a run directory under runs/, and ambiguous_run when
+    several runs are live and none was requested. None: there is no run to steer.
     """
     if requested in (None, ""):
+        live = _live_runs(root)
+        if len(live) == 1:
+            return live[0]
+        if live:
+            raise _ApiError(409, "ambiguous_run", runs=live)
         newest = max(root.glob("runs/*/goals.jsonl"), key=lambda path: path.stat().st_mtime, default=None)
         return newest.parent.name if newest else None
     valid = isinstance(requested, str) and _RUN_NAME.fullmatch(requested) and requested not in (".", "..")

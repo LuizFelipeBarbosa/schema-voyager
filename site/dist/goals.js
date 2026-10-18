@@ -7,6 +7,10 @@ const SvGoals = (() => {
   const CANCELLABLE = new Set(['submitted', 'queued', 'running', 'awaiting_approval']);
   const SHOWS_REASON = new Set(['failed', 'cancelled', 'unsupported']);
 
+  function ambiguousRunMessage(runs) {
+    return `Several lives are running: ${runs.join(', ')}. Open the panel with ?run=<name>.`;
+  }
+
   function escapeHtml(value) {
     return String(value).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
   }
@@ -35,18 +39,21 @@ const SvGoals = (() => {
   }
 
   // `root` is the mount point. Dependencies are injected so tests can fake them.
-  function createController({ root, fetch, setInterval }) {
+  function createController({ root, fetch, setInterval, pageRun = null }) {
     root.innerHTML = `<div class="goals-form">
         <input class="goals-input" type="text" maxlength="200" placeholder="Give the bot a goal, like: get me 10 torches" aria-label="Goal for the bot" />
         <button class="goals-send">Send</button>
       </div>
+      <div class="goals-run"></div>
       <div class="goals-error" hidden></div>
       <ul class="goals-list"></ul>`;
     const input = root.querySelector('.goals-input');
     const sendButton = root.querySelector('.goals-send');
     const errorLine = root.querySelector('.goals-error');
+    const runLine = root.querySelector('.goals-run');
     const list = root.querySelector('.goals-list');
-    let run = null; // the life of the last GET, sent back with each POST
+    let run = pageRun; // ?run= of the page, else the life of the last GET; sent back with each POST
+    runLine.textContent = 'No live run';
 
     function showError(message) {
       errorLine.textContent = message || '';
@@ -55,8 +62,16 @@ const SvGoals = (() => {
 
     async function refresh() {
       try {
-        const payload = await (await fetch('/goals.json')).json();
-        run = payload.run;
+        const response = await fetch(pageRun ? `/goals.json?run=${encodeURIComponent(pageRun)}` : '/goals.json');
+        const payload = await response.json();
+        if (!response.ok) {
+          // Keep the last list and the form
+          if (payload.error === 'ambiguous_run') showError(ambiguousRunMessage(payload.runs));
+          return;
+        }
+        if (errorLine.textContent.startsWith('Several lives')) showError('');
+        run = pageRun || payload.run;
+        runLine.textContent = payload.run ? `Run: ${payload.run}` : 'No live run';
         list.innerHTML = goalsListHtml(payload);
       } catch (error) {
         // The panel may be restarting; the next poll retries.
@@ -68,6 +83,11 @@ const SvGoals = (() => {
       return { ok: response.ok, body: await response.json().catch(() => ({})) };
     }
 
+    function postErrorMessage(body, fallback) {
+      if (body.error === 'ambiguous_run') return ambiguousRunMessage(body.runs);
+      return body.detail || body.error || fallback;
+    }
+
     async function send() {
       const text = input.value.trim();
       if (!text) return;
@@ -77,7 +97,7 @@ const SvGoals = (() => {
           input.value = '';
           showError('');
         } else {
-          showError(result.body.detail || result.body.error || 'the panel refused the goal');
+          showError(postErrorMessage(result.body, 'the panel refused the goal'));
         }
       } catch (error) {
         showError('could not reach the panel');
@@ -88,7 +108,7 @@ const SvGoals = (() => {
     async function cancel(id) {
       try {
         const result = await post(`/goals/${encodeURIComponent(id)}/cancel`, { run });
-        showError(result.ok ? '' : result.body.detail || result.body.error || 'could not cancel');
+        showError(result.ok ? '' : postErrorMessage(result.body, 'could not cancel'));
       } catch (error) {
         showError('could not reach the panel');
       }
@@ -113,6 +133,11 @@ const SvGoals = (() => {
 if (typeof document !== 'undefined') {
   document.addEventListener('DOMContentLoaded', () => {
     const root = document.getElementById('goals');
-    if (root) SvGoals.createController({ root, fetch: (...args) => fetch(...args), setInterval: (...args) => setInterval(...args) });
+    if (root) SvGoals.createController({
+      root,
+      fetch: (...args) => fetch(...args),
+      setInterval: (...args) => setInterval(...args),
+      pageRun: new URLSearchParams(location.search).get('run'),
+    });
   });
 }
