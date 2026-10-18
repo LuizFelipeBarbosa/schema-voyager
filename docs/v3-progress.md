@@ -39,7 +39,7 @@ pushed to `origin` until the user says so.
 | S02 fix the stuck loops | not started | b | |
 | S03 retest demoted rules | not started | none | |
 | S04 full inventory | not started | a | |
-| S05 contracts for M1 and M2 | not started | none | |
+| S05 contracts for M1 and M2 | running | none | Contracts v3.1 and v3.2, stubs on main |
 | S06 goals you give it | not started | a | |
 | S07 survival | not started | b | |
 | S08 combat and hunting | not started | b | |
