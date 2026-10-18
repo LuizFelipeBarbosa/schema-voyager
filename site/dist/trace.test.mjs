@@ -277,6 +277,23 @@ assert.match(now.goalCardHtml(now.goalStory([userGoal]), { ...lifeRows[2], outco
 const killRule = { action: { type: 'kill', mob: 'cow' }, effects: { killed: true, drops: { beef: 1 }, allowed: { beef: [1, 3], leather: [0, 2] } } };
 assert.equal(now.ruleLabel(killRule), 'kill cow → beef 1-3, leather 0-2');
 
+// Home, chest and composite-goal events (v3.5); a withdraw step is a plain step
+const logText = (event) => now.logLine({ t: 1, ...event })[1];
+assert.equal(logText({ kind: 'stored', items: { coal: 64, dirt: 120 }, free_slots_before: 3, free_slots_after: 9 }), 'Stored coal x64, dirt x120 in the chest');
+assert.equal(logText({ kind: 'home_set', home: { name: 'small house', origin: [4, 76, 31] } }), 'home set · small house at 4 76 31');
+assert.equal(logText({ kind: 'home_placed', station: 'crafting_table', pos: [5, 76, 36] }), 'home crafting table placed at 5 76 36');
+assert.equal(logText({ kind: 'home_placed', pos: [5, 76, 36] }), 'home station placed at 5 76 36');
+assert.match(logText({ kind: 'home_place_failed', station: 'chest', pos: [5, 76, 36], error: 'no_support' }), /home chest not placed at 5 76 36 · no_support/);
+assert.match(logText({ kind: 'home_lost', station: 'furnace', pos: [5, 76, 36] }), /home furnace lost at 5 76 36/);
+assert.equal(logText({ kind: 'goal_children', goal_id: 'u004', children: [{ id: 'u005', label: '8 torches' }, { id: 'u006', label: '4 cooked beef' }] }), 'u004 split into u005 8 torches, u006 4 cooked beef');
+assert.match(logText({ kind: 'goal_replanned', goal_id: 'u004', failed: 'u005', reason: 'no coal', children: [{ id: 'u007', label: 'x' }] }), /u004 replanned after u005 failed \(no coal\) · 1 new children/);
+assert.equal(logText({ kind: 'goal_parent_end', goal_id: 'u004', status: 'done' }), 'u004 done');
+assert.equal(now.logLine({ t: 1, kind: 'goal_parent_end', goal_id: 'u004', status: 'failed' })[0], 'bad');
+const withdrawStep = { kind: 'step', t: 1, index: 3, action: 'withdraw coal x2 from 5 76 36', ok: true, action_obj: { kind: 'withdraw' } };
+assert.match(now.stepLogLine(withdrawStep)[1], /withdraw coal x2 from 5 76 36 → done/);
+assert.match(now.stepHtml(withdrawStep, 'D'), /Done/);
+assert.deepEqual(plain(now.logLine({ t: 1, kind: 'mystery', a: 1 })), ['', 'mystery {"a":1}'], 'unknown events render as before');
+
 console.log('life view ok');
 console.log(`v1 ok: ${v1.length} events identical`);
 console.log('all panel tests passed');

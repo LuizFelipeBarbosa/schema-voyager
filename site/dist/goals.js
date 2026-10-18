@@ -21,21 +21,37 @@ const SvGoals = (() => {
     return `<span class="goal-chip goal-chip-${escapeHtml(shown.replace(/_/g, '-'))}">${escapeHtml(shown.replace(/_/g, ' '))}</span>`;
   }
 
-  function goalRowHtml(goal) {
+  const isReplaced = (goal) => goal.status === 'cancelled' && goal.reason === 'replaced';
+
+  // `children` are the parent's records in its order; replaced ones are dimmed and left out of the count.
+  function goalRowHtml(goal, children = null, isChild = false) {
     const reason = SHOWS_REASON.has(goal.status) && goal.reason ? `<div class="goal-reason">${escapeHtml(goal.reason)}</div>` : '';
     const cancel = CANCELLABLE.has(goal.status) ? `<button class="goal-cancel" data-cancel="${escapeHtml(goal.id)}">Cancel</button>` : '';
-    return `<li class="goal-row">
+    let progress = '';
+    if (children) {
+      const counted = children.filter((child) => !isReplaced(child));
+      const done = counted.filter((child) => child.status === 'done').length;
+      progress = `<span class="goal-progress">${done} of ${counted.length} done</span>`;
+    }
+    const classes = ['goal-row', isChild ? 'goal-child' : '', isChild && isReplaced(goal) ? 'goal-replaced' : ''].filter(Boolean).join(' ');
+    return `<li class="${classes}">
       <span class="goal-id">${escapeHtml(goal.id)}</span>
       <span class="goal-text">${escapeHtml(goal.text)}</span>
-      ${goalChip(goal.status)}${cancel}${reason}
+      ${goalChip(goal.status)}${progress}${cancel}${reason}
     </li>`;
   }
 
-  // Newest first, at most MAX_SHOWN.
+  // Newest first, at most MAX_SHOWN rows not counting children, each parent followed by its children.
   function goalsListHtml(payload) {
-    const goals = ((payload && payload.goals) || []).slice(-MAX_SHOWN).reverse();
-    if (!goals.length) return '<li class="goal-empty">no goals yet</li>';
-    return goals.map(goalRowHtml).join('');
+    const all = (payload && payload.goals) || [];
+    if (!all.length) return '<li class="goal-empty">no goals yet</li>';
+    const byId = new Map(all.map((goal) => [goal.id, goal]));
+    const childrenOf = (goal) => (goal.children || []).map((id) => byId.get(id)).filter(Boolean);
+    const isShownUnderParent = (goal) => Boolean(goal.parent && byId.has(goal.parent));
+    return all.filter((goal) => !isShownUnderParent(goal)).slice(-MAX_SHOWN).reverse().map((goal) => {
+      const children = goal.kind === 'composite' ? childrenOf(goal) : null;
+      return goalRowHtml(goal, children) + (children || []).map((child) => goalRowHtml(child, null, true)).join('');
+    }).join('');
   }
 
   // `root` is the mount point. Dependencies are injected so tests can fake them.

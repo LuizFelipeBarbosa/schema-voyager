@@ -632,7 +632,7 @@ function stepHtml(step, system) {
 }
 
 function exploreSummary(step) {
-  if (['place', 'clear', 'goto'].includes(step.action_obj.kind)) return 'Done';
+  if (['place', 'clear', 'goto', 'withdraw'].includes(step.action_obj.kind)) return 'Done';
   const direction = step.action_obj.direction;
   if (direction === 'up') return 'Climbed back to open sky';
   if (direction) return `Explored ${esc(direction)} (${Math.round(step.travel ? step.travel.distance : 0)} blocks)`;
@@ -714,6 +714,11 @@ function logLine(event) {
   return [tone, text === null ? null : readable(text)];
 }
 
+// A home_* event's station ("crafting_table" -> "crafting table"); `station`, since `kind` is the event's own.
+function homeStation(event) {
+  return (event.station || 'station').replace('_', ' ');
+}
+
 function rawLogLine(event) {
   switch (event.kind) {
     case 'episode_start':
@@ -758,6 +763,22 @@ function rawLogLine(event) {
       return ['', `build ${event.placed}/${event.total}`];
     case 'build_failed':
       return ['bad', `build failed · ${event.reason}`];
+    case 'stored':
+      return ['good', `Stored ${Object.entries(event.items).map(([item, count]) => `${item} x${count}`).join(', ')} in the chest`];
+    case 'home_set':
+      return ['good', `home set · ${event.home.name} at ${event.home.origin.join(' ')}`];
+    case 'home_placed':
+      return ['', `home ${homeStation(event)} placed at ${event.pos.join(' ')}`];
+    case 'home_place_failed':
+      return ['warn', `home ${homeStation(event)} not placed at ${event.pos.join(' ')} · ${event.error}`];
+    case 'home_lost':
+      return ['warn', `home ${homeStation(event)} lost at ${event.pos.join(' ')}`];
+    case 'goal_children':
+      return ['', `${event.goal_id} split into ${event.children.map((child) => `${child.id} ${child.label}`).join(', ')}`];
+    case 'goal_replanned':
+      return ['llm', `${event.goal_id} replanned after ${event.failed} failed (${event.reason}) · ${event.children.length} new children`];
+    case 'goal_parent_end':
+      return [event.status === 'done' ? 'good' : 'bad', `${event.goal_id} ${event.status}`];
     case 'repair':
       return ['llm', `Claude repair · ${event.rule} needs ${event.dead_items.join(', ')} · proposed ${event.proposed.length}`];
     default: {
