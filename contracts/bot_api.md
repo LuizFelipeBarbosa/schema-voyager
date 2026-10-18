@@ -422,3 +422,10 @@ v1 codes, plus `hazard`, `quarantined` and `missing_furnace`.
   from behind and above; `first` = the bot's eyes), answers
   `{"ok": true, "mode": "..."}`. Doesn't take the action lock. `VIEWER_MODE`
   (env, default `third`) sets the mode at start.
+
+## v3.0: `/explore` reports the attempt that moved (lane `explore-took`)
+
+- A directional `/explore` (`{"direction": "NE", ...}`) answers `took: {"direction", "distance"} | null`: the
+  attempt that moved the bot 1 block or more, out of the request, the 10-block hop the same way and the two
+  neighbouring directions (v3 explorefast), with the distance that attempt asked for. `null` when no attempt moved.
+  Blind (spiral) and `up` explores don't send it. Tolerant: never part of a check.
