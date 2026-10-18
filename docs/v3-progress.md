@@ -36,7 +36,7 @@ pushed to `origin` until the user says so.
 | Session | Status | Instance | Owner notes |
 |---|---|---|---|
 | S01 setup and baseline | done | b | Baseline 342/103/panel; explorefast merged (bot 108); live tests via pre-approved forms; not pushed |
-| S02 fix the stuck loops | not started | b | |
+| S02 fix the stuck loops | in progress | b | v3.0a/b/d contract 7524cfc; tag `v2-final` (local) at 661422f |
 | S03 retest demoted rules | not started | none | |
 | S04 full inventory | not started | a | |
 | S05 contracts for M1 and M2 | running | none | Contracts v3.1 and v3.2, stubs on main |
@@ -60,6 +60,7 @@ pushed to `origin` until the user says so.
   4 s, where the old code waited 30 s (preview-2005 g021 step 8).
 - 23:15 S01 81a9fc1 merge `v3/explorefast` (rebased c25e121), on the offline tests: pytest 342, bot 108 (5 new),
   panel pass. The live run shows no regression. The directional fallbacks are not tested live.
+- 23:23 S02 7524cfc contract v3.0a/b/d (blocked rules, repairs, kept items, explore `took`); local tag `v2-final` at 661422f.
 
 ## S01 setup and baseline (done 2026-10-17)
 
