@@ -67,7 +67,7 @@ test('validateTactics: [] is fine; a non-array, non-string, unknown or repeated 
   const registry = { a: () => ({}), b: () => ({}) }
   assert.equal(validateTactics(['b', 'a'], registry), null)
   assert.match(validateTactics(['a', 'b', 'a'], registry), /repeated/)
-  assert.deepEqual([...TACTICS], ['crit'])
+  assert.deepEqual([...TACTICS], ['wtap', 'crit'])
   assert.deepEqual([...DEFAULT_TACTICS], [])
 })
 
@@ -408,4 +408,62 @@ test('baseline: without crit nothing jumps', async (t) => {
   await tickBot(t, bot, 20)
   assert.ok(!bot.controls.jump)
   tactics.detach()
+})
+
+test('wtap: it is registered, valid with crit in either order, and names stay as given', () => {
+  assert.ok(TACTICS.includes('wtap') && TACTICS.includes('crit'))
+  assert.equal(validateTactics(['crit', 'wtap']), null)
+  assert.equal(validateTactics(['wtap', 'crit']), null)
+  const { bot, pvp } = fightFixture()
+  assert.deepEqual(createTactics(bot, ['crit', 'wtap'], { pvp }).names, ['crit', 'wtap'])
+})
+
+test('wtap: forward and sprint are released for 3 ticks after a strike, then pressed again (a fresh sprint)', async (t) => {
+  fakeTimers(t)
+  const { bot, pvp, target, calls, attacks } = fightFixture({ distance: 2 })
+  const tactics = createTactics(bot, ['wtap'], { pvp })
+  tactics.attach(target)
+  await tickBot(t, bot, 1) // the first strike: nothing struck before, so the mover has pressed in
+  assert.equal(attacks(), 1)
+  assert.equal(bot.controls.forward, true)
+  assert.equal(bot.controls.sprint, true)
+  calls.length = 0
+  for (let i = 0; i < 3; i++) {
+    await tickBot(t, bot, 1)
+    assert.equal(bot.controls.forward, false, `released on tick ${i + 1}`)
+    assert.equal(bot.controls.sprint, false, `released on tick ${i + 1}`)
+  }
+  await tickBot(t, bot, 1) // outside the window, 2 blocks from the target: still walking in
+  assert.equal(bot.controls.forward, true)
+  assert.equal(bot.controls.sprint, true)
+  assert.deepEqual(calls.filter((call) => call.startsWith('control:sprint')), ['control:sprint:false', 'control:sprint:true'])
+  tactics.detach()
+})
+
+test('wtap: the safety check still releases an unsafe step', async (t) => {
+  fakeTimers(t)
+  const { bot, pvp, target } = fightFixture({ distance: 3.5, blocks: floorBlocks(['0,9,-1', '0,9,-2', '0,9,-3']) })
+  const tactics = createTactics(bot, ['wtap'], { pvp })
+  tactics.attach(target)
+  await tickBot(t, bot, 5)
+  assert.ok(!bot.controls.forward)
+  assert.ok(!bot.controls.sprint)
+  tactics.detach()
+})
+
+test('wtap + crit: the hooks run in REGISTRY order, so both name orders apply the same controls', async (t) => {
+  fakeTimers(t)
+  const run = async (names) => {
+    const { bot, pvp, target, calls } = fightFixture()
+    bot.controlState = bot.controls
+    const tactics = createTactics(bot, names, { pvp })
+    tactics.attach(target)
+    await tickBot(t, bot, 30)
+    tactics.detach()
+    return calls
+  }
+  const crit = await run(['crit', 'wtap'])
+  assert.deepEqual(await run(['wtap', 'crit']), crit)
+  assert.ok(crit.includes('control:jump:true'), 'crit still jumps')
+  assert.ok(!crit.slice(0, crit.indexOf('control:jump:true')).includes('control:sprint:true'), 'crit keeps sprint off up to its jump')
 })
