@@ -90,6 +90,7 @@ pushed to `origin` until the user says so.
 - 01:12 S06 3649653 contract v3.1 extended (one goal ending `_end_goal`, a user goal's budget and clock, `wanted` keeps done user goals, `goal_label`, failure reasons, idle never observes); stubs `goal_label`, `run_schemavoyager(goal=)`, `Episode.finish(announce=)`. pytest 455, bot 126, panel pass.
 - 01:18 S03 e5602f7 contract v3.0f (retesting a demoted rule); ae4cf43 merge `v3/retest-store`: `SchemaStore.retest` adds `<base>.retest@<world>` (source `retest`, `revision_of` the original, empty evidence, current epoch) whose replay starts at `Rule.since_seq`; `store.epochs` untouched. pytest 568, bot 126, panel pass.
 - 01:24 S03 e66b334 merge `v3/retest-life`: `_repair_dead_ingredients` first retests the demoted producer (most confirmations) of an item nothing usable produces, in passes, once per rule; `retest` events (`started`/`match`/`mismatch`) and `"retests"` in the next goal's record via `_log_unreported`/`_attach_unreported`; `retests` in `life_state.json`; `change_report` (e) counts a retest's repeat, (b) reports its revise calls. pytest 611, bot 137, panel and goals pass.
+- 01:25 S07 036a002 plugins (`mineflayer-pvp` 1.3.2, `mineflayer-armor-manager` 2.0.1, `mineflayer-auto-eat` 3.3.6); 3ccd26a contract changes (guard aborts leave windows to the handler, handlers stop on `session.signal`, counted `hold()`, `MAX_INTERRUPTS`, v3.2i simulator); f21cfbf merge `v3/entities-bot`: `nearby_entities` on `/observe` and `/status`. pytest 611, bot 144, panel pass.
 
 ## S01 setup and baseline (done 2026-10-17)
 
