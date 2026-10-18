@@ -153,6 +153,8 @@ pushed to `origin` until the user says so.
 - 09:07 S12 66317a1 merge `v3/station-bot` (`/craft` and `/smelt` take `station` and `protect`; held stations placed outside protected boxes; home station walked to and used in place; craft no longer reports a dug-up remembered table as a gain; architect's fix: one walking-movements helper exported from `goto.js`). bot 450.
 - 09:10 S12 ff7fcb0 merge `v3/composite-life` (children, one replan, parent endings and settling in `life.py`; architect's fix: `mark` updates fields in the same status, so a replanned parent stays `running`). pytest 1307.
 - 09:12 S12 b6af8a6 merge `v3/composite-panel` (children under their parent with "N of M done"; trace lines for `withdraw`, `stored`, `home_*`, `goal_children`, `goal_replanned`, `goal_parent_end`; architect's fix: home events carry `station`, not `kind`). pytest 1307 (1 skipped), bot 450, panel pass; contract v3.5 clarified from the lanes' notes.
+- S11 live `runs/v3-duel-aa2` (A/A with `start_at`, 40 duels, 0 invalid): **A 51.2% [36.3, 65.9]**, 7 to 6, 27 double KOs; by bot 4/20 and 3/20, by side 4/20 and 3/20. The setup is unbiased.
+- S11 live `runs/v3-duel-crit` (crit vs baseline, 40 duels, 0 invalid): **crit 93.8% [81.8, 98.0], KEPT** (37 wins, 2 losses, 1 draw; by bot 18/20 and 19/20, by side 19/20 and 18/20). Only 41 of crit's 251 hits were crits (about 1 a duel): most of the gain is the shield's. Striking on its own rhythm, the crit bot has its shield up when the baseline strikes (it blocked 5 strikes a duel, the baseline 0.6), where two baselines strike in the same tick with both shields down. Best set: `[crit]`.
 
 ## S01 setup and baseline (done 2026-10-17)
 
