@@ -2,7 +2,7 @@
 // if none is near, like the crafting table), wait for the output, take
 // everything back, and dig the furnace back up. See contracts/bot_api.md.
 
-const { forgetStanding, placeHeldOrUseHome, reachStation, rememberStanding, retrieveStation } = require('./station')
+const { forgetStanding, placeHeldOrUseHome, reachStation, rememberStanding, retrieveStation, withoutLateNicheDrops } = require('./station')
 const { withTimeout } = require('./grid')
 const {
   countDelta, inventoryCounts, resyncWindow, settleInventory, sleepTicks
@@ -76,9 +76,10 @@ async function smelt (bot, { ingredient, item, times = 1, fuel, station = null, 
     tools_broken: [],
     travel: emptyTravel()
   }
+  let nicheLateDrops = []
   const finish = (error, extra = {}) => {
     const inventory = inventoryCounts(bot)
-    const delta = countDelta(before, inventory)
+    const delta = withoutLateNicheDrops(bot, countDelta(before, inventory), nicheLateDrops)
     if (furnaceWasRemembered && delta.furnace === 1) delete delta.furnace // an earlier action's furnace, dug up now
     return {
       ok: !error,
@@ -102,13 +103,19 @@ async function smelt (bot, { ingredient, item, times = 1, fuel, station = null, 
   let furnace = reached?.station
   let placedPos = furnaceWasRemembered ? furnace.position : null // a furnace to dig up afterwards
   if (!furnace) {
-    const acquired = await placeHeldOrUseHome(bot, 'furnace', { station, protect, episode, signal })
+    const acquired = await placeHeldOrUseHome(bot, 'furnace', { station, protect, episode, tracker, signal })
     if (acquired.error) {
       const { error, ...extra } = acquired
       return finish(error, extra)
     }
     furnace = acquired.station
     placedPos = acquired.placedPos
+    if (acquired.niche) {
+      result.niche = acquired.niche
+      nicheLateDrops = acquired.nicheLateDrops
+      result.travel = acquired.travel
+      before = acquired.held // the niche's drop is travel's: held before the step, not its gain
+    }
     if (acquired.usedHome) {
       result.used_home_station = true
       result.travel = acquired.travel

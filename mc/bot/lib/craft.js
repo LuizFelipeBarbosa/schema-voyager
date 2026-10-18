@@ -5,7 +5,7 @@
 // fills the grid itself. See contracts/bot_api.md.
 
 const { clearCraftingGrids, craftMixedOnce, planMixedGrid, slotAlternatives } = require('./grid')
-const { acquireTable, forgetStanding, rememberStanding, retrieveStation } = require('./station')
+const { acquireTable, forgetStanding, rememberStanding, retrieveStation, withoutLateNicheDrops } = require('./station')
 const { emptyTravel } = require('./travel')
 const { countDelta, heldOutsideInventory, inventoryCounts, settleInventory } = require('./world')
 
@@ -17,7 +17,7 @@ async function craft (bot, { item: itemName, times = 1, station = null, protect 
   // Items stranded in a grid by an earlier action would show up as a gain
   await clearCraftingGrids(bot)
   await settleInventory(bot)
-  const before = inventoryCounts(bot)
+  let before = inventoryCounts(bot)
   tracker.log.setPhase('step') // a craft has no travel: its step starts now
   const result = {
     item: itemName,
@@ -29,9 +29,10 @@ async function craft (bot, { item: itemName, times = 1, station = null, protect 
     travel: emptyTravel()
   }
   let tableWasRemembered = false
-  // the table of an earlier action, dug up now, is not this step's gain
+  let nicheLateDrops = []
+  // the table of an earlier action, dug up now, is not this step's gain, nor is a niche drop picked up late
   const inventoryDelta = () => {
-    const delta = countDelta(before, inventoryCounts(bot))
+    const delta = withoutLateNicheDrops(bot, countDelta(before, inventoryCounts(bot)), nicheLateDrops)
     if (tableWasRemembered && delta.crafting_table === 1) delete delta.crafting_table
     return delta
   }
@@ -59,12 +60,17 @@ async function craft (bot, { item: itemName, times = 1, station = null, protect 
   let placedTablePos = null
   if ((recipe || mixedPlan.recipe).requiresTable) {
     result.used_table = true
-    const acquired = await acquireTable(bot, { station, protect, episode, signal })
+    const acquired = await acquireTable(bot, { station, protect, episode, tracker, signal })
     if (acquired.error) {
       const { error, ...extra } = acquired
       return finish(error, extra)
     }
     if (acquired.travel) result.travel = acquired.travel
+    if (acquired.niche) {
+      result.niche = acquired.niche
+      nicheLateDrops = acquired.nicheLateDrops
+      before = acquired.held // the niche's drop is travel's: held before the step, not its gain
+    }
     result.used_home_station = Boolean(acquired.usedHome)
     table = acquired.table
     placedTablePos = acquired.placedPos

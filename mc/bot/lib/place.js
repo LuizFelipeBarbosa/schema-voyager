@@ -402,6 +402,6 @@ async function clear (bot, body, { episode, tracker, signal = null }) {
 }
 
 module.exports = {
-  StanceGoal, checkClear, checkPlace, clear, fastestTool, isFreeToPlace, keepOutExclusion, place, scaffoldNamesFor,
-  supportFaces, validateClear, validatePlace
+  MAX_DIG_MS, StanceGoal, checkClear, checkPlace, clear, fastestTool, isFreeToPlace, keepOutExclusion, place, recentre,
+  scaffoldNamesFor, supportFaces, validateClear, validatePlace
 }
