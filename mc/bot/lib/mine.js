@@ -42,10 +42,12 @@ function parseRequest (body) {
   }
 }
 
-// `session`: {episode, tracker, unreachable}; episode.skippedTargets holds the
+// `session`: {episode, tracker, unreachable, signal}; an abort throws
+// `signal.reason` and marks no target. episode.skippedTargets holds the
 // failed target positions (Vec3#toString keys), `unreachable` the memory that
 // outlives episodes.
-async function mine (bot, body, { episode, tracker, unreachable }) {
+async function mine (bot, body, { episode, tracker, unreachable, signal = null }) {
+  signal?.throwIfAborted()
   const { blockNames, tool, digThrough, maxDistance, scaffold, v2 } = parseRequest(body)
   const startSeq = tracker.log.lastSeq()
   const before = inventoryCounts(bot)
@@ -92,6 +94,7 @@ async function mine (bot, body, { episode, tracker, unreachable }) {
     if (toolItem) await bot.equip(toolItem, 'hand')
     else await emptyHand(bot)
   } catch (err) {
+    if (signal?.aborted) throw signal.reason
     return finish('dig_failed', `could not set the held item: ${err.message}`)
   }
 
@@ -114,8 +117,8 @@ async function mine (bot, body, { episode, tracker, unreachable }) {
       const timeoutMs = Math.min(limits.attemptMs, remainingMs)
       reached = digThrough
         ? await withDiggingMovements(bot, { scaffoldNames: scaffold, protectedBlock: targetPos },
-          () => gotoGoal(bot, new GoalBesideBlock(targetPos), timeoutMs, { failFast: limits.failFast }))
-        : await gotoGoal(bot, new goals.GoalLookAtBlock(targetPos, bot.world, { reach: DIG_REACH }), timeoutMs, { failFast: limits.failFast })
+          () => gotoGoal(bot, new GoalBesideBlock(targetPos), timeoutMs, { failFast: limits.failFast, signal }))
+        : await gotoGoal(bot, new goals.GoalLookAtBlock(targetPos, bot.world, { reach: DIG_REACH }), timeoutMs, { failFast: limits.failFast, signal })
       if (reached) {
         await recording.settle()
         break
@@ -138,11 +141,14 @@ async function mine (bot, body, { episode, tracker, unreachable }) {
     try {
       await reequip(bot, tool)
     } catch (err) {
+      if (signal?.aborted) throw signal.reason
       return finish('dig_failed', `could not set the held item: ${err.message}`)
     }
     const standingOnTarget = bot.entity.position.floored().offset(0, -1, 0).equals(targetPos)
     if (standingOnTarget) return giveUpOnTarget('unreachable', 'standing on the target')
   }
+
+  signal?.throwIfAborted()
 
   // The step starts here.
   pickupBase = v2 ? inventoryCounts(bot) : before
@@ -168,6 +174,7 @@ async function mine (bot, body, { episode, tracker, unreachable }) {
     watcher.stop()
     stopWatchingInterference()
     confirmation.stop()
+    if (signal?.aborted) throw signal.reason
     return giveUpOnTarget('dig_failed', err.message)
   }
   // Mineflayer marks the block as air locally when its dig timer ends; a
@@ -180,7 +187,7 @@ async function mine (bot, body, { episode, tracker, unreachable }) {
   result.drops = drops.counts
   result.block_removed = confirmed && bot.blockAt(targetPos)?.name !== targetName
 
-  await pickUpEntities(bot, drops.entities)
+  await pickUpEntities(bot, drops.entities, { signal })
   await settleInventory(bot)
   if (!result.block_removed) {
     return giveUpOnTarget('dig_failed', confirmed ? 'block still present after dig' : 'no server block update within 2 s')

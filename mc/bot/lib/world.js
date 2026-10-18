@@ -213,11 +213,18 @@ function stopMoving (bot) {
 // the same way the pathfinder does (feet block, or one above on slabs).
 // (The pathfinder already rejects on 'noPath'.) With `failFast`, the attempt
 // also ends when the bot has neither moved a block nor been digging for
-// `failFast.stallMs`.
-async function gotoGoal (bot, goal, timeoutMs = PATH_TIMEOUT_MS, { failFast = null } = {}) {
+// `failFast.stallMs`. With `signal`, an abort stops the walk and throws
+// `signal.reason` (never a false return: a cancelled walk is not unreachable).
+async function gotoGoal (bot, goal, timeoutMs = PATH_TIMEOUT_MS, { failFast = null, signal = null } = {}) {
+  signal?.throwIfAborted()
   let timer = null
   let stallCheck = null
+  let onAbort = null
   const giveUp = new Promise((resolve, reject) => {
+    if (signal) {
+      onAbort = () => reject(signal.reason)
+      signal.addEventListener('abort', onAbort, { once: true })
+    }
     timer = setTimeout(() => reject(new Error(`path timeout after ${timeoutMs} ms`)), timeoutMs)
     if (!failFast) return
     let markedAt = Date.now()
@@ -235,9 +242,11 @@ async function gotoGoal (bot, goal, timeoutMs = PATH_TIMEOUT_MS, { failFast = nu
     await Promise.race([bot.pathfinder.goto(goal), giveUp])
   } catch (err) {
     stopMoving(bot)
+    if (signal?.aborted) throw signal.reason
   } finally {
     clearTimeout(timer)
     clearInterval(stallCheck)
+    signal?.removeEventListener('abort', onAbort)
   }
   const feet = bot.entity.position.floored()
   return goal.isEnd(feet) || goal.isEnd(feet.offset(0, 1, 0))
@@ -334,14 +343,16 @@ class GoalPickupRange extends goals.Goal {
 }
 
 // Tolerant pickup: walk next to each entity that still exists and wait up to
-// 1 s for it to be collected; two retries over whatever is left.
-async function pickUpEntities (bot, entities) {
+// 1 s for it to be collected; two retries over whatever is left. An abort
+// throws `signal.reason` before the next walk.
+async function pickUpEntities (bot, entities, { signal = null } = {}) {
   for (let attempt = 0; attempt < 3; attempt++) {
     const remaining = entities.filter((entity) => bot.entities[entity.id])
     if (remaining.length === 0) return
     for (const entity of remaining) {
+      signal?.throwIfAborted()
       if (!bot.entities[entity.id]) continue
-      await gotoGoal(bot, new GoalPickupRange(entity.position), 10000)
+      await gotoGoal(bot, new GoalPickupRange(entity.position), 10000, { signal })
       await waitUntilGone(bot, entity, 1000)
     }
   }

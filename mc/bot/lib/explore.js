@@ -50,7 +50,7 @@ function hasBarrierAt (bot, feet) {
   return [feet, feet.offset(0, 1, 0)].some((pos) => bot.blockAt(pos)?.name === 'barrier')
 }
 
-async function exploreSpiral (bot, episode) {
+async function exploreSpiral (bot, episode, { signal }) {
   const { from, direction } = advanceSpiral(episode.spiral)
   const origin = episode.origin.floored()
 
@@ -64,7 +64,7 @@ async function exploreSpiral (bot, episode) {
 
   // Both attempts share the 30 s budget.
   const start = bot.entity.position.clone()
-  const reached = await walkTo(bot, target, Date.now() + EXPLORE_TIMEOUT_MS)
+  const reached = await walkTo(bot, target, Date.now() + EXPLORE_TIMEOUT_MS, { signal })
   const end = bot.entity.position
   const moved = new Vec3(end.x - start.x, 0, end.z - start.z).norm()
   const error = !reached && moved < 1 ? 'unreachable' : null
@@ -114,12 +114,12 @@ function advanceLimit (bot, border, from, unit, maxBlocks) {
 // Exact waypoint first; if it is blocked (say, a tree trunk), anywhere within
 // 2 blocks of it. Both fail fast, and a stalled first attempt is not followed by
 // a second one (the bot is stuck, not blocked by one cell).
-async function walkTo (bot, target, deadline) {
+async function walkTo (bot, target, deadline, { signal }) {
   const startedAt = Date.now()
-  if (await gotoGoal(bot, new goals.GoalXZ(target.x, target.z), deadline - startedAt, { failFast: FAIL_FAST })) return true
+  if (await gotoGoal(bot, new goals.GoalXZ(target.x, target.z), deadline - startedAt, { failFast: FAIL_FAST, signal })) return true
   const stalled = Date.now() - startedAt >= STALL_MS
   return !stalled && Date.now() < deadline &&
-    await gotoGoal(bot, new goals.GoalNearXZ(target.x, target.z, 2), deadline - Date.now(), { failFast: FAIL_FAST })
+    await gotoGoal(bot, new goals.GoalNearXZ(target.x, target.z, 2), deadline - Date.now(), { failFast: FAIL_FAST, signal })
 }
 
 // Pure: the two compass directions next to `direction`, counter-clockwise first.
@@ -148,9 +148,10 @@ function hasTimeForAttempt (elapsedMs) {
 // Runs the attempts in order until one moves the bot 1 block or more; resolves to
 // that attempt ({direction, distance}), or null when none did. `tryOne(attempt, index)`
 // resolves to the blocks the attempt moved the bot, or null when there is no time
-// left for it, which ends the run.
-async function firstAttemptThatMoved (attempts, tryOne) {
+// left for it, which ends the run. An abort throws `signal.reason` before the next attempt.
+async function firstAttemptThatMoved (attempts, tryOne, { signal = null } = {}) {
   for (const [index, attempt] of attempts.entries()) {
+    signal?.throwIfAborted()
     const moved = await tryOne(attempt, index)
     if (moved === null) return null
     if (moved >= 1) return attempt
@@ -179,18 +180,18 @@ function standableNeighbours (bot, feet, dyMin, dyMax) {
 // A bot that cannot walk off: no standable cell next to it within a block of its
 // own level (a 1x1 hole it dug, a pillar it placed). First steps to a standable
 // cell (any drop of up to 4 blocks), else, when it may dig, climbs towards open sky.
-async function getOutOfEnclosure (bot, { digThrough, scaffold }) {
+async function getOutOfEnclosure (bot, { digThrough, scaffold, signal }) {
   const feet = bot.entity.position.floored()
   if (standableNeighbours(bot, feet, -1, 1).length > 0) return
   const [exit] = standableNeighbours(bot, feet, -4, 1)
   if (exit) {
-    await gotoGoal(bot, new goals.GoalNear(exit.x, exit.y, exit.z, 1), STALL_MS * 2, { failFast: FAIL_FAST })
+    await gotoGoal(bot, new goals.GoalNear(exit.x, exit.y, exit.z, 1), STALL_MS * 2, { failFast: FAIL_FAST, signal })
   } else if (digThrough && !hasOpenSky(bot)) {
-    await exploreUp(bot, { scaffold })
+    await exploreUp(bot, { scaffold, signal })
   }
 }
 
-async function exploreDirection (bot, { border, tracker }, { direction, distance, digThrough, scaffold }) {
+async function exploreDirection (bot, { border, tracker, signal }, { direction, distance, digThrough, scaffold }) {
   const startedAt = Date.now()
   const start = bot.entity.position.clone()
   const deadline = startedAt + EXPLORE_TIMEOUT_MS
@@ -199,12 +200,13 @@ async function exploreDirection (bot, { border, tracker }, { direction, distance
     const legsStart = bot.entity.position.clone()
     let progress = 0
     while (progress < legsDistance && Date.now() < deadline) {
+      signal?.throwIfAborted()
       const from = bot.entity.position.clone()
       const leg = advanceLimit(bot, border, from, unit, Math.min(LEG_BLOCKS, Math.ceil(legsDistance - progress)))
       if (leg.stoppedBy === 'lava') tracker.log.record('hazard', { kind: 'lava', position: leg.position })
       if (leg.blocks < 1) return
       const target = from.floored().offset(Math.round(unit.x * leg.blocks), 0, Math.round(unit.z * leg.blocks))
-      await walkTo(bot, target, deadline)
+      await walkTo(bot, target, deadline, { signal })
       const now = bot.entity.position
       progress = (now.x - legsStart.x) * unit.x + (now.z - legsStart.z) * unit.z
       if (horizontalDistance(from, now) < 1) return
@@ -218,9 +220,9 @@ async function exploreDirection (bot, { border, tracker }, { direction, distance
       const attemptStart = bot.entity.position.clone()
       await walkLegs(directionVector(attempt.direction), attempt.distance)
       const moved = horizontalDistance(attemptStart, bot.entity.position)
-      if (moved < 1 && index === 0) await getOutOfEnclosure(bot, { digThrough, scaffold })
+      if (moved < 1 && index === 0) await getOutOfEnclosure(bot, { digThrough, scaffold, signal })
       return moved
-    })
+    }, { signal })
   }
   if (digThrough) await withDiggingMovements(bot, { scaffoldNames: scaffold }, tryAttempts)
   else await tryAttempts()
@@ -233,14 +235,15 @@ async function exploreDirection (bot, { border, tracker }, { direction, distance
 // block of the column, digging up and pillaring with `scaffold` blocks only (never down:
 // DiggingMovements). A leg that ends without gaining height ends the climb,
 // since the pathfinder found no way (or would have to break next to a liquid).
-async function exploreUp (bot, { scaffold }) {
+async function exploreUp (bot, { scaffold, signal }) {
   const startY = bot.entity.position.y
   const deadline = Date.now() + CLIMB_TIMEOUT_MS
   const climb = async () => {
     while (!hasOpenSky(bot) && Date.now() < deadline) {
+      signal?.throwIfAborted()
       const legStartY = bot.entity.position.y
       const column = bot.entity.position.floored()
-      await gotoGoal(bot, new goals.GoalBlock(column.x, skyLevel(bot), column.z), deadline - Date.now(), { failFast: FAIL_FAST })
+      await gotoGoal(bot, new goals.GoalBlock(column.x, skyLevel(bot), column.z), deadline - Date.now(), { failFast: FAIL_FAST, signal })
       if (bot.entity.position.y - legStartY < 1) return
     }
   }
@@ -250,17 +253,18 @@ async function exploreUp (bot, { scaffold }) {
   return { ok: !error, error, position: positionOf(bot), sky }
 }
 
-// `session`: {episode, tracker, border}. The v1 fields come first; `travel`
+// `session`: {episode, tracker, border, signal}; an abort throws `signal.reason`
+// out of whichever walk, leg or climb is running. The v1 fields come first; `travel`
 // covers the whole walk, which is all travel (nothing follows it).
 async function explore (bot, session, body = {}) {
-  const { episode } = session
+  const { episode, signal = null } = session
   const recording = recordTravel(bot, episode)
   let outcome = null
   let travel = null
   try {
     const scaffold = Array.isArray(body.scaffold) ? body.scaffold : []
     if (body.direction === 'up') {
-      outcome = await exploreUp(bot, { scaffold })
+      outcome = await exploreUp(bot, { scaffold, signal })
     } else if (body.direction) {
       outcome = await exploreDirection(bot, session, {
         direction: body.direction,
@@ -269,7 +273,7 @@ async function explore (bot, session, body = {}) {
         scaffold
       })
     } else {
-      outcome = await exploreSpiral(bot, episode)
+      outcome = await exploreSpiral(bot, episode, { signal })
     }
   } finally {
     travel = recording.finish()

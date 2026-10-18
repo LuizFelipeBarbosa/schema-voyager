@@ -5,11 +5,15 @@
 // fills the grid itself. See contracts/bot_api.md.
 
 const { clearCraftingGrids, craftMixedOnce, planMixedGrid, slotAlternatives } = require('./grid')
-const { acquireTable, retrieveStation } = require('./station')
+const { acquireTable, forgetStanding, rememberStanding, retrieveStation } = require('./station')
 const { emptyTravel } = require('./travel')
 const { countDelta, heldOutsideInventory, inventoryCounts, settleInventory } = require('./world')
 
-async function craft (bot, { item: itemName, times = 1 }, { tracker }) {
+// `session`: {tracker, episode, signal}. An abort throws `signal.reason`; a
+// table the bot placed (or must still dig up) is then remembered in the
+// episode instead of being dug up.
+async function craft (bot, { item: itemName, times = 1 }, { tracker, episode = null, signal = null }) {
+  signal?.throwIfAborted()
   // Items stranded in a grid by an earlier action would show up as a gain
   await clearCraftingGrids(bot)
   await settleInventory(bot)
@@ -39,12 +43,21 @@ async function craft (bot, { item: itemName, times = 1 }, { tracker }) {
 
   let table = null
   let placedTablePos = null
+  let tableWasRemembered = false
   if ((recipe || mixedPlan.recipe).requiresTable) {
     result.used_table = true
-    const acquired = await acquireTable(bot)
+    const acquired = await acquireTable(bot, { episode, signal })
     if (acquired.error) return finish(acquired.error, acquired.detail ? { detail: acquired.detail } : {})
     table = acquired.table
     placedTablePos = acquired.placedPos
+    tableWasRemembered = acquired.remembered
+  }
+
+  // Leaves the way an abort requires: no window left open, the table standing.
+  const abandon = () => {
+    if (bot.currentWindow) bot.closeWindow(bot.currentWindow)
+    if (placedTablePos && episode) rememberStanding(episode, 'crafting_table', placedTablePos)
+    throw signal.reason
   }
 
   // One run at a time: Mineflayer's own multi-run craft waits on the output
@@ -53,20 +66,31 @@ async function craft (bot, { item: itemName, times = 1 }, { tracker }) {
   let craftError = null
   try {
     for (let run = 0; run < times; run++) {
+      signal?.throwIfAborted()
       if (recipe) await bot.craft(recipe, 1, table)
       else await craftMixedOnce(bot, table, itemName)
       await clearCraftingGrids(bot)
     }
   } catch (err) {
+    if (signal?.aborted) abandon()
     craftError = err.message
   }
   await clearCraftingGrids(bot)
   if (placedTablePos) {
-    const { retrieved, toolsBroken } = await retrieveStation(bot, placedTablePos, 'crafting_table', before.crafting_table || 0, {
-      onDrop: (entity) => tracker.ownDrops.add(entity.id)
-    })
-    result.table_retrieved = retrieved
-    result.tools_broken = toolsBroken
+    // a remembered table is not in the inventory yet, so retrieving it adds one
+    const countBefore = (before.crafting_table || 0) + (tableWasRemembered ? 1 : 0)
+    try {
+      const { retrieved, toolsBroken } = await retrieveStation(bot, placedTablePos, 'crafting_table', countBefore, {
+        onDrop: (entity) => tracker.ownDrops.add(entity.id),
+        signal
+      })
+      result.table_retrieved = retrieved
+      result.tools_broken = toolsBroken
+    } catch (err) {
+      if (signal?.aborted) abandon()
+      throw err
+    }
+    if (result.table_retrieved && episode) forgetStanding(episode, placedTablePos)
   }
   await settleInventory(bot)
   if (craftError && !recipe) {
@@ -77,6 +101,7 @@ async function craft (bot, { item: itemName, times = 1 }, { tracker }) {
 
   const delta = countDelta(before, inventoryCounts(bot))
   if (result.table_retrieved === false && delta.crafting_table === -1) delete delta.crafting_table // the placed table is left standing
+  if (tableWasRemembered && delta.crafting_table === 1) delete delta.crafting_table // an earlier action's table, dug up now
   if (!isWholeRuns(delta, itemName, times, bot.recipesAll(itemInfo.id, null, true), bot.registry)) {
     return finish('craft_failed', { detail: 'partial_delta' })
   }
