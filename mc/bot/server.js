@@ -22,6 +22,7 @@ const { attachEventTracker, createEventLog } = require('./lib/events')
 const { attachChatCommands } = require('./lib/chat_commands')
 const { attachSurvival } = require('./lib/survival')
 const { createFollow, validateFollow } = require('./lib/follow')
+const { DUEL_TIMEOUT_S, runDuel, validateDuel } = require('./lib/duel')
 const { MODES, createGuard } = require('./lib/guard')
 const { createActionLock } = require('./lib/action_lock')
 const { DIRECTIONS } = require('./lib/geometry')
@@ -453,6 +454,25 @@ app.post('/viewer', async (req, res) => {
 action('/observe', validators.none, () => observe())
 action('/mine', validators.mine, async (body, session) => ({ ...await mine(bot, body, session), blocks_walked: walked() }), { cutIn: true })
 action('/attack', validators.attack, async (body, session) => ({ ...await attack(bot, body, { ...session, guard, movements: pvpMovements }), blocks_walked: walked() }), { cutIn: true })
+// A duel runs under the action lock; /duel/stop is no action, so it answers while the duel holds the lock.
+let duelStop = null // the running duel's AbortController, or null
+action('/duel', validateDuel, async (body, session) => {
+  if (body.player === bot.username || !bot.players[body.player]) {
+    return { ok: false, error: 'not_found', detail: `player "${body.player}" is not online or is the bot itself` }
+  }
+  duelStop = new AbortController()
+  try {
+    return { ok: true, ...await runDuel(bot, body, { eventLog, movements: pvpMovements, signal: session.signal, stopSignal: duelStop.signal }) }
+  } finally {
+    duelStop = null
+  }
+}, { timeoutMs: (body) => ((body.timeout_s ?? DUEL_TIMEOUT_S) + 15) * 1000 })
+app.post('/duel/stop', (req, res) => {
+  const respond = responder('/duel/stop', req.body || {}, res)
+  const stopped = duelStop !== null
+  duelStop?.abort()
+  respond(200, { ok: true, stopped })
+})
 action('/craft', validators.craft, async (body, session) => ({ ...await craft(bot, body, session), blocks_walked: walked() }), { cutIn: true })
 action('/explore', validators.explore, async (body, session) => ({ ...await explore(bot, session, body), blocks_walked: walked() }), { cutIn: true })
 action('/look', validators.look, (body) => look(bot, { ...body, blocks: body.blocks ?? [], mobs: body.mobs ?? [] }))
