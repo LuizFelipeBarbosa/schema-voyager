@@ -17,7 +17,7 @@ _load_env_key() {
   return 0
 }
 
-for _key in SV2_INSTANCE SV2_MC_PORT SV2_RCON_PORT SV2_BOT_PORT SV2_VIEWER_PORT RCON_PASSWORD JAVA_BIN SV2_SEED; do
+for _key in SV2_INSTANCE SV2_MC_PORT SV2_RCON_PORT SV2_BOT_PORT SV2_VIEWER_PORT RCON_PASSWORD JAVA_BIN SV2_SEED SV2_DIFFICULTY SV2_DAYLIGHT; do
   _load_env_key "$_key"
 done
 unset _key
@@ -40,6 +40,11 @@ MC_PID_FILE="$RUN_DIR/mc-$SV2_INSTANCE.pid"
 BOT_PID_FILE="$RUN_DIR/bot-$SV2_INSTANCE.pid"
 
 die() { echo "error: $*" >&2; exit 1; }
+
+SV2_DIFFICULTY="${SV2_DIFFICULTY:-peaceful}"
+SV2_DAYLIGHT="${SV2_DAYLIGHT:-off}"
+case "$SV2_DIFFICULTY" in peaceful|easy|normal|hard) ;; *) die "SV2_DIFFICULTY must be peaceful, easy, normal or hard (got '$SV2_DIFFICULTY')" ;; esac
+case "$SV2_DAYLIGHT" in off|on) ;; *) die "SV2_DAYLIGHT must be off or on (got '$SV2_DAYLIGHT')" ;; esac
 
 # Refuses to continue unless the instance settings are complete and none of the
 # ports belongs to the live demo.
@@ -147,13 +152,48 @@ sv2_rcon_ready() { sv2_rcon "list"; }
 
 sv2_screen_exists() { screen -ls 2>/dev/null | grep -qE "[0-9]+\.$1[[:space:]]"; }
 
+# One RCON command per line. The difficulty is repeated here because a world's
+# saved difficulty can win over server.properties.
+sv2_gamerule_commands() {
+  echo "gamerule keepInventory true"
+  echo "difficulty $SV2_DIFFICULTY"
+  if [ "$SV2_DAYLIGHT" = on ]; then
+    echo "gamerule doDaylightCycle true"
+  else
+    echo "gamerule doDaylightCycle false"
+    echo "time set day"
+  fi
+  echo "gamerule doWeatherCycle false"
+  echo "gamerule spawnRadius 0"
+  echo "gamerule announceAdvancements false"
+  echo "weather clear"
+}
+
 sv2_apply_gamerules() {
   local cmd
-  for cmd in "gamerule keepInventory true" "gamerule doDaylightCycle false" \
-             "gamerule doWeatherCycle false" "gamerule spawnRadius 0" \
-             "gamerule announceAdvancements false" "time set day" "weather clear"; do
+  while IFS= read -r cmd; do
     sv2_rcon "$cmd" >/dev/null
-  done
+  done < <(sv2_gamerule_commands)
+}
+
+# Prints server.properties for the given level name and seed.
+sv2_server_properties() {
+  local level_name="$1" level_seed="$2"
+  cat <<PROPS
+server-port=$SV2_MC_PORT
+enable-rcon=true
+rcon.port=$SV2_RCON_PORT
+rcon.password=$RCON_PASSWORD
+broadcast-rcon-to-ops=false
+online-mode=false
+difficulty=$SV2_DIFFICULTY
+spawn-protection=0
+gamemode=survival
+level-name=$level_name
+level-seed=$level_seed
+view-distance=8
+simulation-distance=6
+PROPS
 }
 
 # Writes server.properties and starts the server in screen; waits for RCON.
@@ -167,21 +207,7 @@ sv2_start_server() {
     level_name=$(sv2_level_name); level_name="${level_name:-world}"
     level_seed=$(sed -n 's/^level-seed=//p' "$SERVER_DIR/server.properties" 2>/dev/null || true)
   fi
-  cat > "$SERVER_DIR/server.properties" <<PROPS
-server-port=$SV2_MC_PORT
-enable-rcon=true
-rcon.port=$SV2_RCON_PORT
-rcon.password=$RCON_PASSWORD
-broadcast-rcon-to-ops=false
-online-mode=false
-difficulty=peaceful
-spawn-protection=0
-gamemode=survival
-level-name=$level_name
-level-seed=$level_seed
-view-distance=8
-simulation-distance=6
-PROPS
+  sv2_server_properties "$level_name" "$level_seed" > "$SERVER_DIR/server.properties"
   sv2_require_port_free_or_ours "$SV2_MC_PORT" "$MC_PID_FILE"
   sv2_require_port_free_or_ours "$SV2_RCON_PORT" "$MC_PID_FILE"
   : >> "$LOG_DIR/mc-$SV2_INSTANCE.log"
