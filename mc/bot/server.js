@@ -12,6 +12,7 @@ const { smelt } = require('./lib/smelt')
 const { toss, validateToss } = require('./lib/toss')
 const { createUnreachableMemory, look } = require('./lib/targets')
 const { attachEventTracker, createEventLog } = require('./lib/events')
+const { attachChatCommands } = require('./lib/chat_commands')
 const { DIRECTIONS } = require('./lib/geometry')
 const { hasOpenSky } = require('./lib/sky')
 const { VIEWER_MODES, createViewerControl, localCors } = require('./lib/viewer')
@@ -85,6 +86,7 @@ function connect () {
   })
   current.on('kicked', (reason) => log(`kicked: ${JSON.stringify(reason)}`))
   current.on('error', (err) => log(`bot error: ${err.message}`))
+  attachChatCommands(current, eventLog)
   current.once('end', (reason) => {
     connected = false
     if (current.viewer) current.viewer.close()

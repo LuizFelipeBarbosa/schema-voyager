@@ -43,7 +43,7 @@ start_bot() {
   done
   if ! pid_alive "$(pid_from_file "$BOT_PID_FILE")"; then
     : >> "$LOG_DIR/bot-$SV2_INSTANCE.log"
-    screen -dmS "$BOT_SCREEN" bash -c "cd '$SV2_HOME/mc/bot' && echo \$\$ > '$BOT_PID_FILE' && MC_HOST=127.0.0.1 MC_PORT=$SV2_MC_PORT BOT_API_PORT=$SV2_BOT_PORT VIEWER_PORT=$SV2_VIEWER_PORT BOT_USERNAME=VoyagerBot exec node server.js >> '$LOG_DIR/bot-$SV2_INSTANCE.log' 2>&1"
+    screen -dmS "$BOT_SCREEN" bash -c "cd '$SV2_HOME/mc/bot' && echo \$\$ > '$BOT_PID_FILE' && MC_HOST=127.0.0.1 MC_PORT=$SV2_MC_PORT BOT_API_PORT=$SV2_BOT_PORT VIEWER_PORT=$SV2_VIEWER_PORT BOT_USERNAME=VoyagerBot BOT_OWNERS='${BOT_OWNERS:-Otopo}' exec node server.js >> '$LOG_DIR/bot-$SV2_INSTANCE.log' 2>&1"
   fi
   sv2_wait_until 60 bash -c "curl -fsS localhost:$SV2_BOT_PORT/health | grep -q '\"connected\":true'" \
     || die "bot not connected in 60 s; see $LOG_DIR/bot-$SV2_INSTANCE.log"
