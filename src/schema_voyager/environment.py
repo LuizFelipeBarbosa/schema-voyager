@@ -9,6 +9,7 @@ from typing import Any
 
 from . import normalize
 from .adapter import DIRECTIONS, LookResult
+from .blueprint import AIR_BLOCKS, REPLACEABLE
 from .inventory import slots_used, stack_size
 from .layouts import ARENA_RADIUS, GROUND_Y, Layout
 from .models import Action, Observation, Outcome, Status, Task
@@ -253,7 +254,7 @@ STEP_DAMAGE_CHANCE = 0.005
 # Threats, food and entities (off peaceful, except the animals).
 THREAT_CHANCE = {"peaceful": 0.0, "easy": 0.06, "normal": 0.10, "hard": 0.15}
 FIGHT_DAMAGE = {"easy": (1, 3), "normal": (2, 5), "hard": (3, 7)}  # total damage of a fight
-THREATENED_ACTIONS = ("mine", "craft", "smelt", "explore")
+THREATENED_ACTIONS = ("mine", "craft", "smelt", "explore", "place", "clear")
 THREAT_MOBS = ("zombie", "skeleton", "spider", "creeper")
 ANIMALS = ("cow", "sheep", "pig", "chicken")
 ACTIONS_PER_FOOD = 10
@@ -331,6 +332,7 @@ class NaturalWorld:
         self._columns: dict[tuple[int, int], tuple[int, bool]] = {}
         self._chunks: dict[tuple[int, int], _Chunk] = {}
         self._changes: dict[Pos, str] = {}
+        self._keep_out: tuple[Pos, Pos] | None = None
         self._skipped: set[Pos] = set()
         self._events: list[dict[str, Any]] = []
         self._seq = 0
@@ -436,6 +438,8 @@ class NaturalWorld:
         return {"ok": True, "error": None, "output": output, "inventory_delta": {}, "events": []}
 
     def act(self, action: Action) -> Outcome:
+        if action.kind in ("place", "clear") and action.pos is None:
+            raise ValueError(f"{action.kind} needs a pos")
         self.health = min(20.0, self.health + 1)
         if self.difficulty != "peaceful":
             self._actions += 1
@@ -452,7 +456,24 @@ class NaturalWorld:
             return self._smelt(action)
         if action.kind == "explore":
             return self._explore(action)
+        if action.kind == "place":
+            return self._place(action)
+        if action.kind == "clear":
+            return self._clear(action)
         return self._fail("unknown_action")
+
+    def scan(self, origin: Pos, size: Pos) -> dict[Pos, str | None]:
+        """Every block of the box at origin; size is (width x, height y, depth z)."""
+        return {
+            (origin[0] + x, origin[1] + y, origin[2] + z): self.block_at((origin[0] + x, origin[1] + y, origin[2] + z))
+            for x in range(size[0])
+            for y in range(size[1])
+            for z in range(size[2])
+        }
+
+    def set_keep_out(self, box: tuple[Pos, Pos] | None) -> None:
+        """Remembered only: the simulator has no scaffold to keep out of the box."""
+        self._keep_out = box
 
     # --- actions -------------------------------------------------------------
 
@@ -490,6 +511,101 @@ class NaturalWorld:
             travel=travel,
             events=events,
         )
+
+    def _place(self, action: Action) -> Outcome:
+        pos = action.pos
+        block = action.target or ""
+        is_door = block.endswith("_door")
+        cells = [pos, (pos[0], pos[1] + 1, pos[2])] if is_door else [pos]
+        found = self.block_at(pos)
+        detail = {"block": block, "found": found, "target": _xyz(pos), "inventory_before_step": self._inventory()}
+
+        if found == block or (block == "torch" and found == "wall_torch"):
+            return self._built(placed=False, delta={}, travel=_empty_travel(), events=[], **detail)
+        if self.inventory[block] < 1:
+            return self._fail("missing_item", **detail)
+        blocking = next((other for other in map(self.block_at, cells) if not _is_free(other)), None)
+        if blocking is not None:
+            return self._fail("occupied", **{**detail, "found": blocking})
+
+        x, y, z = pos
+        below = (x, y - 1, z)
+        sides = [(x + dx, y + dy, z + dz) for dx, dy, dz in _NEIGHBOURS if dy == 0]
+        if block == "torch":
+            support = next((cell for cell in [below, *sides] if self._supports(cell)), None)
+        elif is_door:
+            support = below if self._supports(below) else None
+        else:
+            support = next((cell for cell in [below, *sides, (x, y + 1, z)] if self._supports(cell)), None)
+        if support is None:
+            return self._fail("no_support", **detail)
+        if not self._exposed(pos):
+            return self._fail("unreachable", **detail)
+
+        events: list[dict[str, Any]] = []
+        travel = self._travel_to_cell(pos)
+        if travel["distance"] or travel["dug"]:
+            self._roll_damage("travel", TRAVEL_DAMAGE_CHANCE, events)
+        before_step = self._inventory()
+        for cell in cells:
+            self._changes[cell] = block
+        if block == "torch" and support != below:
+            self._changes[pos] = "wall_torch"
+        self.inventory[block] -= 1
+        self._roll_damage("step", STEP_DAMAGE_CHANCE, events)
+        return self._built(
+            placed=True, delta={block: -1}, travel=travel, events=events,
+            **{**detail, "found": self.block_at(pos), "inventory_before_step": before_step},
+        )
+
+    def _clear(self, action: Action) -> Outcome:
+        pos = action.pos
+        found = self.block_at(pos)
+        detail = {"found": found, "target": _xyz(pos), "inventory_before_step": self._inventory()}
+        if found in AIR_BLOCKS:
+            return self._built(cleared=False, delta={}, travel=_empty_travel(), events=[], removed=None, **{**detail, "found": "air"})
+        if pos[1] <= TERRAIN_BOTTOM or found in LIQUIDS:
+            return self._fail("unbreakable", **detail)
+        if not self._exposed(pos):
+            return self._fail("unreachable", **detail)
+
+        events: list[dict[str, Any]] = []
+        travel = self._travel_to_cell(pos)
+        if travel["distance"] or travel["dug"]:
+            self._roll_damage("travel", TRAVEL_DAMAGE_CHANCE, events)
+        before_step = self._inventory()
+        self._changes[pos] = "air"
+        if found.endswith("_door"):
+            for other in ((pos[0], pos[1] + 1, pos[2]), (pos[0], pos[1] - 1, pos[2])):
+                if self.block_at(other) == found:
+                    self._changes[other] = "air"
+        self._roll_damage("step", STEP_DAMAGE_CHANCE, events)
+        return self._built(
+            cleared=True, delta={}, travel=travel, events=events, removed=found,
+            **{**detail, "found": self.block_at(pos), "inventory_before_step": before_step},
+        )
+
+    def _built(self, *, delta: dict[str, int], travel: dict[str, Any], events: list[dict[str, Any]], **detail: Any) -> Outcome:
+        """The ok Outcome of a place or clear."""
+        return Outcome(
+            ok=True,
+            inventory_delta=delta,
+            inventory=self._inventory(),
+            blocks_walked=round(self.blocks_walked, 1),
+            detail=detail,
+            travel=travel,
+            events=events,
+        )
+
+    def _supports(self, cell: Pos) -> bool:
+        """Whether a placement can lean on the cell: solid, not a liquid, a door or a torch."""
+        block = self.block_at(cell)
+        return not _is_free(block) and block not in LIQUIDS and not block.endswith("_door") and "torch" not in block
+
+    def _travel_to_cell(self, pos: Pos) -> dict[str, Any]:
+        """Travel as for a mine, to an exposed cell: the walks of place and clear never dig (the bot answers
+        unreachable for a cell with no open neighbour)."""
+        return self._travel_to(_Target(pos, self.block_at(pos), True, []))
 
     def _craft(self, action: Action) -> Outcome:
         name = action.target or ""
@@ -1090,6 +1206,10 @@ def _free_slots(inventory: dict[str, int], *, clamp: bool = True) -> int:
     """Empty slots of an inventory; negative (unless clamped to 0) when it holds more than fits."""
     free = INVENTORY_SLOTS - slots_used(inventory)
     return max(0, free) if clamp else free
+
+
+def _is_free(block: str) -> bool:
+    return block in AIR_BLOCKS or block in REPLACEABLE
 
 
 def _empty_travel() -> dict[str, Any]:
