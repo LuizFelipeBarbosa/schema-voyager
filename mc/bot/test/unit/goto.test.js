@@ -49,7 +49,7 @@ test('goto arrives when the pathfinder ends within range, with world-preserving 
   const result = await goto(bot, { x: 10, y: 10, z: -3, range: 2 }, session())
   assert.equal(result.ok, true)
   assert.equal(result.arrived, true)
-  assert.deepEqual(Object.keys(result.travel).sort(), ['dug', 'distance', 'picked_up', 'placed'].sort())
+  assert.deepEqual(Object.keys(result.travel).sort(), ['dug', 'distance', 'picked_up', 'placed', 'placed_cells'].sort())
   const [movements] = bot.pathfinder.seen
   assert.equal(movements.canDig, false)
   assert.equal(movements.canOpenDoors, false)

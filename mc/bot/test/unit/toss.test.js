@@ -97,7 +97,7 @@ test('nothing to toss: no walk, walked_away false, empty travel', async () => {
   assert.equal(result.ok, true)
   assert.equal(result.walked_away, false)
   assert.deepEqual(result.tossed, {})
-  assert.deepEqual(result.travel, { distance: 0, dug: {}, placed: {}, picked_up: {} })
+  assert.deepEqual(result.travel, { distance: 0, dug: {}, placed: {}, picked_up: {}, placed_cells: [] })
 })
 
 test('tossed is measured after the walk: a stack picked up again is not counted', async () => {
