@@ -9,7 +9,7 @@ const { craft } = require('./lib/craft')
 const { explore, newSpiral, trackWorldBorder } = require('./lib/explore')
 const { probe } = require('./lib/probe')
 const { smelt } = require('./lib/smelt')
-const { look } = require('./lib/targets')
+const { createUnreachableMemory, look } = require('./lib/targets')
 const { attachEventTracker, createEventLog } = require('./lib/events')
 const { DIRECTIONS } = require('./lib/geometry')
 const { hasOpenSky } = require('./lib/sky')
@@ -38,6 +38,8 @@ let connected = false
 const eventLog = createEventLog()
 let tracker = null
 let worldBorder = null
+// Mine targets that could not be reached; kept across episodes and reconnects.
+const unreachable = createUnreachableMemory()
 // skippedTargets: mine targets that failed as unreachable or dig_failed this episode.
 const episode = { origin: null, spiral: newSpiral(), walked: 0, skippedTargets: new Set() }
 
@@ -266,7 +268,7 @@ function action (path, validate, handler, { timeoutMs = ACTION_TIMEOUT_MS } = {}
     tracker.beginAction()
     const death = tracker.rejectOnDeath()
     try {
-      const session = { episode, tracker, border: worldBorder }
+      const session = { episode, tracker, border: worldBorder, unreachable }
       const limitMs = typeof timeoutMs === 'function' ? timeoutMs(body) : timeoutMs
       const running = Promise.resolve().then(() => handler(body, session))
       respondWithEvents(await withTimeout(Promise.race([running, death.promise]), limitMs))

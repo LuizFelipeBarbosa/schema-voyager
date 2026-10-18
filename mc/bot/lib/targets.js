@@ -4,10 +4,12 @@
 
 const { Vec3 } = require('vec3')
 const { DIRECTIONS, sectorOf } = require('./geometry')
-const { hasAirNeighbour, round } = require('./world')
+const { AIR_BLOCKS, blockNameAt, hasAirNeighbour, round } = require('./world')
 
 const MAX_CANDIDATES = 1024
 const MAX_HAZARD_EVENTS = 3 // per search; the rest of the candidates are skipped quietly
+const UNREACHABLE_TTL_MS = 10 * 60 * 1000
+const NO_STANDING_SPOT_PENALTY = 16
 const LOOK_MAX_RADIUS = 96
 const LOOK_DEFAULT_RADIUS = 64
 const LOOK_CANDIDATES_PER_ID = 4096
@@ -15,6 +17,7 @@ const NEIGHBOUR_OFFSETS = [
   new Vec3(1, 0, 0), new Vec3(-1, 0, 0), new Vec3(0, 1, 0),
   new Vec3(0, -1, 0), new Vec3(0, 0, 1), new Vec3(0, 0, -1)
 ]
+const HORIZONTAL_OFFSETS = NEIGHBOUR_OFFSETS.filter((offset) => offset.y === 0)
 
 function blockIds (bot, names) {
   return names.map((name) => bot.registry.blocksByName[name]?.id).filter((id) => id !== undefined)
@@ -31,32 +34,79 @@ function hazardNear (bot, pos) {
   return null
 }
 
-// The nearest block named in `blockNames` within `maxDistance` that is not in
-// `skipped` (Vec3#toString keys) and not beside lava or flowing water (each
-// of those is reported through `onHazard({kind, position})`). With `buried`
-// allowed, an exposed block (one with an air neighbour) is preferred and the
-// nearest buried one is the fallback; otherwise only exposed blocks count.
-// Returns {pos, hazard}: `pos` is null when nothing qualifies, `hazard` is
-// true when at least one candidate was refused for lava or water.
-function chooseTarget (bot, { blockNames, maxDistance, buried, skipped, onHazard }) {
+// Remembers targets the bot could not path to, across episodes, for `ttlMs`.
+// An entry is forgotten when the block at its position is no longer the one
+// that was remembered (mined, replaced, or the chunk is gone).
+function createUnreachableMemory ({ ttlMs = UNREACHABLE_TTL_MS, now = Date.now } = {}) {
+  const entries = new Map() // Vec3#toString -> {blockName, expiresAt}
+  return {
+    remember (bot, pos) {
+      entries.set(pos.toString(), { blockName: blockNameAt(bot, pos), expiresAt: now() + ttlMs })
+    },
+    has (bot, pos) {
+      const key = pos.toString()
+      const entry = entries.get(key)
+      if (!entry) return false
+      if (now() >= entry.expiresAt || blockNameAt(bot, pos) !== entry.blockName) {
+        entries.delete(key)
+        return false
+      }
+      return true
+    }
+  }
+}
+
+// True when the bot could stand beside `pos`: a horizontal neighbour that is
+// air with air above it and solid ground below.
+function hasStandingSpot (bot, pos) {
+  return HORIZONTAL_OFFSETS.some((offset) => {
+    const feet = pos.plus(offset)
+    const ground = blockNameAt(bot, feet.offset(0, -1, 0))
+    return AIR_BLOCKS.has(blockNameAt(bot, feet)) && AIR_BLOCKS.has(blockNameAt(bot, feet.offset(0, 1, 0))) &&
+      !AIR_BLOCKS.has(ground) && ground !== 'water' && ground !== 'lava'
+  })
+}
+
+// Lower is better: how costly `pos` is to reach from `origin`. Height
+// differences count double (digging or pillaring across them is slow), and an
+// exposed block with no spot to stand beside it is penalised, since reaching
+// it needs digging.
+function reachCost (bot, pos, origin, exposed) {
+  const centre = pos.offset(0.5, 0.5, 0.5)
+  const standing = !exposed || hasStandingSpot(bot, pos)
+  return origin.distanceTo(centre) + 2 * Math.abs(centre.y - origin.y) + (standing ? 0 : NO_STANDING_SPOT_PENALTY)
+}
+
+// The blocks named in `blockNames` within `maxDistance` that are worth trying,
+// best first: not in `skipped` (Vec3#toString keys), not in the `unreachable`
+// memory, and not beside lava or flowing water (each of those is reported
+// through `onHazard({kind, position})`). Exposed blocks (an air neighbour)
+// come before buried ones, which only count with `buried` allowed; within each
+// group the order is by reachCost, so near the bot's own height and with a
+// place to stand wins, and distance breaks ties. Returns {positions, hazard}:
+// `hazard` is true when at least one candidate was refused for lava or water.
+function chooseTargets (bot, { blockNames, maxDistance, buried, skipped, unreachable, onHazard }) {
   const ids = blockIds(bot, blockNames)
-  if (ids.length === 0) return { pos: null, hazard: false }
+  if (ids.length === 0) return { positions: [], hazard: false }
+  const origin = bot.entity.position
   const candidates = bot.findBlocks({ matching: ids, maxDistance, count: MAX_CANDIDATES })
-  let nearestBuried = null
+  const ranked = []
   let hazard = false
   let hazardEvents = 0
   for (const pos of candidates) {
-    if (skipped.has(pos.toString())) continue
+    if (skipped.has(pos.toString()) || unreachable.has(bot, pos)) continue
     const kind = hazardNear(bot, pos)
     if (kind) {
       hazard = true
       if (hazardEvents++ < MAX_HAZARD_EVENTS) onHazard({ kind, position: { x: pos.x, y: pos.y, z: pos.z } })
       continue
     }
-    if (hasAirNeighbour(bot, pos)) return { pos, hazard }
-    if (buried && !nearestBuried) nearestBuried = pos
+    const exposed = hasAirNeighbour(bot, pos)
+    if (!exposed && !buried) continue
+    ranked.push({ pos, exposed, cost: reachCost(bot, pos, origin, exposed) })
   }
-  return { pos: nearestBuried, hazard }
+  ranked.sort((a, b) => Number(b.exposed) - Number(a.exposed) || a.cost - b.cost)
+  return { positions: ranked.map((entry) => entry.pos), hazard }
 }
 
 // For each of the 8 sectors around the bot, the nearest block of each id in
@@ -86,4 +136,4 @@ function look (bot, { blocks: blockNames, radius = LOOK_DEFAULT_RADIUS }) {
   return { ok: true, position: { x: round(origin.x), y: round(origin.y), z: round(origin.z) }, radius: searchRadius, directions }
 }
 
-module.exports = { chooseTarget, hazardNear, look }
+module.exports = { chooseTargets, createUnreachableMemory, hazardNear, look }

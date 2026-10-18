@@ -1,15 +1,17 @@
 // POST /mine: find the nearest matching block, equip, path, dig, then measure
 // what the server dropped (exact) separately from what the bot picked up
 // (tolerant). A target the bot could not reach or dig is skipped for the rest
-// of the episode, so the next call picks the next nearest one instead of the
-// same block again. With dig_through (v2) the path may dig and pillar, the
+// of the episode, and one it could not reach is also remembered across
+// episodes (see createUnreachableMemory), so a later call does not retry the
+// same block. A v2 call tries up to a few candidates, best first, each with a
+// short path budget, so a call stays under about 40 s. With dig_through (v2) the path may dig and pillar, the
 // target may be buried, and the step's window starts only after the travel has
 // settled. See contracts/bot_api.md.
 
 const { goals } = require('mineflayer-pathfinder')
 const { watchServerBlockChange } = require('./blockchange')
 const { GoalBesideBlock } = require('./movements')
-const { chooseTarget } = require('./targets')
+const { chooseTargets } = require('./targets')
 const { emptyTravel, recordTravel, reequip, withDiggingMovements } = require('./travel')
 const {
   TICK_MS, blockNameAt, countGains, emptyHand, findInventoryItem, findNearestExposedBlock, gotoGoal,
@@ -20,6 +22,12 @@ const DIG_REACH = 4 // stay inside the 4.5 block survival reach
 const DROP_WINDOW_TICKS = 20
 const CONFIRM_TIMEOUT_MS = 2000 // for the server's block update after the dig
 const DEFAULT_MAX_DISTANCE = 16
+// Path budget per call: v1 makes one 30 s attempt; v2 tries up to 4 candidates,
+// giving up on one after 11 s or 4 s without moving or digging, all within 36 s.
+const V1_PATH_LIMITS = { attempts: 1, attemptMs: 30000, callMs: 30000, failFast: null }
+const V2_PATH_LIMITS = { attempts: 4, attemptMs: 11000, callMs: 36000, failFast: { stallMs: 4000 } }
+const MIN_ATTEMPT_MS = 3000 // no new candidate is tried with less call budget than this
+const SAME_POCKET_BLOCKS = 4 // candidates this close to a failed one are skipped for the call
 
 function parseRequest (body) {
   const blockNames = Array.isArray(body.blocks) && body.blocks.length > 0 ? body.blocks : [body.block]
@@ -34,9 +42,10 @@ function parseRequest (body) {
   }
 }
 
-// `session`: {episode, tracker}; episode.skippedTargets holds the failed
-// target positions (Vec3#toString keys).
-async function mine (bot, body, { episode, tracker }) {
+// `session`: {episode, tracker, unreachable}; episode.skippedTargets holds the
+// failed target positions (Vec3#toString keys), `unreachable` the memory that
+// outlives episodes.
+async function mine (bot, body, { episode, tracker, unreachable }) {
   const { blockNames, tool, digThrough, maxDistance, scaffold, v2 } = parseRequest(body)
   const startSeq = tracker.log.lastSeq()
   const before = inventoryCounts(bot)
@@ -51,6 +60,10 @@ async function mine (bot, body, { episode, tracker }) {
     travel: emptyTravel(),
     inventory_before_step: before
   }
+  const skipTarget = (pos, error) => {
+    episode.skippedTargets.add(pos.toString())
+    if (error === 'unreachable') unreachable.remember(bot, pos)
+  }
   const finish = (errorCode, detail) => {
     const inventory = inventoryCounts(bot)
     const tookDamage = tracker.log.since(startSeq).some((event) => event.type === 'damage')
@@ -61,23 +74,17 @@ async function mine (bot, body, { episode, tracker }) {
     return response
   }
 
-  const { pos: targetPos, hazard } = v2
-    ? chooseTarget(bot, {
+  const { positions, hazard } = v2
+    ? chooseTargets(bot, {
       blockNames,
       maxDistance,
       buried: digThrough,
       skipped: episode.skippedTargets,
+      unreachable,
       onHazard: (event) => tracker.log.record('hazard', event)
     })
-    : { pos: findNearestExposedBlock(bot, blockNames[0], episode.skippedTargets), hazard: false }
-  if (!targetPos) return finish(hazard ? 'hazard' : 'not_found')
-  const targetName = blockNameAt(bot, targetPos)
-  result.block = targetName
-  result.target = { x: targetPos.x, y: targetPos.y, z: targetPos.z }
-  const giveUpOnTarget = (error, detail) => {
-    episode.skippedTargets.add(targetPos.toString())
-    return finish(error, detail)
-  }
+    : { positions: [findNearestExposedBlock(bot, blockNames[0], episode.skippedTargets)].filter(Boolean), hazard: false }
+  if (positions.length === 0) return finish(hazard ? 'hazard' : 'not_found')
 
   const toolItem = tool ? findInventoryItem(bot, tool) : null
   if (tool && !toolItem) return finish('missing_tool')
@@ -88,19 +95,43 @@ async function mine (bot, body, { episode, tracker }) {
     return finish('dig_failed', `could not set the held item: ${err.message}`)
   }
 
-  // Travel into position; digging and pillaring only with dig_through.
+  // Travel into position, trying the next candidate when one cannot be
+  // reached; digging and pillaring only with dig_through.
+  const limits = v2 ? V2_PATH_LIMITS : V1_PATH_LIMITS
+  const callDeadline = Date.now() + limits.callMs
   const recording = recordTravel(bot, episode)
+  const failed = []
+  let targetPos = null
   let reached = false
   try {
-    reached = digThrough
-      ? await withDiggingMovements(bot, { scaffoldNames: scaffold, protectedBlock: targetPos },
-        () => gotoGoal(bot, new GoalBesideBlock(targetPos)))
-      : await gotoGoal(bot, new goals.GoalLookAtBlock(targetPos, bot.world, { reach: DIG_REACH }))
-    if (reached) await recording.settle()
+    for (const candidate of positions) {
+      const remainingMs = callDeadline - Date.now()
+      if (failed.length >= limits.attempts || (failed.length > 0 && remainingMs < MIN_ATTEMPT_MS)) break
+      if (failed.some((pos) => pos.distanceTo(candidate) <= SAME_POCKET_BLOCKS)) continue
+      targetPos = candidate
+      result.block = blockNameAt(bot, targetPos)
+      result.target = { x: targetPos.x, y: targetPos.y, z: targetPos.z }
+      const timeoutMs = Math.min(limits.attemptMs, remainingMs)
+      reached = digThrough
+        ? await withDiggingMovements(bot, { scaffoldNames: scaffold, protectedBlock: targetPos },
+          () => gotoGoal(bot, new GoalBesideBlock(targetPos), timeoutMs, { failFast: limits.failFast }))
+        : await gotoGoal(bot, new goals.GoalLookAtBlock(targetPos, bot.world, { reach: DIG_REACH }), timeoutMs, { failFast: limits.failFast })
+      if (reached) {
+        await recording.settle()
+        break
+      }
+      skipTarget(targetPos, 'unreachable')
+      failed.push(targetPos)
+    }
   } finally {
     result.travel = recording.finish()
   }
-  if (!reached) return giveUpOnTarget('unreachable')
+  if (!reached) return finish('unreachable')
+  const targetName = result.block
+  const giveUpOnTarget = (error, detail) => {
+    skipTarget(targetPos, error)
+    return finish(error, detail)
+  }
 
   // The pathfinder switches to the best tool for each dig on the way.
   if (digThrough) {
