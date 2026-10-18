@@ -23,6 +23,8 @@ HIT_ABOVE_BLOCKS = 4
 # world's rules: retried after an explore, so the bot tries from somewhere else.
 RETRIED_ERRORS = frozenset({"unreachable", "craft_failed", "dig_failed", "timeout"})
 MAX_RETRIES = 2
+# The goal item of a life's exploration round: nothing to hold, so its success is reported by the life.
+EXPLORE_GOAL = "explore"
 
 Annotator = Callable[[Outcome], dict[str, Any]]
 
@@ -162,7 +164,8 @@ class Episode:
         )
         return outcome
 
-    def finish(self) -> EpisodeResult:
+    def finish(self, success: bool | None = None) -> EpisodeResult:
+        """`success` overrides the goal check, for a goal that isn't an item to hold."""
         final = self.backend.observe()
         self.inventory = final.inventory
         events = self.log.events
@@ -172,7 +175,7 @@ class Episode:
             task_id=self.task.task_id,
             layout_seed=self.layout_seed,
             world_id=self.world_id,
-            success=self.goal_met,
+            success=self.goal_met if success is None else success,
             actions=self.actions,
             llm_tokens=self.llm_tokens,
             llm_calls=len(self.llm.calls) - self._calls_at_start,
@@ -186,7 +189,8 @@ class Episode:
         )
         self.log.event("episode_end", **result.to_dict())
         if result.success:
-            self.backend.say(f"Goal reached: {self.task.goal_count} {self.task.goal_item}.")
+            reached = "Exploration done." if self.task.goal_item == EXPLORE_GOAL else f"Goal reached: {self.task.goal_count} {self.task.goal_item}."
+            self.backend.say(reached)
         return result
 
 

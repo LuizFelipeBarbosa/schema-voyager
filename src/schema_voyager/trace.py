@@ -47,6 +47,11 @@ class EpisodeLog:
             )
             skills = f" skills={','.join(d['skills'])}" if d.get("skills") else ""
             return f"{tag} {self._c(_CYAN, 'plan')} ({len(d['steps'])} steps{skills}): {steps}"
+        if kind == "step_start":
+            if not d["experimental"]:
+                return None
+            progress = f"{d['confirmed']}/{d['needed']} confirmed"
+            return f"{tag}  {self._c(_DIM, 'testing ' + d['predicts'] + ' (' + progress + ')')}"
         if kind == "goal":
             return (f"\n{tag} {self._c(_BOLD, 'goal')} g{d['index']:03d}: {d['count']} {d['item']} "
                     f"({d['reason']}) budget={d['budget']}")
