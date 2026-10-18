@@ -35,7 +35,7 @@ pushed to `origin` until the user says so.
 
 | Session | Status | Instance | Owner notes |
 |---|---|---|---|
-| S01 setup and baseline | running | b | |
+| S01 setup and baseline | done | b | Baseline 342/103/panel; explorefast merged (bot 108); live tests via pre-approved forms; not pushed |
 | S02 fix the stuck loops | not started | b | |
 | S03 retest demoted rules | not started | none | |
 | S04 full inventory | not started | a | |
@@ -51,4 +51,26 @@ pushed to `origin` until the user says so.
 ## Log
 
 - 22:46 S01 cb00942 merge `v3/baseline-ref`: two tests read the deleted `v2/open-world`, now `main`. pytest 342, bot 103, panel pass.
-- 22:50-23:11 S01 live `runs/s01-explorefast` (instance b, seed 1001 fresh, the `v3/explorefast` worktree's bot, `--change scramble --keep-going --cap-usd 1`, 10 min then 10 min `--resume`): 26 goals, 1 failed (bucket), 0 Tracebacks, $0.14. 14 explores, all blind; zero-move failures 4 x 0.1 s; one 4.0 s fail-fast. No directional explore, so the hop, neighbour directions and hole exit were not exercised live. preview-2005 had 15 zero-move explores (270 s) and 30 s stalls.
+- 22:50-23:11 S01 live `runs/s01-explorefast` (instance b, seed 1001 fresh, `--change scramble --keep-going --cap-usd 1`,
+  10 min then 10 min `--resume`). The bot ran from the `sv2-wt/explorefast` worktree at 2cc9da6. The run's `COMMIT`
+  file says cb00942, the `sv2` checkout the Python ran from, which did not have explorefast. 26 goals, 1 failed
+  (bucket), 0 Tracebacks, $0.14. 14 explores, all blind: four 0.1 s no-path failures and one fail-fast at 4.0 s
+  (g016). Inconclusive as a live test of the fix: there was no directional explore, so the hop, the neighbour
+  directions and the hole exit didn't run. No regression: a blind explore that stops moving now ends after about
+  4 s, where the old code waited 30 s (preview-2005 g021 step 8).
+- 23:14 S01 81a9fc1 merge `v3/explorefast` (rebased c25e121), on the offline tests: pytest 342, bot 108 (5 new),
+  panel pass. The live run shows no regression. The directional fallbacks are not tested live.
+
+## S01 setup and baseline (done 2026-10-17)
+
+- Commits on `main`: 6e28c6a plan; 819b175 progress and interfaces skeleton; cb00942 merge `v3/baseline-ref`;
+  81a9fc1 merge `v3/explorefast`. Suite on 81a9fc1: pytest 342, bot unit 108, panel all passed.
+- Instance b is down, with no lock. Instance a was not touched. Leftovers: the branch `v2/explorefast` (c25e121, superseded by
+  81a9fc1) is kept because S01 didn't create it. No `sv2-wt/*` worktrees are left. `origin/main` is 111 commits behind
+  and not pushed (user: not yet).
+- Open, for the first S02/S04 life that has 3 or more directional explores that don't move on the first try: no
+  zero-move explore over 25 s; at least 20% of directional explores move 2 blocks or more; no goal asks for the same
+  direction 4 or more times (`/tmp/sv2-s01-explore.py <run-dir>` measures these; it is not in the repo). Any explore
+  over 35 s means the hole exit (`getOutOfEnclosure` calling `exploreUp`, up to 100 s) needs a look.
+- Open, separate from explore: in `runs/s01-explorefast` g025 (bucket), all 8 failures were `mine iron_ore`
+  returning `unreachable` after walking 35 to 95 blocks, a `/mine` reach problem like preview-2005 g027.
