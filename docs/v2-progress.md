@@ -131,3 +131,8 @@ Brief: `prompts/v2-demo-refine.md`. Orchestrator Opus 5.5.
   planks2 fired g005 at 0.4 min, MISMATCH caught at the exact craft, revision certified g006 (0.8 min); r2 fired g010 at
   1.3 min, caught, `Hypothesis: coal_ore needs stone_pickaxe`, `Recovered: got 1 coal with stone_pickaxe`.
   Gap found: `screen -X quit` leaves the panel's python listening (stale code reused) -> lane `stage`.
+- 19:51 first stage life `runs/demo-20261017-1921` (pre-final code, before coal/view): change_report 3/3 (15/15 PASS);
+  planks2 0.5 min, r2 1.9 min, stick2 13.6 min; 0 false contradictions (3 real); 27 goals, 25 success; stop wall_clock;
+  max same-goal failures in a row 1; $0.133, 35,402 tokens.
+- 19:40 lane `view` (user request): compact panel with the viewer at >=60% width, camera modes via POST /viewer, route
+  minimap from `position` on action responses (contract v2.5). Merged stage polish (persistent change card etc.).
