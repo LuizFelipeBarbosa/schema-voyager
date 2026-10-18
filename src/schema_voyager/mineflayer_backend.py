@@ -16,7 +16,7 @@ from .adapter import DIRECTIONS, LookResult
 from .arena import Arena
 from .inventory import SCAFFOLD_BLOCKS
 from .layouts import Layout
-from .models import Action, Observation, Outcome, Status, Task
+from .models import Action, Observation, Outcome, Site, Status, Task
 
 # Longer than an interrupted action's worst case (the bot's own 120 s timeout, up to
 # 10 s for the handler to settle, then up to 30 s of fighting), so a slow action comes
@@ -37,6 +37,7 @@ _monotonic = time.monotonic
 
 MINE_MAX_DISTANCE = 32
 EXPLORE_DISTANCE = 32
+GOTO_RANGE = 3
 
 
 class BackendError(RuntimeError):
@@ -69,6 +70,8 @@ class MineflayerBackend:
     def act(self, action: Action) -> Outcome:
         if action.kind in ("place", "clear"):
             return self._build_step(action)
+        if action.kind == "goto":
+            return self._goto(action)
         if self.natural:
             return self._act_natural(action)
         if action.kind == "mine":
@@ -117,6 +120,33 @@ class MineflayerBackend:
             for z, row in enumerate(layer)
             for x, name in enumerate(row)
         }
+
+    def survey(self, size: tuple[int, int], radius: int = 24) -> list[Site]:
+        payload: dict[str, Any] = {"size": list(size), "radius": radius}
+        body = self._post("/survey", payload)
+        return [
+            Site(tuple(site["origin"]), site["cut"], site["fill"], float(site["distance"])) for site in body["sites"]
+        ]
+
+    def _goto(self, action: Action) -> Outcome:
+        """A walk near a cell, the same in both modes."""
+        if action.pos is None:
+            raise ValueError("a goto action needs a pos")
+        x, y, z = action.pos
+        body = self._post("/goto", {"x": x, "y": y, "z": z, "range": GOTO_RANGE})
+        inventory = self._inventory(body)
+        before = body.get("inventory_before_step")
+        travel = body.get("travel") or {}
+        return Outcome(
+            ok=body["ok"],
+            error=body.get("error"),
+            inventory_delta=_difference(inventory, before) if before is not None else {},
+            inventory=inventory,
+            blocks_walked=travel.get("distance", 0.0),
+            detail=_detail(body, "arrived", "inventory_before_step", "detail") | {"target": {"x": x, "y": y, "z": z}},
+            travel=travel,
+            events=body.get("events") or [],
+        )
 
     def _build_step(self, action: Action) -> Outcome:
         """A place or a clear of one cell, the same in both modes."""
