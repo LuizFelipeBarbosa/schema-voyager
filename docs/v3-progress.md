@@ -47,6 +47,7 @@ pushed to `origin` until the user says so.
 | S10 build goals | running | a | v3.4b contract (protected boxes, `/survey`, approval, build runner); lanes: build-order, survey-bot, blueprint-llm, panel-preview, then survey-backend, protect-bot, protect-backend, then build-run, build-life; live `runs/v3-build-live` |
 | S11 duels | not started | b | |
 | S12 home, storage, composite goals | not started | a | |
+| S13 mine reach (`unreachable` ore) | running | b | Diagnosing `mine iron_ore` `unreachable` and the underground blind-explore loop |
 
 ## Log
 
