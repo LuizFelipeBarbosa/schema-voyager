@@ -14,21 +14,24 @@ import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, ContextManager, Protocol
+from typing import Any, Callable, ContextManager, Literal, Protocol
 
 from . import normalize
 from .adapter import DIRECTIONS, LifeBackend
 from .agent import run_schemavoyager
 from .curriculum import Curriculum, Goal
 from .episode import EXPLORE_GOAL, Episode
+from .goals import GoalInterrupted, GoalQueue, goal_label
 from .inventory import junk_to_toss
-from .llm import LLM, SpendCapReached
-from .models import Action, EpisodeResult, Observation, Rule, Task
-from .planner import PlanStep
+from .llm import LLM, LLMError, SpendCapReached, vanilla_items
+from .mineflayer_backend import BackendError
+from .models import Action, EpisodeResult, GoalSpec, Observation, Rule, Task, Unsupported
+from .planner import PlanningError, PlanStep, make_plan
 from .schema_store import TRAIN_WORLD, SchemaStore
 from .trace import EpisodeLog
 
 MIN_GOAL_BUDGET = 30
+GOAL_SECONDS_PER_PLAN_STEP = 30  # a user goal's clock: at least this per planned step
 BUDGET_PER_PLAN_STEP = 4
 MAX_CHAT_CHARS = 240
 EXPLORES_PER_ROUND = 3
@@ -38,6 +41,9 @@ BLOCKED_GOALS_TO_EXCLUDE = 2  # goals that block a rule with missing_ingredients
 MISSING_RESOURCE_ERRORS = frozenset({"not_found", "unreachable"})
 # Blocks around the bot that no rule is worth asking about.
 AMBIENT_BLOCKS = frozenset({"air", "cave_air", "void_air", "water", "lava", "bedrock"})
+FINAL_GOAL_STATUSES = frozenset({"done", "failed", "cancelled", "unsupported"})
+GOAL_RANK = {"system": 0, "user": 1, "curriculum": 2}  # a queued goal of a lower rank preempts the running one
+CHAT_COMMANDS_HELP = "Commands: !goal <what>, !cancel [id], !stop, !status"
 
 
 @dataclass
@@ -49,6 +55,8 @@ class LifeConfig:
     goal_wall_clock_s: float = 300.0
     spend_cap_usd: float = 10.0
     keep_going: bool = False  # explore for new blocks instead of stopping on an empty frontier
+    mode: Literal["learn", "play"] = "learn"  # play: only queued goals, idle otherwise (v3.1d)
+    idle_poll_s: float = 2.0  # play mode, nothing queued: sleep between idle passes
 
 
 @dataclass
@@ -225,7 +233,9 @@ class _Life:
         self.state_path = config.run_dir / "life_state.json"
         self.store_path = config.run_dir / "store.json"
         self.log_path = config.run_dir / "life.jsonl"
+        self.events_path = config.run_dir / "life_events.jsonl"
         config.run_dir.mkdir(parents=True, exist_ok=True)
+        self.queue = GoalQueue(config.run_dir / "goals.jsonl")
 
         if resume:
             state = json.loads(self.state_path.read_text(encoding="utf-8"))
@@ -250,12 +260,20 @@ class _Life:
             self.repaired = set()
             self.blocked = {}
             self.retests = {}
-            self.log_path.write_text("", encoding="utf-8")
+            for path in (self.log_path, self.events_path, self.queue.path):
+                path.write_text("", encoding="utf-8")
+        if resume:
+            self.queue.requeue_running()
         llm.spend_cap_usd = config.spend_cap_usd
         self._calls_marked = len(llm.calls)
         self._certified_marked = self._certified_ids()
         self._repairs_unreported: list[dict[str, Any]] = []  # shown in the next goal's trace and record
         self._retests_unreported: list[dict[str, Any]] = []
+        self._polls_bot = hasattr(backend, "status")  # v2's scripted test backends have none
+        self.bot_seq: int = backend.status().last_seq if self._polls_bot else 0  # events from before the life are skipped
+        self._running: GoalSpec | None = None  # only while _run_goal runs it
+        self._inventory_seen: dict[str, int] = {}  # the last inventory the life observed, for parsing goals
+        self._cancelled_in_chat: set[str] = set()  # their ending doesn't say "Cancelled" a second time
         if hooks.bind_store is not None:
             hooks.bind_store(self.store)
 
@@ -269,24 +287,35 @@ class _Life:
                 return "spend_cap"
             if self._remaining_s() <= 0:
                 return "wall_clock"
+            self._poll_bot()
+            self._parse_pending()
+            spec = self.queue.next()
+            if spec is None and self.config.mode == "play":
+                time.sleep(self.config.idle_poll_s)
+                continue
+            goal = None
             try:
                 observation = self._learn_priors()
                 if self._repair_dead_ingredients(observation):
                     observation = self._learn_priors()  # the repairs may name families nobody asked about
-                goal = self.curriculum.next_goal(
-                    normalize.counts(observation.inventory), self.store, self.world_id, normalize.counts(observation.nearby),
-                    excluded=self._excluded_rules(),
-                )
-                if goal is None:
-                    if self._expand_frontier():
+                if spec is None:
+                    goal = self.curriculum.next_goal(
+                        normalize.counts(observation.inventory), self.store, self.world_id, normalize.counts(observation.nearby),
+                        excluded=self._excluded_rules(),
+                    )
+                    if goal is None:
+                        if self._expand_frontier():
+                            continue
+                        if not self.config.keep_going:
+                            return "empty_frontier"
+                        self._run_exploration_round()
                         continue
-                    if not self.config.keep_going:
-                        return "empty_frontier"
-                    self._run_exploration_round()
-                    continue
+                    spec = GoalSpec(
+                        id=f"g{self.goals_done + 1:03d}", kind="obtain", source="curriculum", item=goal.item, count=goal.count
+                    )
             except SpendCapReached:
                 return "spend_cap"
-            if self._run_goal(goal):
+            if self._run_goal(spec, goal) and self.config.mode == "learn" and spec.source == "curriculum":
                 self._run_exploration_round(reason="the resource was not found here", reset_skips=False)
 
     def summary(self, stop_reason: str) -> dict[str, Any]:
@@ -305,6 +334,7 @@ class _Life:
         """Ask for prior rules, in one batched call per round, until every family the
         agent needs has been asked about once. Returns the observation it learned from."""
         observation = self.backend.observe()
+        self._inventory_seen = observation.inventory
         self.observed_blocks |= {normalize.family(block) for block in observation.nearby}
         while True:
             families = self._unasked_families()
@@ -321,7 +351,8 @@ class _Life:
         tool that no usable rule produces."""
         rules = self.store.usable_rules(self.world_id)
         produced = {item for rule in rules for item in rule.yields()}
-        needed = set(self.curriculum.frontier)
+        needed = set() if self.config.mode == "play" else set(self.curriculum.frontier)
+        needed |= self._obtain_items("queued", "running")
         for rule in rules:
             needed.update(rule.preconditions.get("consumes", {}))
             if rule.preconditions.get("station"):
@@ -457,17 +488,139 @@ class _Life:
         suggested = self.llm.expand_frontier(self.curriculum.frontier, candidates, sorted(self._certified_ids()))
         return bool(self.curriculum.extend(suggested))
 
+    # -- the bot's chat and the goal queue --------------------------------
+
+    def _poll_bot(self) -> None:
+        """Handle the chat commands the bot recorded since the last poll (v3.1g)."""
+        if not self._polls_bot:
+            return
+        since = self.bot_seq
+        try:
+            status = self.backend.status(since=since)
+            if status.last_seq < since:  # the bot restarted: its events start over
+                since = 0
+                status = self.backend.status(since=0)
+        except BackendError as error:
+            print(f"[bot] could not poll events: {error}")
+            return
+        self.bot_seq = status.last_seq
+        for event in sorted(status.events, key=lambda e: e["seq"]):
+            if event["seq"] > since and event["type"] == "chat_command":
+                self._handle_chat_command(event)
+
+    def _handle_chat_command(self, event: dict[str, Any]) -> None:
+        command = str(event.get("command", "")).lstrip("!").lower()
+        args = str(event.get("args") or "").strip()
+        self._log_event("chat_command", player=event.get("player"), command=command, args=args)
+        if command == "goal":
+            if args:
+                self.queue.submit(args, "user")  # _parse_pending answers it
+            else:
+                self._say("Usage: !goal <what>, like !goal 10 torches")
+        elif command == "cancel":
+            goal_id = args.split()[0].lower() if args else self._running.id if self._running and self._running.source == "user" else None
+            self._say(self._cancel_from_chat(goal_id) if goal_id else "Nothing to cancel.")
+        elif command == "stop":
+            open_goals = [g.id for g in self.queue.goals() if g.source == "user" and g.status not in FINAL_GOAL_STATUSES]
+            cancelled = [goal_id for goal_id in open_goals if self.queue.cancel(goal_id)]
+            self._cancelled_in_chat.update(cancelled)
+            self._say(f"Stopped: cancelled {len(cancelled)} goal{'s' if len(cancelled) > 1 else ''}." if cancelled else "Nothing to cancel.")
+        elif command == "status":
+            self._say(self._status_line())
+        else:
+            self._say(CHAT_COMMANDS_HELP)
+
+    def _cancel_from_chat(self, goal_id: str) -> str:
+        entry = self.queue.get(goal_id)
+        if entry is None:
+            return f"No goal {goal_id}."
+        if entry.status in FINAL_GOAL_STATUSES:
+            return f"{goal_id} is already {entry.status}."
+        self.queue.cancel(goal_id)
+        self._cancelled_in_chat.add(goal_id)
+        return f"Cancelled {goal_id}: {goal_label(entry.spec, entry.text)}"
+
+    def _status_line(self) -> str:
+        running = self._running
+        if running is None:
+            return "Idle."
+        if running.source == "curriculum":
+            return f"Learning: {goal_label(running)}."
+        waiting = sum(1 for g in self.queue.goals() if g.source != "curriculum" and g.status in ("queued", "submitted"))
+        return f"Doing {running.id}: {goal_label(running)}. Queued: {waiting}."
+
+    def _parse_pending(self) -> None:
+        """Parse the goals typed since the last pass: queue each one, or say why it can't be done."""
+        for entry in self.queue.pending():
+            if entry.source != "user":
+                continue
+            try:
+                parsed = self.llm.parse_goal(entry.text, self._inventory_seen, vanilla_items(), goal_id=entry.id)
+            except LLMError as error:
+                print(f"[goal] could not parse {entry.id}: {error}")
+                return  # it stays submitted; the next pass tries again
+            if isinstance(parsed, Unsupported):
+                if self.queue.mark(entry.id, "unsupported", reason=parsed.reply):
+                    self._log_event("goal_unsupported", goal_id=entry.id, reply=parsed.reply)
+                    self._say(parsed.reply)
+            elif self.queue.accept(parsed):
+                self._log_event(
+                    "goal_parsed", goal_id=entry.id, goal_kind=parsed.kind, item=parsed.item, count=parsed.count, target=parsed.target
+                )
+                self._say(f"Queued {entry.id}: {goal_label(parsed)}")
+
+    def _log_event(self, kind: str, **fields: Any) -> None:
+        """An event outside any episode, in EpisodeLog's line format."""
+        with self.events_path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps({"t": time.time(), "kind": kind, **fields}) + "\n")
+
+    def _say(self, message: str) -> None:
+        self.backend.say(message.replace("#", "")[:MAX_CHAT_CHARS])
+
+    def _obtain_items(self, *statuses: str, source: str | None = None) -> set[str]:
+        return {
+            g.spec.item for g in self.queue.goals()
+            if g.status in statuses and g.spec is not None and g.spec.kind == "obtain" and g.spec.item and source in (None, g.source)
+        }
+
+    def _before_step(self, episode: Episode, step: PlanStep, plan: list[PlanStep]) -> None:
+        """Runs before each plan step: sees new chat commands and goals, ends the running goal if it was
+        cancelled or outranked, then calls the caller's hook (which runs last, so a hidden change is never
+        switched on for a step that doesn't run)."""
+        self._poll_bot()
+        self._parse_pending()
+        running = self._running
+        if running is not None:
+            entry = self.queue.get(running.id)  # curriculum goals are not in the queue
+            if entry is not None and entry.status == "cancelled":
+                raise GoalInterrupted(running.id, "cancelled")
+            # S07 (death-handling): raise GoalInterrupted(running.id, "death") here if the bot died since the goal started.
+            waiting = self.queue.next()
+            if waiting is not None and GOAL_RANK[waiting.source] < GOAL_RANK[running.source]:
+                raise GoalInterrupted(running.id, "preempted")
+        if self.hooks.before_step is not None:
+            self.hooks.before_step(episode, step, plan)
+
     # -- one goal ---------------------------------------------------------
 
-    def _run_goal(self, goal: Goal) -> bool:
-        """Run one goal. Returns whether it failed for want of a resource that was not found or reachable."""
+    def _run_goal(self, spec: GoalSpec, goal: Goal | None = None) -> bool:
+        """Run one goal: `goal` is the curriculum's for a curriculum spec; a queued spec gets one built here.
+        Returns whether it failed for want of a resource that was not found or reachable."""
         index = self.goals_done + 1
         started_at = time.time()
         name = f"g{index:03d}"
         observation = self.backend.begin_episode()
+        self._inventory_seen = observation.inventory
         free_slots_before = observation.free_slots
-        observation, tossed = self._make_room(goal, observation)
+        observation, tossed = self._make_room(spec.item, observation)
+        if goal is None:
+            goal = self._start_queued_goal(spec, observation)
+            if goal is None:
+                return False  # cancelled meanwhile: no goal index used, nothing recorded
         budget = max(MIN_GOAL_BUDGET, BUDGET_PER_PLAN_STEP * goal.plan_length)
+        goal_clock_s = self.config.goal_wall_clock_s
+        if spec.source != "curriculum":
+            goal_clock_s = max(goal_clock_s, GOAL_SECONDS_PER_PLAN_STEP * goal.plan_length)
         task = Task(
             task_id=name, split="train", goal_item=goal.item, goal_count=goal.count,
             start_inventory=dict(observation.inventory), world_rules=(), budget=budget,
@@ -477,13 +630,17 @@ class _Life:
             self.config.run_dir / "episodes" / f"D_life_{name}_{goal.item.replace('#', '')}.jsonl",
             label=f"{name} {goal.item}", say=self.backend.say,
         )
-        life_clock_limits_goal = self._remaining_s() <= self.config.goal_wall_clock_s
+        life_clock_limits_goal = self._remaining_s() <= goal_clock_s
         episode = Episode(
             episode_id=f"D/life/{name}-{goal.item}", system="D", task=task, layout_seed=0, world_id=self.world_id,
             backend=self.backend, llm=self.llm, log=log, inventory=dict(observation.inventory), natural=True,
-            deadline=time.monotonic() + min(self.config.goal_wall_clock_s, max(self._remaining_s(), 0.0)),
+            deadline=time.monotonic() + min(goal_clock_s, max(self._remaining_s(), 0.0)),
         )
-        log.event("goal", index=index, item=goal.item, count=goal.count, reason=goal.reason, budget=budget)
+        asked = {} if spec.source == "curriculum" else {"asked": spec.count}
+        log.event(
+            "goal", index=index, item=goal.item, count=task.goal_count, reason=goal.reason, budget=budget,
+            goal_id=spec.id, source=spec.source, text=spec.text, goal_kind=spec.kind, **asked,
+        )
         if tossed:
             log.event("tossed", items=tossed, free_slots_before=free_slots_before, free_slots_after=observation.free_slots)
             names = [f"{count} {item.lstrip('#')}" for item, count in tossed.items()]
@@ -491,25 +648,92 @@ class _Life:
             self.backend.say(f"Dropping {listed} to make room."[:MAX_CHAT_CHARS])
         self._log_unreported(log)
 
-        result = run_schemavoyager(episode, self.store, self.hooks.before_step, excluded=self._excluded_rules())
-        for rule, error in episode.blocked_rules.items():
-            if error == "missing_ingredients":
-                self.blocked[rule] = self.blocked.get(rule, 0) + 1
-                if self.blocked[rule] == BLOCKED_GOALS_TO_EXCLUDE:
-                    print(f"[blocked] {rule}: blocked in {BLOCKED_GOALS_TO_EXCLUDE} goals, left out for the rest of the life")
+        interrupt: str | None = None
+        self._running = spec
+        try:
+            # `goal` is left out for a curriculum goal (its default None): v2's tests stub run_schemavoyager without it.
+            result = run_schemavoyager(
+                episode, self.store, self._before_step, excluded=self._excluded_rules(),
+                **({} if spec.source == "curriculum" else {"goal": spec}),
+            )
+        except GoalInterrupted as stop:
+            log.event("goal_interrupted", goal_id=stop.goal_id, reason=stop.reason)
+            result = episode.finish(success=False)  # as run_schemavoyager does at a normal end, but no skill is compiled
+            log.event("certified", rules=self.store.certify())
+            interrupt = stop.reason
+        finally:
+            self._running = None
         # Cut short by the life's own clock (not the goal's deadline or budget): no attempt to count.
-        interrupted = not result.success and life_clock_limits_goal and episode.out_of_time and episode.budget_left > 0
-        if not interrupted:
-            self.curriculum.record(goal, result.success)
+        if interrupt is None and not result.success and life_clock_limits_goal and episode.out_of_time and episode.budget_left > 0:
+            interrupt = "wall_clock"
+        self._end_goal(spec, goal, index, budget, started_at, episode, result, tossed, interrupt)
+        steps = [event for event in log.events if event["kind"] == "step"]
+        return not result.success and interrupt is None and bool(steps) and steps[-1]["error"] in MISSING_RESOURCE_ERRORS
+
+    def _start_queued_goal(self, spec: GoalSpec, observation: Observation) -> Goal | None:
+        """Mark a queued goal running, fixing its target count the first time it runs (D5), and plan it for its
+        budget and clock. None if the goal was cancelled meanwhile."""
+        entry = self.queue.get(spec.id)
+        held = normalize.counts(observation.inventory)
+        if entry is not None and entry.target_count is not None:
+            target_count, fields = entry.target_count, {}
+        else:
+            target_count = held.get(spec.item, 0) + spec.count
+            fields = {"target_count": target_count}
+        if not self.queue.mark(spec.id, "running", **fields):
+            return None
+        excluded = self._excluded_rules()
+        rules = [rule for rule in self.store.usable_rules(self.world_id) if rule.id not in excluded]
+        try:
+            plan = make_plan(spec.item, target_count, held, rules, self.store.skill_for, visible=normalize.counts(observation.nearby))
+        except PlanningError:
+            plan = []  # the episode still runs, so the trace shows plan_failed
+        uncertified = tuple(sorted({step.rule.id for step in plan if step.rule.status != "certified"}))
+        return Goal(spec.item, target_count, len(plan), uncertified, f"{spec.source} goal {spec.id}")
+
+    def _end_goal(
+        self, spec: GoalSpec, goal: Goal, index: int, budget: int, started_at: float, episode: Episode,
+        result: EpisodeResult, tossed: dict[str, int], interrupt: str | None,
+    ) -> None:
+        """The one ending of a goal (v3.1d): done, failed, cancelled, preempted or cut short by the life's clock."""
+        queued_goal = spec.source != "curriculum"
+        label = goal_label(spec)
+        chat = ""
+        if queued_goal:
+            if interrupt == "cancelled":  # the queue already says cancelled
+                chat = "" if spec.id in self._cancelled_in_chat else f"Cancelled: {label}"
+            elif interrupt == "preempted":
+                chat = self._pausing_line(label)
+                self.queue.mark(spec.id, "queued")
+            elif interrupt is not None:  # wall_clock: --resume runs it again
+                self.queue.mark(spec.id, "queued")
+            elif result.success:
+                self.queue.mark(spec.id, "done")
+                chat = f"Done: {label}"
+            else:
+                reason = self._failure_reason(episode)
+                self.queue.mark(spec.id, "failed", reason=reason)
+                chat = f"Couldn't get {label}: {reason}"
+            # S07 (death-handling): a "death" interrupt goes back to queued with its deaths count (v3.2d).
+        if interrupt is None:
+            for rule, error in episode.blocked_rules.items():
+                if error == "missing_ingredients":
+                    self.blocked[rule] = self.blocked.get(rule, 0) + 1
+                    if self.blocked[rule] == BLOCKED_GOALS_TO_EXCLUDE:
+                        print(f"[blocked] {rule}: blocked in {BLOCKED_GOALS_TO_EXCLUDE} goals, left out for the rest of the life")
+            if not queued_goal:
+                self.curriculum.record(goal, result.success)
         self.goals_done = index
-        record = self._goal_record(index, goal, budget, result, started_at, interrupted)
-        record["tossed"] = tossed
+        record = self._goal_record(index, goal, budget, result, started_at, interrupted=interrupt is not None)
+        record |= {"goal_id": spec.id, "source": spec.source, "text": spec.text, "goal_kind": spec.kind, "tossed": tossed}
+        if interrupt is not None:
+            record["interrupt"] = interrupt
         self._attach_unreported(record)
+        if chat:
+            self._say(chat)
         self._save(record)
         if self.hooks.after_goal is not None:
             self.hooks.after_goal(record)
-        steps = [event for event in log.events if event["kind"] == "step"]
-        return not result.success and not interrupted and bool(steps) and steps[-1]["error"] in MISSING_RESOURCE_ERRORS
 
     def _log_unreported(self, log: EpisodeLog) -> None:
         for repair in self._repairs_unreported:
@@ -525,13 +749,44 @@ class _Life:
             record["retests"] = self._retests_unreported
         self._repairs_unreported, self._retests_unreported = [], []
 
-    def _make_room(self, goal: Goal, observation: Observation) -> tuple[Observation, dict[str, int]]:
+    def _pausing_line(self, label: str) -> str:
+        """"Pausing 10 torches for hunger: 4 bread": a system goal is named by its text, a user goal by its label."""
+        preemptor = self.queue.next()
+        if preemptor is None:
+            return ""
+        return f"Pausing {label} for {preemptor.text if preemptor.source == 'system' else goal_label(preemptor)}"
+
+    @staticmethod
+    def _failure_reason(episode: Episode) -> str:
+        """Why a user goal failed, at most 80 characters (v3.1d): no plan, the last step's missing resource, out of
+        time or steps, the last failed step, else just "failed"."""
+        events = episode.log.events
+        end = max(i for i, event in enumerate(events) if event["kind"] == "episode_end")
+        if end > 0 and events[end - 1]["kind"] == "plan_failed":
+            return "no plan"
+        steps = [event for event in events if event["kind"] == "step"]
+
+        def in_words(step: dict[str, Any]) -> str:
+            target = (step["action_obj"].get("target") or "").lstrip("#").replace("_", " ")
+            return f"{step['error'].replace('_', ' ')}: {target}"[:80]
+
+        if steps and steps[-1]["error"] in ("not_found", "unreachable", "hazard"):
+            return in_words(steps[-1])
+        if episode.out_of_time:
+            return "out of time"
+        if episode.budget_left <= 0:
+            return "out of steps"
+        failed = [step for step in steps if step["error"]]
+        return in_words(failed[-1]) if failed else "failed"
+
+    def _make_room(self, goal_item: str, observation: Observation) -> tuple[Observation, dict[str, int]]:
         """Toss junk when the bot is nearly full. Returns the observation to start the goal from
-        (a new one after a toss) and what was tossed."""
+        (a new one after a toss) and what was tossed. The goal's item and what the user asked for are never junk."""
         if observation.free_slots is None or observation.free_slots >= MIN_FREE_SLOTS:
             return observation, {}
+        wanted = {goal_item} | self._obtain_items("queued") | self._obtain_items("done", source="user")
         junk = junk_to_toss(
-            observation.inventory, self.store.usable_rules(self.world_id), {goal.item}, observation.free_slots,
+            observation.inventory, self.store.usable_rules(self.world_id), wanted, observation.free_slots,
             min_free=MIN_FREE_SLOTS,
         )
         if not junk:
