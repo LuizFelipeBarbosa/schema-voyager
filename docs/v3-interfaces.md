@@ -83,12 +83,13 @@ Models and backends:
 
 Life (`life.py`):
 
-- At the start of each goal (`_Life._run_goal`, once the episode log is open, before the `Task` and `Episode` are
+- At the start of each goal (`_Life._run_goal`, right after `begin_episode`, before the `Task` and `Episode` are
   built), if the observation's `free_slots` is below 4: `junk_to_toss(observation.inventory,
   store.usable_rules(world_id), {goal.item}, free_slots)`, then `backend.toss(...)` if that isn't empty, then
   observe again so the goal starts from the inventory after the toss.
-- Log a `tossed` event `{"items": {...}, "free_slots_before": n, "free_slots_after": m}`, add `"tossed": {...}` to
-  the goal record (`{}` when nothing was tossed), and say "Dropping 40 dirt and 12 granite to make room."
+- Right after the `goal` event (each episode file still starts with `goal`), log a `tossed` event
+  `{"items": {...}, "free_slots_before": n, "free_slots_after": m}` and say "Dropping 40 dirt and 12 granite to make
+  room." The goal record gets `"tossed": {...}` (`{}` when nothing was tossed).
 
 Simulator (`environment.py`):
 
