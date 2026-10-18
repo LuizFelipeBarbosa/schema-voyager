@@ -36,8 +36,13 @@ test('validateGoto accepts integers, a range of 1..16 and optional protect', () 
     { x: 1, y: 2, z: 3, range: 0 },
     { x: 1, y: 2, z: 3, range: 17 },
     { x: 1, y: 2, z: 3, range: 2.5 },
+    { x: 1, y: 2, z: 3, stall_ms: 999 },
+    { x: 1, y: 2, z: 3, stall_ms: 55001 },
+    { x: 1, y: 2, z: 3, stall_ms: 8000.5 },
+    { x: 1, y: 2, z: 3, stall_ms: '8000' },
     { x: 1, y: 2, z: 3, protect: [{ origin: [0, 0], size: [1, 1, 1] }] }
   ]
+  for (const stall_ms of [1000, 8000, 55000]) assert.equal(validateGoto({ x: 1, y: 2, z: 3, stall_ms }), null)
   for (const body of bad) assert.equal(typeof validateGoto(body), 'string', JSON.stringify(body))
 })
 
@@ -68,6 +73,27 @@ test('goto answers unreachable when the pathfinder rejects or ends out of range'
   const short = walkingBot(async (b) => { b.entity.position = new Vec3(5.5, 10, 0.5) })
   const tooFar = await goto(short, { x: 10, y: 10, z: -3, range: 3 }, session())
   assert.equal(tooFar.error, 'unreachable')
+})
+
+test('goto with stall_ms ends a stalled walk unreachable, with where it ended', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'] })
+  const bot = walkingBot(() => new Promise(() => {})) // the bot stands still and the pathfinder never answers
+  bot.entity.position = new Vec3(1.234, 10, -5.678)
+
+  const pending = goto(bot, { x: 10, y: 10, z: -3, stall_ms: 2000 }, session())
+  for (let elapsed = 0; elapsed < 3000; elapsed += 500) {
+    t.mock.timers.tick(500)
+    await new Promise((resolve) => setImmediate(resolve))
+  }
+  const result = await pending
+
+  assert.deepEqual([result.ok, result.error, result.arrived], [false, 'unreachable', false])
+  assert.ok(result.travel)
+})
+
+test('goto without stall_ms is not given up on for standing still, and an arrival has no position', async () => {
+  const arrives = await goto(walkingBot(async (b) => { b.entity.position = new Vec3(10.5, 10, -2.5) }), { x: 10, y: 10, z: -3 }, session())
+  assert.equal('position' in arrives, false)
 })
 
 test('goto aborted before and during the walk throws the signal reason, as /mine does', async () => {

@@ -10,11 +10,15 @@ const { gotoGoal } = require('./world')
 const DEFAULT_RANGE = 3
 const MAX_RANGE = 16
 const WALK_MS = 55000 // under the 60 s action timeout
+const MIN_STALL_MS = 1000
 
 function validateGoto (body) {
   if (![body.x, body.y, body.z].every(Number.isInteger)) return '"x", "y" and "z" must be integers'
   if (body.range != null && !(Number.isInteger(body.range) && body.range >= 1 && body.range <= MAX_RANGE)) {
     return `"range" must be an integer from 1 to ${MAX_RANGE}`
+  }
+  if (body.stall_ms != null && !(Number.isInteger(body.stall_ms) && body.stall_ms >= MIN_STALL_MS && body.stall_ms <= WALK_MS)) {
+    return `"stall_ms" must be an integer from ${MIN_STALL_MS} to ${WALK_MS}`
   }
   return validateProtect(body.protect)
 }
@@ -37,18 +41,20 @@ async function withWalkingMovements (bot, fn) {
 }
 
 // `session`: {episode, signal}. An abort throws `signal.reason`.
-async function goto (bot, { x, y, z, range = DEFAULT_RANGE }, { episode, signal = null }) {
+async function goto (bot, { x, y, z, range = DEFAULT_RANGE, stall_ms: stallMs }, { episode, signal = null }) {
   signal?.throwIfAborted()
   const recording = recordTravel(bot, episode)
   let arrived
   try {
-    arrived = await withWalkingMovements(bot, () => gotoGoal(bot, new goals.GoalNear(x, y, z, range), WALK_MS, { signal }))
+    arrived = await withWalkingMovements(bot, () => gotoGoal(bot, new goals.GoalNear(x, y, z, range), WALK_MS, { signal, ...(stallMs && { failFast: { stallMs } }) }))
   } catch (err) {
     recording.finish()
     throw err
   }
   await recording.settle()
-  return { ok: arrived, error: arrived ? null : 'unreachable', arrived, travel: recording.finish() }
+  const travel = recording.finish()
+  if (!arrived) return { ok: false, error: 'unreachable', arrived, travel }
+  return { ok: true, error: null, arrived, travel }
 }
 
 module.exports = { goto, validateGoto, withWalkingMovements }
