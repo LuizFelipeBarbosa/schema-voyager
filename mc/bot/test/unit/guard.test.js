@@ -5,6 +5,7 @@ const { Vec3 } = require('vec3')
 const registry = require('prismarine-registry')('1.21.1')
 const { createEventLog } = require('../../lib/events')
 const { MODES, pickThreat, decide, fight, createGuard } = require('../../lib/guard')
+const { DEFAULT_TACTICS, validateTactics } = require('../../lib/tactics')
 
 const origin = new Vec3(0, 64, 0)
 
@@ -519,4 +520,64 @@ test('fight: after a fled, flee gets fleeMs and fleeDistance; the defaults are 1
   assert.equal(short.range, 6)
   assert.ok(short.elapsed < 400, `elapsed ${short.elapsed}`)
   assert.equal((await fled({ fleeMs: 100 })).range, 16)
+})
+
+// ---- createGuard: tactics ----
+
+test('guard: DEFAULT_TACTICS is crit and shield, and a valid list', () => {
+  assert.deepEqual([...DEFAULT_TACTICS], ['crit', 'shield'])
+  assert.equal(validateTactics(DEFAULT_TACTICS), null)
+})
+
+test('guard: every fight gets a new controller of the tactics factory', async () => {
+  const created = []
+  const tactics = () => {
+    const controller = { names: ['crit', 'shield'], attached: [], attach (entity) { this.attached.push(entity.id) }, detach () {} }
+    created.push(controller)
+    return controller
+  }
+  const { bot, target, guard } = guardFixture({ mode: 'defend', tactics })
+  for (let fights = 1; fights <= 2; fights++) {
+    const responding = guard.respond(guard.check())
+    later(20, () => bot.emit('entityDead', target))
+    assert.equal((await responding).outcome, 'killed')
+    bot.emit('entityGone', target) // the id is back in use
+    assert.equal(created.length, fights)
+  }
+  assert.notEqual(created[0], created[1])
+  assert.deepEqual(created.map((controller) => controller.attached), [[7], [7]])
+})
+
+test('guard: the default factory builds a real crit and shield controller that runs on the fake bot', async () => {
+  const { bot, pvp, target, guard } = guardFixture({ mode: 'defend' })
+  Object.assign(bot.entity, { velocity: new Vec3(0, 0, 0), onGround: true, yaw: 0 })
+  bot.heldItem = sword
+  bot.blockAt = () => null // every step reads as unsafe
+  bot.setControlState = () => {}
+  bot.lookAt = async () => {}
+  pvp.hasShield = () => false
+  pvp.attack = function (entity) { this.attacked.push(entity); this.target = entity }
+  const responding = guard.respond(guard.check())
+  later(20, () => {
+    assert.equal(bot.listenerCount('physicsTick'), 1)
+    bot.emit('physicsTick')
+  })
+  later(40, () => bot.emit('entityDead', target))
+  assert.equal((await responding).outcome, 'killed')
+  assert.equal(bot.listenerCount('physicsTick'), 0)
+})
+
+test('guard: a flee and a creeper back-off build no controller', async () => {
+  const calls = []
+  const tactics = () => { calls.push('tactics') }
+  const passive = guardFixture({ mode: 'passive', tactics })
+  setTimeout(() => { passive.target.position = new Vec3(17, 64, 0) }, 30)
+  assert.equal((await passive.guard.respond(passive.guard.check())).decision, 'flee')
+
+  const backOff = guardFixture({ mode: 'defend', tactics })
+  backOff.target.name = 'creeper'
+  backOff.target.position = new Vec3(4, 64, 0)
+  setTimeout(() => { backOff.target.position = new Vec3(17, 64, 0) }, 30)
+  assert.equal((await backOff.guard.respond(backOff.guard.check())).decision, 'back_off')
+  assert.deepEqual(calls, [])
 })

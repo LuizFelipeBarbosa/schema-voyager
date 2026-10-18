@@ -283,7 +283,7 @@ const REGISTRY = {
 }
 
 const TACTICS = Object.freeze(Object.keys(REGISTRY))
-const DEFAULT_TACTICS = Object.freeze([])
+const DEFAULT_TACTICS = Object.freeze(['crit', 'shield']) // runs/v3-duel-crit, runs/v3-duel-shield
 
 // A problem for a 400, or null when `names` is a valid tactic list.
 function validateTactics (names, registry = REGISTRY) {

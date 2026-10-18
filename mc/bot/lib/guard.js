@@ -6,6 +6,7 @@
 const { goals } = require('mineflayer-pathfinder')
 const { round } = require('./world')
 const { parseOwners } = require('./chat_commands')
+const { createTactics, DEFAULT_TACTICS } = require('./tactics')
 
 const MODES = ['off', 'passive', 'defend']
 
@@ -243,7 +244,7 @@ function canSee (bot, entity) {
   return !block || eyes.distanceTo(block.intersect ?? block.position) >= distance
 }
 
-function createGuard (bot, { eventLog, mode = process.env.BOT_GUARD || 'defend', movements = () => null, now = () => Date.now() / 1000, respondCapMs = RESPOND_CAP_MS, outOfReachMs = OUT_OF_REACH_MS } = {}) {
+function createGuard (bot, { eventLog, mode = process.env.BOT_GUARD || 'defend', movements = () => null, now = () => Date.now() / 1000, respondCapMs = RESPOND_CAP_MS, outOfReachMs = OUT_OF_REACH_MS, tactics = () => createTactics(bot, DEFAULT_TACTICS) } = {}) {
   assertMode(mode)
   const owners = parseOwners(process.env.BOT_OWNERS)
   const recentAttackers = new Map() // entity id -> seconds of its last hit on the bot
@@ -332,7 +333,7 @@ function createGuard (bot, { eventLog, mode = process.env.BOT_GUARD || 'defend',
     if (decision === 'fight') {
       const result = await fight(bot, target, {
         timeoutMs: remainingMs(respondCapMs - FIGHT_CLEANUP_MARGIN_MS), movements: movements(), eventLog,
-        shouldStop: () => mode === 'off', deadline, sprint: true,
+        shouldStop: () => mode === 'off', deadline, sprint: true, tactics: tactics(),
         outOfReachMs: RANGED.has(threat.mob) ? RANGED_OUT_OF_REACH_MS : outOfReachMs
       })
       // fight() has already run the flight
