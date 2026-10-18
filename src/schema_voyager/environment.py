@@ -213,6 +213,7 @@ Pos = tuple[int, int, int]
 # item: (ingredients, output count, needs crafting table)
 WHITELIST_RECIPES: dict[str, tuple[dict[str, int], int, bool]] = {
     "#planks": ({"#log": 1}, 4, False),
+    "#door": ({"#planks": normalize.DOOR_PLANKS}, 3, True),
     "stick": ({"#planks": 2}, 4, False),
     "crafting_table": ({"#planks": 4}, 1, False),
     "wooden_pickaxe": ({"#planks": 3, "stick": 2}, 1, True),
@@ -441,7 +442,7 @@ class NaturalWorld:
         output = None
         for key, (ingredients, count, needs_table) in WHITELIST_RECIPES.items():
             if Counter(ingredients) == wanted and (len(grid) > 2 or not needs_table):
-                item = f"{normalize.species(cells[0])}_planks" if key == "#planks" else key
+                item = {"#planks": f"{normalize.species(cells[0])}_planks", "#door": f"{normalize.species(cells[0])}_door"}.get(key, key)
                 output = {"item": item, "count": self._output_count(key, count)}
                 break
         return {"ok": True, "error": None, "output": output, "inventory_delta": {}, "events": []}
@@ -720,9 +721,9 @@ class NaturalWorld:
         except ValueError:
             return self._fail("missing_ingredients", missing={i: n * action.times for i, n in ingredients.items()})
 
-        # A raw planks target is made from logs of its own species; a group takes any.
-        log_species = normalize.species(item) if key == "#planks" and not is_group else None
-        payment, missing = self._pay(ingredients, action.times, log_species)
+        # A raw planks target is made from logs of its own species, a door from planks of its own; a planks group takes any.
+        ingredient_species = normalize.species(item) if key == "#door" or (key == "#planks" and not is_group) else None
+        payment, missing = self._pay(ingredients, action.times, ingredient_species)
         if missing:
             return self._fail("missing_ingredients", missing=missing)
         if needs_table and self.inventory["crafting_table"] < 1:

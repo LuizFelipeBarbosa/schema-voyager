@@ -233,7 +233,8 @@ def door_tops(bp: dict[str, Any], origin: Pos) -> set[Pos]:
 
 
 def matches(expected: str, found: str | None) -> bool:
-    """Whether a scanned raw id (None: a cell the bot can't see) satisfies a palette value."""
+    """Whether a scanned raw id (None: a cell the bot can't see) satisfies a palette value; a door value takes any
+    wooden door."""
     if expected == "any":
         return True
     if found is None:
@@ -242,6 +243,8 @@ def matches(expected: str, found: str | None) -> bool:
         return found in AIR_BLOCKS
     if expected in GROUPS:
         return found in normalize.members(expected)
+    if expected in DOORS:
+        return found in DOORS
     if expected == "torch":
         return found in ("torch", "wall_torch")
     return found == expected
