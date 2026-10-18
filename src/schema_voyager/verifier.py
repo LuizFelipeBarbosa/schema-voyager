@@ -49,6 +49,8 @@ class Check:
 
 def kind_of(rule: Rule, action: Action) -> CheckKind:
     """exact or stochastic; quarantine is decided per step by check()."""
+    if rule.kind == "kill":
+        return "stochastic"  # random drops can never contradict a kill rule
     if rule.kind != "mine":
         return "exact"
     subject = family(rule.subject)
@@ -71,6 +73,8 @@ def evaluate(rule: Rule, action: Action, observed: dict[str, Any]) -> Verdict:
 
 
 def predict(rule: Rule, action: Action) -> dict[str, Any]:
+    if rule.kind == "kill":
+        return {"killed": True, "allowed": _allowed(rule)}
     if rule.kind == "mine":
         if kind_of(rule, action) == "stochastic":
             return {"block_removed": True, "allowed": _allowed(rule)}
@@ -103,6 +107,10 @@ def check(rule: Rule, action: Action, outcome: Outcome) -> Check:
         raw = outcome.drops | {outcome.detail["block"]: -1} if "block" in outcome.detail else {}
         if outcome.picked_up != outcome.drops:
             detail = "pickup incomplete (tolerant)"
+    elif rule.kind == "kill":
+        observed = {"killed": bool(outcome.detail.get("killed")), "drops": counts(outcome.drops)}
+        if not observed["killed"]:
+            return Check("failed", predicted, observed, "not killed", kind)
     else:
         raw = dict(outcome.inventory_delta)
         station = rule.preconditions.get("station")
@@ -147,7 +155,7 @@ def _is_quarantined(action: Action, outcome: Outcome) -> bool:
 
 
 def _allowed(rule: Rule) -> dict[str, list[int]]:
-    """Item -> [min, max] drop count of a stochastic mine rule, by family."""
+    """Item -> [min, max] drop count of a stochastic mine or kill rule, by family."""
     declared = rule.effects.get("allowed") or {item: [0, n] for item, n in rule.effects.get("drops", {}).items()}
     allowed: dict[str, list[int]] = {}
     for item, (low, high) in declared.items():
@@ -159,7 +167,7 @@ def _allowed(rule: Rule) -> dict[str, list[int]]:
 
 def _in_range(allowed: dict[str, list[int]], observed: dict[str, Any]) -> bool:
     drops = observed.get("drops", {})
-    return bool(observed.get("block_removed")) and set(drops) <= set(allowed) and all(
+    return bool(observed.get("block_removed") or observed.get("killed")) and set(drops) <= set(allowed) and all(
         low <= drops.get(item, 0) <= high for item, (low, high) in allowed.items()
     )
 

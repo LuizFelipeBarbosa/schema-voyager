@@ -99,8 +99,10 @@ class _Planner:
                     steps = self._craft(rule, item, count, trial, stack + [item])
                 elif rule.kind == "smelt":
                     steps = self._smelt(rule, item, count, trial, stack + [item])
+                elif rule.kind in ("mine", "kill"):
+                    steps = self._harvest(rule, item, count, trial, stack + [item])
                 else:
-                    steps = self._mine(rule, item, count, trial, stack + [item])
+                    raise PlanningError(f"{rule.id}: unknown rule kind {rule.kind}")
             except PlanningError as error:
                 reasons.append(f"{rule.id}: {error}")
                 continue
@@ -109,11 +111,11 @@ class _Planner:
         raise PlanningError(f"cannot obtain {item} ({'; '.join(reasons)})")
 
     def _sightings(self, rule: Rule) -> float:
-        """How many blocks of the rule's subject are in view; crafts and smelts are always
+        """How many blocks (or mobs) of the rule's subject are in view; crafts and smelts are always
         within reach. Without a view (v1) every rule ties."""
         if self.visible is None:
             return 1
-        if rule.kind != "mine":
+        if rule.kind not in ("mine", "kill"):
             return math.inf
         return self.visible.get(normalize.family(rule.subject), 0)
 
@@ -187,7 +189,7 @@ class _Planner:
         _replace(inv, best[2])
         return best[0], best[1]
 
-    def _mine(self, rule: Rule, item: str, count: int, inv: Counter, stack: list[str]) -> list[PlanStep]:
+    def _harvest(self, rule: Rule, item: str, count: int, inv: Counter, stack: list[str]) -> list[PlanStep]:
         tools = rule.preconditions.get("tool_any", [])
         steps: list[PlanStep] = []
         tool = None
@@ -196,11 +198,11 @@ class _Planner:
             if tool is None:
                 tool, steps = self._cheapest_tool(tools, inv, stack)
 
-        mines = math.ceil((count - inv[item]) / rule.yields()[item])
-        for _ in range(mines):
+        repeats = math.ceil((count - inv[item]) / rule.yields()[item])
+        for _ in range(repeats):
             for gained, n in rule.yields().items():
                 inv[gained] += n
-            steps.append(PlanStep(Action("mine", rule.subject, tool=tool), rule, _snapshot(inv)))
+            steps.append(PlanStep(Action(rule.kind, rule.subject, tool=tool), rule, _snapshot(inv)))
         return steps
 
     def _cheapest_tool(self, tools: list[str], inv: Counter, stack: list[str]) -> tuple[str, list[PlanStep]]:

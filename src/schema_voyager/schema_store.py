@@ -257,10 +257,10 @@ class SchemaStore:
 
 def applies(rule: Rule, action: Action) -> bool:
     """Whether a rule makes a prediction for this action: same action and
-    subject, and for mining, a tool the rule's preconditions allow."""
+    subject, and for mining and killing, a tool the rule's preconditions allow."""
     if action.kind != rule.kind or action.target is None or family(action.target) != family(rule.subject):
         return False
-    if rule.kind == "mine":
+    if rule.kind in ("mine", "kill"):
         tools = rule.preconditions.get("tool_any", [])
         return not tools or action.tool in tools
     return True

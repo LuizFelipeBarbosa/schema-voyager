@@ -53,7 +53,7 @@ def _rule_key(rule_id: str, rules_by_id: dict[str, dict[str, Any]]) -> tuple[str
     if rule is None:
         return None
     action = rule["action"]
-    subject = action["block"] if action["type"] == "mine" else action["item"]
+    subject = {"mine": action.get("block"), "kill": action.get("mob")}.get(action["type"]) or action["item"]
     return _subject_key(action["type"], subject)
 
 
