@@ -3,27 +3,18 @@
 // docs/v3-interfaces.md (v3.4b "/survey"); the simulator ranks the same way.
 
 const { Vec3 } = require('vec3')
+const { validateProtect } = require('./protect')
 
 const MAX_FOOTPRINT_SIDE = 16
 const MAX_RADIUS = 32
 const DEFAULT_RADIUS = 24
-const MAX_PROTECT_BOXES = 32
 const WINDOW_BLOCKS = 12 // ground is looked for this far above and below the bot's feet
 const MAX_STEP = 3 // how far a column's ground may be above the layer under the floor
 const MAX_SITES = 10
 
-const isIntegerTriple = (value) => Array.isArray(value) && value.length === 3 && value.every(Number.isInteger)
 const isIntegerInRange = (value, min, max) => Number.isInteger(value) && value >= min && value <= max
 const isLiquid = (name) => name === 'water' || name === 'lava'
 const isTree = (name) => /(_log|_wood|_leaves|mushroom_block)$/.test(name) || name === 'mushroom_stem'
-
-// Shared with /goto, which accepts `protect` but never digs or places.
-function validateProtect (protect) {
-  if (protect == null) return null
-  const valid = Array.isArray(protect) && protect.length <= MAX_PROTECT_BOXES && protect.every((box) =>
-    box && isIntegerTriple(box.origin) && isIntegerTriple(box.size) && box.size.every((side) => side > 0))
-  return valid ? null : `"protect" must be a list of at most ${MAX_PROTECT_BOXES} boxes {origin: three integers, size: three positive integers}`
-}
 
 function validateSurvey (body) {
   const { size, radius } = body
@@ -130,4 +121,4 @@ function survey (bot, { size, radius = DEFAULT_RADIUS, protect = [] }) {
   return { ok: true, ...rankSites({ columnAt, feet: { x, z }, size, radius, protect }) }
 }
 
-module.exports = { rankSites, survey, validateProtect, validateSurvey }
+module.exports = { rankSites, survey, validateSurvey }

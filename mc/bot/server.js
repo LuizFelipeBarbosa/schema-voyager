@@ -10,6 +10,7 @@ const { craft } = require('./lib/craft')
 const { explore, newSpiral, trackWorldBorder } = require('./lib/explore')
 const { probe } = require('./lib/probe')
 const { smelt } = require('./lib/smelt')
+const { validateProtect } = require('./lib/protect')
 const { clear, place, validateClear, validatePlace } = require('./lib/place')
 const { scan, validateScan } = require('./lib/scan')
 const { survey, validateSurvey } = require('./lib/survey')
@@ -251,7 +252,7 @@ const validators = {
     if (body.tool != null && !isName(body.tool)) return '"tool" must be a string or null'
     return validateDigOptions(body) || (body.max_distance != null && !isPositiveNumber(body.max_distance)
       ? '"max_distance" must be a positive number'
-      : null)
+      : validateProtect(body.protect))
   },
   craft: (body) => {
     if (!isName(body.item)) return '"item" must be a non-empty string'
@@ -262,11 +263,11 @@ const validators = {
     const directions = [...DIRECTIONS, 'up']
     if (body.direction != null && !directions.includes(body.direction)) return `"direction" must be one of ${directions.join(', ')}`
     if (body.distance != null && !isPositiveNumber(body.distance)) return '"distance" must be a positive number'
-    return validateDigOptions(body)
+    return validateDigOptions(body) || validateProtect(body.protect)
   },
   look: (body) => {
     if (!isNameList(body.blocks) || body.blocks.length === 0) return '"blocks" must be a non-empty list of strings'
-    return body.radius != null && !isPositiveNumber(body.radius) ? '"radius" must be a positive number' : null
+    return body.radius != null && !isPositiveNumber(body.radius) ? '"radius" must be a positive number' : validateProtect(body.protect)
   },
   smelt: (body) => {
     if (!isName(body.ingredient) || !isName(body.item) || !isName(body.fuel)) return '"ingredient", "item" and "fuel" must be non-empty strings'

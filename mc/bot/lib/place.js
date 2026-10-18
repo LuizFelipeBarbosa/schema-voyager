@@ -6,6 +6,7 @@
 const { Movements, goals } = require('mineflayer-pathfinder')
 const { Vec3 } = require('vec3')
 const { watchServerBlockChange } = require('./blockchange')
+const { insideAny, placeExclusion, validateProtect } = require('./protect')
 const { hazardNear } = require('./targets')
 const { emptyTravel, recordTravel } = require('./travel')
 const { AIR_BLOCKS, emptyHand, findInventoryItem, gotoGoal, inventoryCounts, sleepTicks } = require('./world')
@@ -57,7 +58,7 @@ function validateTarget (body) {
   if (box != null && !(isIntegerTriple(box.origin) && isIntegerTriple(box.size) && box.size.every((side) => side > 0))) {
     return '"keep_out" must have an "origin" of three integers and a "size" of three positive integers'
   }
-  return null
+  return validateProtect(body.protect)
 }
 
 function validatePlace (body) {
@@ -92,11 +93,14 @@ function scaffoldNamesFor (bot, scaffold, block = null) {
   return scaffold.filter((name) => name !== block && held[name] > 0)
 }
 
-function insideBox (box, cell) {
-  return [0, 1, 2].every((axis) => {
-    const offset = [cell.x, cell.y, cell.z][axis] - box.origin[axis]
-    return offset >= 0 && offset < box.size[axis]
-  })
+const insideBox = (box, cell) => insideAny([box], cell)
+
+// True if a bot with its feet in `cell` stands on top of the box: inside its
+// x and z footprint, at or above its top. It could not get down without digging the roof.
+function standsOnTopOf (box, cell) {
+  const [ox, oy, oz] = box.origin
+  const [width, height, depth] = box.size
+  return cell.y >= oy + height && cell.x >= ox && cell.x < ox + width && cell.z >= oz && cell.z < oz + depth
 }
 
 // exclusionAreasPlace entry: scaffold inside the box costs KEEP_OUT_COST.
@@ -141,11 +145,12 @@ function fastestTool (bot, block) {
 // --- Walking ---------------------------------------------------------------
 
 // Wraps a pathfinder goal so the walk never ends with the bot's feet or head
-// in `cells`, on top of `floor` (the cell the bot would stand on), or inside `avoidBox`.
+// in `cells`, on top of `floor` (the cell the bot would stand on), inside `avoidBox`,
+// or on top of `roofBox`.
 class StanceGoal extends goals.Goal {
-  constructor (inner, { cells, floor = null, avoidBox = null }) {
+  constructor (inner, { cells, floor = null, avoidBox = null, roofBox = null }) {
     super()
-    Object.assign(this, { inner, cells, floor, avoidBox })
+    Object.assign(this, { inner, cells, floor, avoidBox, roofBox })
   }
 
   heuristic (node) {
@@ -157,7 +162,8 @@ class StanceGoal extends goals.Goal {
     const body = [node, node.plus(UP)]
     return body.some((cell) => this.cells.some((target) => target.equals(cell))) ||
       Boolean(this.floor?.equals(node.offset(0, -1, 0))) ||
-      Boolean(this.avoidBox && body.some((cell) => insideBox(this.avoidBox, cell)))
+      Boolean(this.avoidBox && body.some((cell) => insideBox(this.avoidBox, cell))) ||
+      Boolean(this.roofBox && standsOnTopOf(this.roofBox, node))
   }
 
   isEnd (node) {
@@ -187,8 +193,8 @@ class GoalWithinReach extends goals.Goal {
 }
 
 // Runs `fn` with world-preserving movements that may scaffold with `scaffoldNames`
-// (and, with `keepOut`, never inside it); restores the previous movements.
-async function withBuildMovements (bot, { scaffoldNames, keepOut }, fn) {
+// (and, with `keepOut` or `protect`, never inside them); restores the previous movements.
+async function withBuildMovements (bot, { scaffoldNames, keepOut, protect }, fn) {
   const previous = bot.pathfinder.movements
   const movements = new Movements(bot)
   movements.canDig = false
@@ -196,6 +202,7 @@ async function withBuildMovements (bot, { scaffoldNames, keepOut }, fn) {
   movements.scafoldingBlocks = scaffoldNames.map((name) => bot.registry.itemsByName[name]?.id).filter((id) => id !== undefined)
   movements.allow1by1towers = movements.scafoldingBlocks.length > 0
   if (keepOut) movements.exclusionAreasPlace.push(keepOutExclusion(keepOut))
+  if (protect.length > 0) movements.exclusionAreasPlace.push(placeExclusion(protect))
   bot.pathfinder.setMovements(movements)
   try {
     return await fn()
@@ -205,10 +212,10 @@ async function withBuildMovements (bot, { scaffoldNames, keepOut }, fn) {
 }
 
 // Walks to `goal` and counts what the pathfinder did on the way. Returns {reached, travel}.
-async function walk (bot, episode, goal, { scaffoldNames, keepOut, signal }) {
+async function walk (bot, episode, goal, { scaffoldNames, keepOut, protect, signal }) {
   const recording = recordTravel(bot, episode)
   try {
-    const reached = await withBuildMovements(bot, { scaffoldNames, keepOut }, () => gotoGoal(bot, goal, WALK_MS, { signal }))
+    const reached = await withBuildMovements(bot, { scaffoldNames, keepOut, protect }, () => gotoGoal(bot, goal, WALK_MS, { signal }))
     if (reached) await recording.settle()
     return { reached, travel: recording.finish() }
   } catch (err) {
@@ -290,7 +297,7 @@ async function placeAgainstSupport (bot, blockName, pos, faces, signal) {
 // `session`: {episode, tracker, signal}. An abort throws `signal.reason`.
 async function place (bot, body, { episode, tracker, signal = null }) {
   signal?.throwIfAborted()
-  const { block: blockName, keep_out: keepOut = null, scaffold = [] } = body
+  const { block: blockName, keep_out: keepOut = null, scaffold = [], protect = [] } = body
   const pos = new Vec3(body.x, body.y, body.z)
   const result = { block: blockName, travel: emptyTravel(), inventory_before_step: inventoryCounts(bot) }
   const finish = (error, extra = {}) => ({ ok: !error, error: error || null, ...result, ...extra, inventory: inventoryCounts(bot) })
@@ -306,8 +313,8 @@ async function place (bot, body, { episode, tracker, signal = null }) {
 
   const cells = isDoor(blockName) ? [pos, pos.plus(UP)] : [pos]
   const reach = new goals.GoalPlaceBlock(pos, bot.world, { range: REACH, ...(before.faces && { faces: before.faces }) })
-  const goal = new StanceGoal(reach, { cells, avoidBox: isDoor(blockName) ? keepOut : null })
-  const walked = await walk(bot, episode, goal, { scaffoldNames: scaffoldNamesFor(bot, scaffold, blockName), keepOut, signal })
+  const goal = new StanceGoal(reach, { cells, avoidBox: isDoor(blockName) ? keepOut : null, roofBox: keepOut })
+  const walked = await walk(bot, episode, goal, { scaffoldNames: scaffoldNamesFor(bot, scaffold, blockName), keepOut, protect, signal })
   result.travel = walked.travel
   // gotoGoal also accepts a goal met one cell above the feet, so the real stance is checked too.
   if (!walked.reached || goal.blocksStance(bot.entity.position.floored())) return finish('unreachable')
@@ -341,7 +348,7 @@ async function place (bot, body, { episode, tracker, signal = null }) {
 
 async function clear (bot, body, { episode, tracker, signal = null }) {
   signal?.throwIfAborted()
-  const { keep_out: keepOut = null, scaffold = [] } = body
+  const { keep_out: keepOut = null, scaffold = [], protect = [] } = body
   const pos = new Vec3(body.x, body.y, body.z)
   const result = { travel: emptyTravel(), inventory_before_step: inventoryCounts(bot) }
   const finish = (error, extra = {}) => ({ ok: !error, error: error || null, ...result, ...extra, inventory: inventoryCounts(bot) })
@@ -359,8 +366,8 @@ async function clear (bot, body, { episode, tracker, signal = null }) {
   const cells = target && isDoor(target.name) ? [pos, pos.offset(0, target.getProperties().half === 'upper' ? -1 : 1, 0)] : [pos]
   const hasShape = !target || target.shapes.length > 0
   const reach = hasShape ? new goals.GoalLookAtBlock(pos, bot.world, { reach: REACH }) : new GoalWithinReach(pos, SHAPELESS_REACH)
-  const goal = new StanceGoal(reach, { cells, floor: pos, avoidBox: cells.length > 1 ? keepOut : null })
-  const walked = await walk(bot, episode, goal, { scaffoldNames: scaffoldNamesFor(bot, scaffold), keepOut, signal })
+  const goal = new StanceGoal(reach, { cells, floor: pos, avoidBox: cells.length > 1 ? keepOut : null, roofBox: keepOut })
+  const walked = await walk(bot, episode, goal, { scaffoldNames: scaffoldNamesFor(bot, scaffold), keepOut, protect, signal })
   result.travel = walked.travel
   if (!walked.reached || goal.blocksStance(bot.entity.position.floored())) return finish('unreachable')
 

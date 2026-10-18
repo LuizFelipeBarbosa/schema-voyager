@@ -180,18 +180,18 @@ function standableNeighbours (bot, feet, dyMin, dyMax) {
 // A bot that cannot walk off: no standable cell next to it within a block of its
 // own level (a 1x1 hole it dug, a pillar it placed). First steps to a standable
 // cell (any drop of up to 4 blocks), else, when it may dig, climbs towards open sky.
-async function getOutOfEnclosure (bot, { digThrough, scaffold, signal }) {
+async function getOutOfEnclosure (bot, { digThrough, scaffold, protect, signal }) {
   const feet = bot.entity.position.floored()
   if (standableNeighbours(bot, feet, -1, 1).length > 0) return
   const [exit] = standableNeighbours(bot, feet, -4, 1)
   if (exit) {
     await gotoGoal(bot, new goals.GoalNear(exit.x, exit.y, exit.z, 1), STALL_MS * 2, { failFast: FAIL_FAST, signal })
   } else if (digThrough && !hasOpenSky(bot)) {
-    await exploreUp(bot, { scaffold, signal })
+    await exploreUp(bot, { scaffold, protect, signal })
   }
 }
 
-async function exploreDirection (bot, { border, tracker, signal }, { direction, distance, digThrough, scaffold }) {
+async function exploreDirection (bot, { border, tracker, signal }, { direction, distance, digThrough, scaffold, protect }) {
   const startedAt = Date.now()
   const start = bot.entity.position.clone()
   const deadline = startedAt + EXPLORE_TIMEOUT_MS
@@ -220,11 +220,11 @@ async function exploreDirection (bot, { border, tracker, signal }, { direction, 
       const attemptStart = bot.entity.position.clone()
       await walkLegs(directionVector(attempt.direction), attempt.distance)
       const moved = horizontalDistance(attemptStart, bot.entity.position)
-      if (moved < 1 && index === 0) await getOutOfEnclosure(bot, { digThrough, scaffold, signal })
+      if (moved < 1 && index === 0) await getOutOfEnclosure(bot, { digThrough, scaffold, protect, signal })
       return moved
     }, { signal })
   }
-  if (digThrough) await withDiggingMovements(bot, { scaffoldNames: scaffold }, tryAttempts)
+  if (digThrough) await withDiggingMovements(bot, { scaffoldNames: scaffold, protect }, tryAttempts)
   else await tryAttempts()
   const moved = horizontalDistance(start, bot.entity.position)
   const error = moved < 1 ? 'unreachable' : null
@@ -235,7 +235,7 @@ async function exploreDirection (bot, { border, tracker, signal }, { direction, 
 // block of the column, digging up and pillaring with `scaffold` blocks only (never down:
 // DiggingMovements). A leg that ends without gaining height ends the climb,
 // since the pathfinder found no way (or would have to break next to a liquid).
-async function exploreUp (bot, { scaffold, signal }) {
+async function exploreUp (bot, { scaffold, protect, signal }) {
   const startY = bot.entity.position.y
   const deadline = Date.now() + CLIMB_TIMEOUT_MS
   const climb = async () => {
@@ -247,7 +247,7 @@ async function exploreUp (bot, { scaffold, signal }) {
       if (bot.entity.position.y - legStartY < 1) return
     }
   }
-  await withDiggingMovements(bot, { scaffoldNames: scaffold }, climb)
+  await withDiggingMovements(bot, { scaffoldNames: scaffold, protect }, climb)
   const sky = hasOpenSky(bot)
   const error = !sky && bot.entity.position.y - startY < 1 ? 'unreachable' : null
   return { ok: !error, error, position: positionOf(bot), sky }
@@ -263,14 +263,16 @@ async function explore (bot, session, body = {}) {
   let travel = null
   try {
     const scaffold = Array.isArray(body.scaffold) ? body.scaffold : []
+    const protect = body.protect ?? []
     if (body.direction === 'up') {
-      outcome = await exploreUp(bot, { scaffold, signal })
+      outcome = await exploreUp(bot, { scaffold, protect, signal })
     } else if (body.direction) {
       outcome = await exploreDirection(bot, session, {
         direction: body.direction,
         distance: body.distance ?? DEFAULT_DISTANCE,
         digThrough: body.dig_through === true,
-        scaffold
+        scaffold,
+        protect
       })
     } else {
       outcome = await exploreSpiral(bot, episode, { signal })

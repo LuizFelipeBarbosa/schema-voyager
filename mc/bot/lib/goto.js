@@ -2,7 +2,7 @@
 // contracts/bot_api.md (v3.4b).
 
 const { Movements, goals } = require('mineflayer-pathfinder')
-const { validateProtect } = require('./survey')
+const { validateProtect } = require('./protect')
 const { sprintAllowed } = require('./movements')
 const { recordTravel } = require('./travel')
 const { gotoGoal } = require('./world')

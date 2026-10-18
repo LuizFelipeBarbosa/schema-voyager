@@ -4,6 +4,7 @@
 
 const { Vec3 } = require('vec3')
 const { DIRECTIONS, sectorOf } = require('./geometry')
+const { insideAny } = require('./protect')
 const { AIR_BLOCKS, blockNameAt, hasAirNeighbour, round } = require('./world')
 
 const MAX_CANDIDATES = 1024
@@ -80,12 +81,12 @@ function reachCost (bot, pos, origin, exposed) {
 
 // The blocks named in `blockNames` within `maxDistance` that are worth trying,
 // best first: not in `skipped` (Vec3#toString keys), not in the `unreachable`
-// memory, and not beside lava or flowing water (each of those is reported
+// memory, not inside a `protect` box, and not beside lava or flowing water (each of those is reported
 // through `onHazard({kind, position})`). Buried blocks (no air neighbour) only
 // count with `buried` allowed. The order is by reachCost, so a block near the
 // bot's own height, exposed and with a place to stand, wins. Returns {positions, hazard}:
 // `hazard` is true when at least one candidate was refused for lava or water.
-function chooseTargets (bot, { blockNames, maxDistance, buried, skipped, unreachable, onHazard }) {
+function chooseTargets (bot, { blockNames, maxDistance, buried, skipped, unreachable, onHazard, protect = [] }) {
   const ids = blockIds(bot, blockNames)
   if (ids.length === 0) return { positions: [], hazard: false }
   const origin = bot.entity.position
@@ -94,7 +95,7 @@ function chooseTargets (bot, { blockNames, maxDistance, buried, skipped, unreach
   let hazard = false
   let hazardEvents = 0
   for (const pos of candidates) {
-    if (skipped.has(pos.toString()) || unreachable.has(bot, pos)) continue
+    if (skipped.has(pos.toString()) || unreachable.has(bot, pos) || insideAny(protect, pos)) continue
     const kind = hazardNear(bot, pos)
     if (kind) {
       hazard = true
@@ -110,8 +111,8 @@ function chooseTargets (bot, { blockNames, maxDistance, buried, skipped, unreach
 }
 
 // For each of the 8 sectors around the bot, the nearest block of each id in
-// `blockNames` within `radius` (default 64, at most 96).
-function look (bot, { blocks: blockNames, radius = LOOK_DEFAULT_RADIUS }) {
+// `blockNames` within `radius` (default 64, at most 96), leaving out blocks inside a `protect` box.
+function look (bot, { blocks: blockNames, radius = LOOK_DEFAULT_RADIUS, protect = [] }) {
   const searchRadius = Math.min(LOOK_MAX_RADIUS, Math.max(1, radius))
   const origin = bot.entity.position
   const directions = Object.fromEntries(DIRECTIONS.map((name) => [name, {}]))
@@ -121,6 +122,7 @@ function look (bot, { blocks: blockNames, radius = LOOK_DEFAULT_RADIUS }) {
     // findBlocks sorts by distance, so the first hit in a sector is its nearest.
     const found = bot.findBlocks({ matching: ids, maxDistance: searchRadius, count: LOOK_CANDIDATES_PER_ID })
     for (const pos of found) {
+      if (insideAny(protect, pos)) continue
       const centre = pos.offset(0.5, 0.5, 0.5)
       const sector = directions[sectorOf(centre.x - origin.x, centre.z - origin.z)]
       if (sector[name]) continue

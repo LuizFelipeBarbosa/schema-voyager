@@ -11,6 +11,7 @@
 const { goals } = require('mineflayer-pathfinder')
 const { watchServerBlockChange } = require('./blockchange')
 const { GoalBesideBlock } = require('./movements')
+const { insideAny } = require('./protect')
 const { chooseTargets } = require('./targets')
 const { emptyTravel, recordTravel, reequip, withDiggingMovements } = require('./travel')
 const {
@@ -37,8 +38,20 @@ function parseRequest (body) {
     digThrough: body.dig_through === true,
     maxDistance: body.max_distance ?? DEFAULT_MAX_DISTANCE,
     scaffold: Array.isArray(body.scaffold) ? body.scaffold : [],
+    protect: body.protect ?? [],
     // Any v2 option switches on the v2 target search and block-break confirmation.
     v2: body.blocks != null || body.dig_through != null || body.max_distance != null || body.scaffold != null
+  }
+}
+
+// The v1 search: the nearest exposed block outside every `protect` box. A hit
+// inside one is skipped (in a copy of `skipped`) and the search repeated.
+function findNearestUnprotectedBlock (bot, blockName, skipped, protect) {
+  const skippedHere = new Set(skipped)
+  for (;;) {
+    const pos = findNearestExposedBlock(bot, blockName, skippedHere)
+    if (!pos || !insideAny(protect, pos)) return pos
+    skippedHere.add(pos.toString())
   }
 }
 
@@ -48,7 +61,7 @@ function parseRequest (body) {
 // outlives episodes.
 async function mine (bot, body, { episode, tracker, unreachable, signal = null }) {
   signal?.throwIfAborted()
-  const { blockNames, tool, digThrough, maxDistance, scaffold, v2 } = parseRequest(body)
+  const { blockNames, tool, digThrough, maxDistance, scaffold, protect, v2 } = parseRequest(body)
   const startSeq = tracker.log.lastSeq()
   const before = inventoryCounts(bot)
   let pickupBase = before // picked_up: gains since arrival for v2, over the whole call for v1
@@ -83,9 +96,10 @@ async function mine (bot, body, { episode, tracker, unreachable, signal = null }
       buried: digThrough,
       skipped: episode.skippedTargets,
       unreachable,
-      onHazard: (event) => tracker.log.record('hazard', event)
+      onHazard: (event) => tracker.log.record('hazard', event),
+      protect
     })
-    : { positions: [findNearestExposedBlock(bot, blockNames[0], episode.skippedTargets)].filter(Boolean), hazard: false }
+    : { positions: [findNearestUnprotectedBlock(bot, blockNames[0], episode.skippedTargets, protect)].filter(Boolean), hazard: false }
   if (positions.length === 0) return finish(hazard ? 'hazard' : 'not_found')
 
   const toolItem = tool ? findInventoryItem(bot, tool) : null
@@ -116,7 +130,7 @@ async function mine (bot, body, { episode, tracker, unreachable, signal = null }
       result.target = { x: targetPos.x, y: targetPos.y, z: targetPos.z }
       const timeoutMs = Math.min(limits.attemptMs, remainingMs)
       reached = digThrough
-        ? await withDiggingMovements(bot, { scaffoldNames: scaffold, protectedBlock: targetPos },
+        ? await withDiggingMovements(bot, { scaffoldNames: scaffold, protectedBlock: targetPos, protect },
           () => gotoGoal(bot, new GoalBesideBlock(targetPos), timeoutMs, { failFast: limits.failFast, signal }))
         : await gotoGoal(bot, new goals.GoalLookAtBlock(targetPos, bot.world, { reach: DIG_REACH }), timeoutMs, { failFast: limits.failFast, signal })
       if (reached) {
