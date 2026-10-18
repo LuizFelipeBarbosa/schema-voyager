@@ -429,6 +429,9 @@ select { background: var(--panel); border: 1px solid var(--line); border-radius:
 .goal-id { color: var(--dim); font-family: var(--mono); font-size: 11px; }
 .goal-text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .goal-reason { flex-basis: 100%; color: var(--muted); font-size: 12px; }
+.goal-child { margin-left: 18px; padding-left: 10px; border-left: 2px solid var(--line); }
+.goal-replaced { opacity: .5; }
+.goal-progress { flex: none; color: var(--muted); font-size: 12px; }
 .goal-empty { color: var(--dim); font-size: 13px; }
 .goal-chip { flex: none; font-family: var(--mono); font-size: 10px; letter-spacing: .08em; text-transform: uppercase; padding: 2px 8px; border-radius: 3px; border: 1px solid var(--line); color: var(--muted); }
 .goal-chip-running { color: var(--amber); border-color: rgba(233, 185, 73, .4); }

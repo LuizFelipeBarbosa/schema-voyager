@@ -48,6 +48,29 @@ const tests = {
       assert.ok(html.includes(`>${expected[status]}</span>`), html);
     }
   },
+  'children render under their parent, indented, with the parent progress'() {
+    const goals = [
+      goal('u001', 'running', { kind: 'composite', children: ['u002', 'u003', 'u004', 'u005'], parent: null, replanned: true }),
+      goal('u002', 'done', { parent: 'u001' }),
+      goal('u003', 'cancelled', { parent: 'u001', reason: 'replaced' }),
+      goal('u004', 'running', { parent: 'u001' }),
+      goal('u005', 'queued', { parent: 'u001' }),
+      goal('u006', 'queued', { parent: null, children: [] })
+    ];
+    const html = goalsListHtml({ run: 'r', goals });
+    const order = ['u006', 'u001', 'u002', 'u003', 'u004', 'u005'].map((id) => html.indexOf(`>${id}<`));
+    assert.deepEqual(order, [...order].sort((a, b) => a - b), 'parent first, children in order');
+    assert.ok(order.every((index) => index >= 0));
+    assert.equal((html.match(/goal-child/g) || []).length, 4);
+    assert.ok(html.includes('1 of 3 done'), html);
+    assert.equal((html.match(/goal-replaced/g) || []).length, 1);
+    assert.ok(html.includes('<div class="goal-reason">replaced</div>'), html);
+    assert.equal((html.match(/goal-progress/g) || []).length, 1);
+  },
+  'a child whose parent is not in the list is a normal row'() {
+    const html = goalsListHtml({ run: 'r', goals: [goal('u002', 'queued', { parent: 'u001' })] });
+    assert.ok(html.includes('goal-row') && !html.includes('goal-child'), html);
+  },
   'cancel only on the four non-final statuses'() {
     for (const status of STATUSES) {
       const html = goalsListHtml({ run: 'r', goals: [goal('u001', status)] });
