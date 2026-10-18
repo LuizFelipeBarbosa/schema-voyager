@@ -281,11 +281,15 @@ the real delta. Only if that fails: `missing_ingredients` with
 probe, whether it worked or not, the bot moves whatever is left in the crafting
 grid (window slots 1-4 of the inventory, or 1-9 of a table) and on the cursor
 back into the inventory, resyncs, and settles. Only then is `inventory_delta`
-measured. A craft answers `ok: true` only when the delta is a whole number of
-runs of one recipe for `item` (the crafted item gained `n × count` and the
-ingredients lost `n ×` theirs, `n ≥ 1`); otherwise it answers `craft_failed`
-with `"detail": "partial_delta"` and the real delta. Nothing lost in a grid can
-turn into a false contradiction.
+measured. A craft answers `ok: true` only when, for the `k ≥ 1` runs the bot
+actually performed, the ingredients lost are exactly `k ×` one recipe's
+ingredients (tag variants allowed), the crafted item gained a positive multiple
+of `k`, and nothing else changed; otherwise it answers `craft_failed` with
+`"detail": "partial_delta"` and the real delta. The bot must **not** judge the
+output count against its own recipe data: a datapack may change it (stick2
+makes 2 sticks per run), and that is exactly what the exact check in Python
+must see as a mismatch. Nothing lost in a grid can turn into a false
+contradiction.
 
 ## POST /explore (v2 options)
 
@@ -343,10 +347,14 @@ bot's position (`N` is centred on -z). It doesn't move the bot.
 3. Resync and settle as for `/craft`. `inventory_delta` is measured from
    `inventory_before_step`. `fuel_used` reports the fuel removed (tolerant).
    The action timeout for `/smelt` is `30 s + 12 s × times`.
-4. **v2.3:** the response adds `smelted` (outputs taken out). `ok: true` only
-   when `smelted == times`; any shortfall (fuel ran out, timeout, furnace
-   closed) answers `craft_failed` with `"detail": "smelted <n> of <times>"` and
-   the real delta, so the check is `failed` (tolerant), never a mismatch.
+4. **v2.3:** the response adds `smelted` (inputs the furnace consumed, i.e.
+   `times` minus the unsmelted input taken back) and `output_taken` (outputs
+   taken out). `ok: true` only when `smelted == times` and `output_taken > 0`;
+   any shortfall (fuel ran out, timeout, furnace closed) answers `craft_failed`
+   with `"detail": "smelted <n> of <times>"` and the real delta, so the check is
+   `failed` (tolerant), never a mismatch. The bot doesn't compare
+   `output_taken` with `times`: a datapack may change a smelt's yield, and the
+   exact check in Python must see that.
 
 ```jsonc
 {
