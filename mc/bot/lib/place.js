@@ -218,7 +218,7 @@ async function walk (bot, episode, goal, { scaffoldNames, keepOut, protect, sign
   const recording = recordTravel(bot, episode)
   try {
     const reached = await withBuildMovements(bot, { scaffoldNames, keepOut, protect }, () => gotoGoal(bot, goal, WALK_MS, { signal }))
-    if (reached) await recording.settle()
+    await recording.settle()
     return { reached, travel: recording.finish() }
   } catch (err) {
     recording.finish()

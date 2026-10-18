@@ -47,6 +47,7 @@ async function goto (bot, { x, y, z, range = DEFAULT_RANGE }, { episode, signal 
     recording.finish()
     throw err
   }
+  await recording.settle()
   return { ok: arrived, error: arrived ? null : 'unreachable', arrived, travel: recording.finish() }
 }
 

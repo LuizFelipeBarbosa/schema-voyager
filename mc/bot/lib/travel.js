@@ -8,6 +8,9 @@ const {
 } = require('./world')
 
 const SETTLE_TICKS = 5 // quiet time after the last travel dig, before the step
+const PLACEMENT_WAIT_MS = 6000 // the mineflayer patch times a placement out at 5 s
+const GROUND_WAIT_TICKS = 20
+const REPLACEABLE_NAMES = ['air', 'cave_air', 'void_air', 'water']
 
 function emptyTravel () {
   return { distance: 0, dug: {}, placed: {}, picked_up: {}, placed_cells: [] }
@@ -24,17 +27,18 @@ function travelSummary ({ walkedBefore, walkedAfter, dug, placed, placedCells = 
   }
 }
 
-// Starts counting what the pathfinder does. Digs are counted by wrapping
-// bot.dig (Mineflayer removes plain 'diggingCompleted' listeners after each
-// dig), placements by the 'blockPlaced' event. finish() unwraps and returns
-// the counts.
+// Starts counting what the pathfinder does. Digs and placements are counted by
+// wrapping bot.dig and bot.placeBlock (Mineflayer removes plain
+// 'diggingCompleted' listeners after each dig; 'blockPlaced' only fires once the
+// server's update arrives, which can be after the walk has resolved). finish()
+// unwraps and returns the counts, reading each attempted cell back from the world.
 function recordTravel (bot, episode) {
   const walkedBefore = episode.walked
   const inventoryBefore = inventoryCounts(bot)
   const dug = {}
-  const placed = {}
-  const placedCells = [] // [x, y, z, name] of each block placed, in order
   let lastDigAt = null
+  const placementAttempts = [] // {dest, oldName, itemName}, in order
+  const placementsInFlight = new Set()
 
   const originalDig = bot.dig
   bot.dig = async function (block, ...rest) {
@@ -44,23 +48,32 @@ function recordTravel (bot, episode) {
     lastDigAt = Date.now()
     return result
   }
-  const onPlaced = (oldBlock, newBlock) => {
-    addCount(placed, newBlock.name)
-    const { x, y, z } = newBlock.position
-    placedCells.push([x, y, z, newBlock.name])
+  const originalPlaceBlock = bot.placeBlock
+  bot.placeBlock = function (referenceBlock, faceVector, ...rest) {
+    const dest = referenceBlock.position.plus(faceVector).floored()
+    placementAttempts.push({ dest, oldName: bot.blockAt(dest)?.name, itemName: bot.heldItem?.name })
+    const placement = originalPlaceBlock.call(this, referenceBlock, faceVector, ...rest)
+    const done = () => placementsInFlight.delete(placement)
+    placementsInFlight.add(placement)
+    placement.then(done, done)
+    return placement
   }
-  bot.on('blockPlaced', onPlaced)
 
   return {
-    // The 5-tick wait after the last travel dig (none if nothing was dug).
+    // Waits for placements in flight and the bot to land (none if nothing was
+    // placed), then the 5-tick wait after the last travel dig (none if nothing was dug).
     async settle () {
+      if (placementAttempts.length > 0) await settlePlacements(bot, placementsInFlight)
       if (lastDigAt === null) return
       const remaining = SETTLE_TICKS * TICK_MS - (Date.now() - lastDigAt)
       if (remaining > 0) await sleepTicks(Math.ceil(remaining / TICK_MS))
     },
     finish () {
       bot.dig = originalDig
-      bot.removeListener('blockPlaced', onPlaced)
+      bot.placeBlock = originalPlaceBlock
+      const placedCells = readBackPlacedCells(bot, placementAttempts)
+      const placed = {}
+      for (const [, , , name] of placedCells) addCount(placed, name)
       return travelSummary({
         walkedBefore,
         walkedAfter: episode.walked,
@@ -72,6 +85,33 @@ function recordTravel (bot, episode) {
       })
     }
   }
+}
+
+// Waits for every placement in flight to settle (resolved or rejected), at most
+// PLACEMENT_WAIT_MS in total, then for the bot to be on the ground, then 2 ticks.
+async function settlePlacements (bot, placementsInFlight) {
+  let timer
+  const capped = new Promise((resolve) => { timer = setTimeout(resolve, PLACEMENT_WAIT_MS) })
+  const allSettled = Promise.allSettled([...placementsInFlight])
+  await Promise.race([allSettled, capped])
+  clearTimeout(timer)
+  for (let tick = 0; tick < GROUND_WAIT_TICKS && bot.entity?.onGround === false; tick++) await sleepTicks(1)
+  await sleepTicks(2)
+}
+
+// The [x, y, z, name] of each attempted cell that was empty (or water) before and
+// now holds the block the bot held, in attempt order, one entry per cell.
+function readBackPlacedCells (bot, placementAttempts) {
+  const cells = []
+  const seen = new Set()
+  for (const { dest, oldName, itemName } of placementAttempts) {
+    const key = `${dest.x},${dest.y},${dest.z}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    if (!REPLACEABLE_NAMES.includes(oldName) || bot.blockAt(dest)?.name !== itemName) continue
+    cells.push([dest.x, dest.y, dest.z, itemName])
+  }
+  return cells
 }
 
 // Holds `toolName` (or nothing, for null) in the main hand. The pathfinder
