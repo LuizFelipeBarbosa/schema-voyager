@@ -9,6 +9,7 @@ offline stand-in for tests and dry runs.
 
 from __future__ import annotations
 
+import copy
 import functools
 import hashlib
 import json
@@ -18,7 +19,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from . import normalize
+from . import blueprint, normalize
 from .models import Action, GoalKind, GoalSpec, Rule, Unsupported
 
 DEFAULT_MODEL = "claude-sonnet-5-5"
@@ -196,6 +197,71 @@ PARSE_GOAL_SCHEMA = {
     "required": ["kind", "item", "count", "target", "reply"],
     "additionalProperties": False,
 }
+
+# v3.4b: Claude designs a blueprint (v3.4a "Claude's form"), and the errors go back to it.
+DESIGN_RETRIES = 2
+
+DESIGN_BLUEPRINT_SYSTEM = """You design a small building for a Minecraft Java Edition 1.21.1 bot to build, as a blueprint.
+- layers[y][z][x]: layers go bottom-up, rows go north to south, characters go west to east. size is [width (x), height (y), depth (z)]; every layer has `depth` rows of `width` characters.
+- Layer 0 stands on the ground.
+- palette lists one-character keys and their blocks. Use "." for every cell that must be air, the interior included: a space keeps whatever grass or flowers were there. Use a space only where anything goes, such as roof corners.
+- Use "#planks" and "#log" for wood: the bot places whichever species it holds.
+- A door is two cells of the same door block in one column, with a full block (or the ground, in layer 0) below it.
+- A torch has a full block below it or beside it. Glass, panes, doors and torches are not full blocks.
+- Every other block connects to the ground face to face, through other blocks: nothing floats.
+- Use glass only if windows are asked for, and torches only if light is asked for.
+- Keep within the limits the request gives. Give a short name.
+Example, a 5 x 4 x 5 hut with log corners, a door in the south wall and a flat roof whose corners are left as they are:
+{"name": "small hut", "size": [5, 4, 5], "palette": [{"key": "L", "block": "#log"}, {"key": "P", "block": "#planks"}, {"key": "D", "block": "oak_door"}], "layers": [["LPPPL", "P...P", "P...P", "P...P", "LPDPL"], ["LPPPL", "P...P", "P...P", "P...P", "LPDPL"], ["LPPPL", "P...P", "P...P", "P...P", "LPPPL"], [" PPP ", "PPPPP", "PPPPP", "PPPPP", " PPP "]]}"""
+
+_BLOCK_ENUM = sorted(blueprint.PLACEABLE) + list(blueprint.GROUPS) + ["air", "any"]
+
+BLUEPRINT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "name": {"type": "string"},
+        "size": {"type": "array", "items": {"type": "integer"}},  # [width, height, depth]
+        "palette": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {"key": {"type": "string"}, "block": {"type": "string", "enum": _BLOCK_ENUM}},
+                "required": ["key", "block"],
+                "additionalProperties": False,
+            },
+        },
+        "layers": {"type": "array", "items": {"type": "array", "items": {"type": "string"}}},
+    },
+    "required": ["name", "size", "palette", "layers"],
+    "additionalProperties": False,
+}
+
+FAKE_HUT = {
+    "name": "small hut",
+    "size": [5, 4, 5],
+    "palette": {"L": "#log", "P": "#planks", "D": "oak_door", "T": "torch"},
+    "layers": [
+        ["LPPPL", "P...P", "P...P", "P...P", "LPDPL"],
+        ["LPPPL", "PT..P", "P...P", "P...P", "LPDPL"],
+        ["LPPPL", "P...P", "P...P", "P...P", "LPPPL"],
+        [" PPP ", "PPPPP", "PPPPP", "PPPPP", " PPP "],
+    ],
+}
+
+
+@dataclass(frozen=True)
+class BlueprintLimits:
+    max_size: tuple[int, int, int] = (7, 4, 7)  # a roof 4 up is one the bot can reach and drop from
+    max_placed: int = 120  # placed cells: every non-air, non-any cell, both door cells counted
+
+
+class BlueprintDesignError(Exception):
+    """Claude's blueprint still had errors after the retries (not an LLMError: the parse turns it into Unsupported)."""
+
+    def __init__(self, errors: list[str]) -> None:
+        super().__init__(errors[0] if errors else "no blueprint")
+        self.errors = errors
+
 
 _TRY_FETCH = 'I can fetch items: try "get me 10 torches".'
 _DEFAULT_UNSUPPORTED_REPLY = 'I can only fetch items for now: try "get me 10 torches".'
@@ -441,6 +507,26 @@ class LLM:
             kind, item, count, reply = payload["kind"], payload["item"], payload["count"], payload["reply"]
         return _checked_goal(goal_id, text, kind, item, count, reply, known_items)
 
+    def design_blueprint(self, text: str, limits: BlueprintLimits = BlueprintLimits()) -> dict[str, Any]:
+        """Turn a build request into a valid blueprint within `limits`, giving Claude the errors of a bad answer
+        up to DESIGN_RETRIES times; BlueprintDesignError after that. LLMError from a call propagates."""
+        if self.mode == "fake":
+            self._meter_fake("design_blueprint", text)
+            return copy.deepcopy(FAKE_HUT)
+
+        width, height, depth = limits.max_size
+        request = (f"Request: {text}\nLimits: at most {width} wide (x), {height} high (y) and {depth} deep (z); "
+                   f"at most {limits.max_placed} placed cells (every cell that is not \".\" or a space).")
+        user = request
+        for attempt in range(DESIGN_RETRIES + 1):
+            answer = self._json_call("design_blueprint", DESIGN_BLUEPRINT_SYSTEM, user, BLUEPRINT_SCHEMA)
+            bp, errors = _blueprint_from_answer(answer, limits)
+            if not errors:
+                return bp
+            user = (f"{request}\nYour previous answer:\n{json.dumps(answer)}\n"
+                    "It has these errors, fix them and answer again:\n" + "\n".join(f"- {error}" for error in errors))
+        raise BlueprintDesignError(errors)
+
     # -- transport --------------------------------------------------------
 
     def _json_call(self, purpose: str, system: str, user: str, schema: dict[str, Any]) -> dict[str, Any]:
@@ -514,6 +600,30 @@ class LLM:
     def _meter_fake(self, purpose: str, text: str) -> None:
         estimate = max(1, len(text) // 4)
         self.calls.append(CallRecord(purpose, estimate, estimate // 4))
+
+
+def _blueprint_from_answer(answer: dict[str, Any], limits: BlueprintLimits) -> tuple[dict[str, Any], list[str]]:
+    """Claude's form (palette as a list) -> the blueprint dict, and every error of it, limits included."""
+    palette: dict[str, str] = {}
+    errors: list[str] = []
+    for entry in answer["palette"]:
+        if entry["key"] in palette:
+            errors.append(f"palette: key '{entry['key']}' is listed twice")
+        palette[entry["key"]] = entry["block"]
+    bp = {**answer, "palette": palette}
+    if errors:
+        return bp, errors
+
+    errors = blueprint.validate(bp)
+    if errors:
+        return bp, errors
+    if any(extent > limit for extent, limit in zip(bp["size"], limits.max_size)):
+        width, height, depth = limits.max_size
+        return bp, [f"size: {bp['size']} is over this build's limit {width} x {height} x {depth}"]
+    placed = sum(1 for _, value in blueprint.cells(bp, (0, 0, 0)) if value != "air")
+    if placed > limits.max_placed:
+        return bp, [f"layers: {placed} placed cells, this build's limit is {limits.max_placed}"]
+    return bp, []
 
 
 def fixture_prior_rules() -> list[Rule]:
