@@ -84,6 +84,8 @@ pushed to `origin` until the user says so.
   travel's own digs (g007: dug 6 dirt-dropping blocks, picked up 5 in travel + 1 in the step). Quarantines: g007 #1
   `interference, stray_pickup` (a mine: interference quarantines it), g015 #3 `damage`. No craft or smelt quarantined.
 - 23:50 S04 a225fbc merge `v3/toss-live`: `mc/bot/test/v3_toss_live.js`. pytest 445, bot 120.
+- 23:36-00:06 S02 live `runs/v3-baseline-1` (instance b, seed 2024 fresh, `--change scramble --keep-going --minutes 30 --cap-usd 2`), bot and Python from `sv2` at 7ebbd68 (S04's toss merges landed during the run, after both had loaded). 55 goals, 54 ok, $0.25, 0 Tracebacks. 1 crafting table (m4-2024: 2), 0 `.fix1.fix1`, 0 `rule_blocked`, `change_report` 3/3 pass. One false contradiction: g018 `smelt iron_ingot` saw `wooden_pickaxe: -1`, because `retrieveStation` dug the furnace with the last pickaxe on its last durability point; `smelt_iron_ingot` was demoted and g018 (iron_pickaxe) failed. Max identical failed steps 5 (g014, g018: `mine iron_ore` `unreachable`, exempt from blocking).
+- 00:16 S02 b7ca710 contract v3.0e (`tools_broken`); 1cd61f1 merge `v3/wear-verify` (backend passes it, the verifier adds it back), e34d65d merge `v3/wear-bot` (`retrieveStation` digs with the cheapest durable tool and measures a break). pytest 455, bot 126, panel pass.
 
 ## S01 setup and baseline (done 2026-10-17)
 
