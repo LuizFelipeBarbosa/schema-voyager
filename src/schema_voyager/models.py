@@ -4,7 +4,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any, Literal
 
 
-ActionKind = Literal["mine", "craft", "explore", "smelt", "place", "clear", "goto"]
+ActionKind = Literal["mine", "craft", "explore", "smelt", "place", "clear", "goto", "kill"]
 RuleStatus = Literal["hypothesis", "certified", "demoted"]
 RuleCheck = Literal["exact", "stochastic"]
 # v3 goals (docs/v3-interfaces.md, v3.1)
@@ -19,9 +19,9 @@ class Action:
 
     kind: ActionKind
     # mine: a block, or (v2) a group or variant family such as "#log" or "coal_ore";
-    # craft and smelt: the output item, which may be a group such as "#planks".
+    # craft and smelt: the output item, which may be a group such as "#planks"; kill (v3.3): a mob type such as "cow".
     target: str | None = None
-    tool: str | None = None  # mine only; None means bare hand
+    tool: str | None = None  # mine: None means bare hand; kill: the weapon, None means the best one held
     times: int = 1  # craft and smelt: how many times the recipe runs
     fuel: str | None = None  # smelt only; may be a group
     ingredient: str | None = None  # smelt only: the input item; may be a group
@@ -52,6 +52,8 @@ class Action:
             return f"clear {_cell(self.pos)}"
         if self.kind == "goto":
             return f"goto {_cell(self.pos)}"
+        if self.kind == "kill":
+            return f"kill {self.target}" + (f" with {self.tool}" if self.tool else "")
         return f"explore {self.direction}" if self.direction else "explore"
 
     def to_dict(self) -> dict[str, Any]:
@@ -112,6 +114,7 @@ class Status:
     alive: bool = True
     events: list[dict[str, Any]] = field(default_factory=list)
     last_seq: int = 0
+    follow: dict[str, Any] | None = None  # v3.3: {"player", "distance"} while following a player
 
 
 @dataclass(frozen=True)
@@ -171,6 +174,8 @@ class Rule:
     effects {"gains": {...}} per recipe run.
     Smelt rules (v2): preconditions {"consumes": {...}, "station": "furnace",
     "fuel_any": [...]}, effects {"gains": {...}} per item smelted.
+    Kill rules (v3.3): action {"type": "kill", "mob": ...}, preconditions {"tool_any": []},
+    effects {"killed": true, "drops": {...} (low ends), "allowed": {item: [min, max]}}; always stochastic.
     v2 rules use normalized names ("#planks", "coal_ore"); see docs/v2-interfaces.md.
     """
 
@@ -202,10 +207,14 @@ class Rule:
 
     @property
     def subject(self) -> str:
-        return self.action["block"] if self.kind == "mine" else self.action["item"]
+        if self.kind == "mine":
+            return self.action["block"]
+        if self.kind == "kill":
+            return self.action["mob"]
+        return self.action["item"]
 
     def yields(self) -> dict[str, int]:
-        if self.kind == "mine":
+        if self.kind in ("mine", "kill"):
             return dict(self.effects.get("drops", {}))
         return dict(self.effects.get("gains", {}))
 

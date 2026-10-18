@@ -724,6 +724,141 @@ v2 codes, plus `interrupted` (an action response, `detail: {"threat", "outcome"}
 while the guard fights idle, with `detail: "guard"`, and while an aborted handler hasn't settled, with
 `detail: "orphan"`).
 
+## v3.3: `/attack`, mobs in `/look`, `/follow` (S08)
+
+The Python side is in `docs/v3-interfaces.md`, v3.3.
+
+### POST /attack  `{"mob": "cow", "weapon": "stone_sword" | null, "max_distance": 32, "protect": [...]}`
+
+- **Validation** (400 otherwise):
+  - `mob` is a non-empty name, not `player`;
+  - `weapon` is a name or `null`;
+  - `max_distance` is a positive number of at most 64 (default 32);
+  - `protect` is as in v3.4b.
+- **An action**: it takes the lock through `action()`, with `cutIn: true` and the usual 120 s timeout. `/attack`
+  keeps its own budget of 90 s.
+
+**1. Candidates.** Entities in `bot.entities` with `name === mob` that are alive and within `max_distance` of the
+bot, nearest first. Baby animals (kind `animal`, marked as babies in the entity metadata) are skipped, because a
+baby animal drops nothing. Baby zombies drop loot, so they're kept. No candidate answers `not_found`.
+`guard.setQuarry(candidate.id)` is set as soon as a candidate is picked, so the guard doesn't take a zombie that
+`/attack` is walking to as its own threat. `setQuarry(null)` runs in a `finally`.
+
+**2. The walk** (phase `travel`).
+- `gotoGoalDetailed` with a goal that follows the entity (re-aimed as it moves), until the bot is within 3 blocks.
+- It uses the walking movements: no digging, sprinting only on peaceful, the `protect` exclusions.
+- A `no_path` tries the next candidate, at most 3 in all, and then answers `unreachable`.
+- A target that's gone, or farther than `max_distance` + 16, also moves on to the next candidate. If none is left,
+  the answer is `escaped`.
+
+**3. The fight** (phase `step` from here on, and `inventory_before_step` is taken here).
+- Equip `weapon` if the bot holds it, else the best sword, else an axe, else nothing. That's `weapon_used`.
+- Then `fight(bot, target, {timeoutMs: 30000, flee: false, sprint: true, shouldStop: () => signal.aborted, ...})`.
+  The guard's other options are unchanged. `flee: false` only skips the flight after an out-of-reach `lost`. The
+  low-health flight stays.
+- The outcome becomes the answer:
+
+  | outcome | answer |
+  |---|---|
+  | `killed` | go on to step 4 |
+  | `lost` (gone, more than 16 blocks away, or out of reach) | `escaped` |
+  | `timeout` | `timeout` |
+  | `fled` (health below 6) | `interrupted`, `detail: {"threat": "<mob>", "outcome": "fled"}` |
+  | `died` | `quarantined` (the wrapper) |
+
+**4. The drops.**
+- The kill's `drops` are the item entities that spawn within 2.5 blocks (horizontally) of the target's last
+  position, from 0.5 s before its death to 1.5 s after. Spawn packets can arrive before or after `entityDead`, so
+  item spawns are buffered from the start of the fight. Each is added to `tracker.ownDrops`.
+- Then `pickUpEntities` runs, and `picked_up` is counted as in `/mine`.
+- Any other living entity that dies within 4 blocks of the target in that window is recorded as `interference
+  {"mob", "id", "position"}`, phase `step`. Python quarantines the step.
+
+**Answers.**
+
+```jsonc
+{"ok": true, "mob": "cow", "target": {"id": 812, "x": 10.5, "y": 64, "z": -3.2, "distance": 14.1},
+ "weapon": "stone_sword", "weapon_used": "stone_sword", "killed": true,
+ "death_position": {"x": 12.1, "y": 64, "z": -1.0},
+ "drops": {"beef": 2, "leather": 1}, "picked_up": {"beef": 2, "leather": 1},
+ "inventory_before_step": {...}, "inventory": {...}, "travel": {...}, "blocks_walked": 14.8,
+ "position": {...}, "events": [...]}
+```
+
+- Errors: `not_found`, `escaped`, `unreachable`, `timeout` (the fight's 30 s, or the 90 s budget), `interrupted` and
+  `quarantined`. An error answer still carries `killed: false`, `travel` and `events`.
+- `/attack`'s fight records `fight_start` and `fight_end`, as the guard's fights do, but no `threat`.
+- The guard may still cut into `/attack` for any other threat (`interrupted`, v3.2).
+
+### POST /look with mobs  `{"blocks": [], "mobs": ["cow"], "radius": 64}`
+
+- `mobs` is optional. `blocks` may be empty or missing when `mobs` isn't empty, but at least one of them must be
+  non-empty. `player` isn't accepted in `mobs` (400).
+- For each mob name, the nearest living entity of that name in each direction sector, within `radius`, among the
+  entities the client knows about (`bot.entities`). Each hit is `{"x", "y", "z", "distance"}` (block coordinates,
+  floored), keyed by the mob name in `directions[dir]`, next to the block hits.
+- `protect` filters blocks only.
+
+### POST /follow  `{"player": "Tester" | null, "distance": 3}`
+
+- **Not an action.** It takes no lock, never answers 409, and answers at once.
+- **The request.**
+  - `player` is matched case-insensitively against `bot.players`. `null` means the nearest player named in
+    `BOT_OWNERS` that has an entity in view.
+  - `distance` is 1 to 8 (default 3).
+  - A second `/follow` replaces the first.
+- **Answers.** `{"ok": true, "player": "Tester", "distance": 3}`, or `{"ok": false, "error": "not_found"}` when no
+  such player has an entity in view. 400 for a bad body.
+- **While following.**
+  - Whenever `busyDetail()` is `null` (no action, no guard fight or flight, no orphaned handler), the pathfinder
+    goal is `GoalFollow(<player entity>, distance)` (dynamic), with the walking movements. It is set again after
+    every fight, flight and action, but only when the current goal isn't that follow goal already.
+  - `/reset_episode` ends following (`follow_end`, reason `stopped`).
+  - The guard's mode is `defend`. `/follow/stop` restores the mode it had before.
+  - **The guard defends the player.** Besides v3.2's threats, a threat is also:
+    - any entity that damaged the followed player in the last 3 s (`entityHurt` on the player's entity, with its
+      source);
+    - a hostile (v3.2's hostile set) within 5 blocks of the player, or within 8 blocks and closing in on the player.
+  - The `threat` reasons for these are `player_attacked` and `player_near`. The order is: a creeper first, then the
+    bot's own attackers, then the player's attackers, then the nearest.
+  - Never a threat for these two new reasons: any player, owner or not. v3.2's own rules for players are
+    unchanged: a non-owner player who hits the bot is still a threat.
+- **It ends by itself** when the player has had no entity for 10 s (`follow_end` with reason `gone`), or when the
+  player's entity dies (`entityDead`, reason `died`).
+- `/status` gains `follow`: `{"player": "Tester", "distance": 4.2}` while following (`distance` is `null` while the
+  player has no entity), else `null`.
+
+### POST /follow/stop  `{}`
+
+- Answers `{"ok": true, "player": "Tester" | null}`: the player it was following, or `null` if none.
+- It clears the follow goal (unless an action or a fight owns the pathfinder at the moment), restores the guard
+  mode, and records `follow_end` with reason `stopped`.
+
+### Event types (v3.3)
+
+| type | when | extra fields |
+|---|---|---|
+| `follow_start` | `/follow` started | `player`, `distance` |
+| `follow_end` | following ended | `player`, `reason` (`stopped`, `gone` or `died`) |
+| `interference` | (adds) another entity died near an `/attack` target | `mob`, `id`, `position` |
+| `threat` | (adds) reasons `player_near` and `player_attacked` | |
+
+### Error codes (v3.3)
+
+v3.2 codes, plus `escaped` (`/attack`: the target got away). `not_found` also covers `/follow`.
+
+### Guard changes (v3.3)
+
+- `guard.setQuarry(id | null)`: while it's set, `check()` never returns that entity.
+- `fight_end` gains `id`, the target entity's id, for every fight: the guard's and `/attack`'s. Python counts a kill
+  goal's kills by it.
+- `fight()` options:
+  - `flee` (default `true`): `false` skips the flight after an out-of-reach `lost`;
+  - `sprint` (default `false`): the fight paths with a copy of its movements that has `allowSprinting = true`.
+    Its `finally` sets the walking movements (the `movements` option) back, never the copy. S08's `follow-bot` lane
+    makes the guard's own fights pass `true`.
+- Ranged mobs (`skeleton`, `stray`, `bogged`, `pillager`, `witch`) are out of reach only after 8 s, not 5 s.
+
 ## v3.4: building actions (S09, lane `build-bot`)
 
 Three endpoints for building: place one block, clear one cell, and read the block names in a box. Coordinates are

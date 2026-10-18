@@ -1025,7 +1025,262 @@ S07 re-split two lanes (2026-10-18), after finding that no handler stops after `
   and food, and keeps the inventory (`keepInventory`). A fight that takes health to 0 calls it, and that action
   answers `quarantined`. Tests use it to put a death where they want one.
 
-## v3.3 Kill rules and `/attack`
+## v3.3 Kill rules, `/attack`, `/follow`
+
+Written by S08 (M3: plan steps S3.1–S3.4; duels are S11). The bot side is in `contracts/bot_api.md`, v3.3.
+Decision D1 holds: combat is a built-in behavior, and only mob drops become rules.
+
+### v3.3a Kill actions and kill rules (`models.py`, stubs on `main`)
+
+- `ActionKind` gains `"kill"`. `Action("kill", target="cow", tool="stone_sword" | None)`:
+  - `target` is a mob type, the entity name (`cow`, `zombie`), never `player`;
+  - `tool` is the weapon. `None` means the bot's best held weapon (a sword, else an axe, else a bare hand).
+  - `describe()`: `"kill cow with stone_sword"`, or `"kill cow"` when `tool` is `None`.
+- A kill rule:
+
+  ```jsonc
+  {"id": "kill_cow",
+   "action": {"type": "kill", "mob": "cow"},
+   "preconditions": {"tool_any": []},            // always [] (vanilla drops don't depend on the weapon)
+   "effects": {"killed": true,
+               "drops": {"beef": 1},              // what the planner expects per kill
+               "allowed": {"beef": [1, 3], "leather": [0, 2]}},  // [min, max] per kill (vanilla, no Looting)
+   "check": "stochastic"}
+  ```
+
+  - `allowed` holds the drop ranges. `drops` is the low end of each range, for items whose low end is 1 or more.
+    Leather (`[0, 2]`) is in `allowed`, but not in `drops`, so the planner never plans leather through a cow.
+  - The prompt for S08 asked for `effects.drops` as ranges. That isn't done here: stochastic mine rules already keep
+    integer `drops` plus `allowed` ranges, and `Rule.yields()`, `counts()`, the planner and `_items_used` all read
+    `drops` as integers.
+  - `Rule.subject` is `action["mob"]` for a kill rule, and `Rule.yields()` is `effects["drops"]` for mine and kill
+    rules (stubs on `main`).
+  - `tool_any` is always `[]`: `_to_rule_v2` forces it. So the planner's kill steps have `tool=None`, and the bot
+    fights with its best held weapon.
+  - `normalize.family` leaves mob names alone (`family("cow") == "cow"`).
+
+### v3.3b The check (`verifier.py`, `schema_store.py`; lane `kill-rules`)
+
+- `kind_of(rule, action)` is `"stochastic"` for every kill rule, whatever `rule.check` says. No kill rule is ever
+  exact, so random drops can't contradict one.
+- `predict` for a kill rule: `{"killed": True, "allowed": _allowed(rule)}`.
+- `check` for a kill rule:
+  - quarantine and `not outcome.ok` work as for any step (`quarantined`, then `failed`);
+  - the observation is `{"killed": bool(outcome.detail.get("killed")), "drops": counts(outcome.drops)}`;
+  - `killed` false on an ok outcome is a `failed` check ("not killed"), never a mismatch;
+  - otherwise it's `stochastic`, with detail "drops in range" or "drops out of range (neutral)";
+  - the wrong-tool check stays mine-only: a weapon doesn't change vanilla drops.
+- `_in_range` treats `killed` like `block_removed`, so `evaluate` replays a kill transition the same way: `confirm`
+  in range, `neutral` otherwise.
+- Quarantine events are unchanged: `damage`, `death`, `respawn`, `target_despawned` or `interference` in the step
+  phase quarantine a kill. `stray_pickup` doesn't (as with a mine): a kill's drops are measured where the target
+  died (`contracts/bot_api.md`, v3.3), not from the inventory.
+- `schema_store.applies(rule, action)`: a kill rule applies to a kill action on its mob, if the action's weapon is in
+  `tool_any` or `tool_any` is empty. This is the same as a mine rule's tool check.
+- `escaped` joins `_NEVER_BLOCKED_ERRORS` (`agent.py`), so a cow that runs away twice doesn't block `kill_cow` for
+  the goal (v3.0a).
+- So a kill step is always `stochastic`, `failed` or `quarantined`, never `mismatch`. It never demotes a rule, starts
+  a revision or opens an epoch. A kill rule is certified like any stochastic rule: no contradictions, plus 2 in-range
+  confirmations from 2 episodes.
+
+### v3.3c The planner (`planner.py`, `agent.py`; lane `kill-rules`)
+
+- `_Planner._mine` serves both mine and kill rules: it emits `Action(rule.kind, rule.subject, tool=...)`.
+  - The weapon comes from `tool_any`, like a tool: one already held first, else the cheapest to obtain. An empty
+    list gives `tool=None`.
+  - The number of kills is `ceil(need / drops[item])`. A kill that drops more than its low end makes
+    `_deviates` replan, so the plan needs fewer kills.
+- `_sightings` for a kill rule is `visible.get(mob, 0)`. `agent.py` merges `observation.entities` counts into
+  `visible` (`{"cow": 3}`).
+- `agent.py`'s narration and summary helpers (`_revision_description`, `_goal_line`, `_predicts`, `_summarize`)
+  and `seed_report.py` handle kill rules ("kill cow"), with no `KeyError` and no craft wording.
+
+### v3.3d Prior rules for mobs (`llm.py`, `src/schema_voyager/data/prior_rules_v2.json`; lane `kill-llm`)
+
+- `propose_prior_rules_v2(families, known_blocks, world_id, mobs: Sequence[str] = ())`.
+  - With no mobs, the request (system prompt, user prompt and schema) is byte-identical to today's, so every
+    recorded response still replays (`_cache_key` covers all three).
+  - With mobs, the prompt asks for one kill rule per mob, using a schema whose `action_type` enum also has `kill`.
+    For a kill rule, `subject` is the mob, `consumes`, `station` and `fuel_any` are empty, `check` is
+    `"stochastic"`, and `allowed` is required. Its `yields` and `tool_any` are ignored.
+  - The prompt says that an item's `min` is the fewest of it one kill always drops (cow: beef 1, leather 0) and
+    `max` the most (no Looting).
+- `_to_rule_v2` builds kill rules as in v3.3a:
+  - `drops` holds the low ends of `allowed` that are 1 or more;
+  - with no `allowed`, it uses `{item: [0, n]}` from `yields`, which plans nothing.
+- `vanilla_mobs() -> dict[str, str]` (`llm.py`, next to `vanilla_items`): every entity name mapped to its kind
+  (`hostile`, `animal`, `mob`, `passive`, `water_creature`, `ambient`, `player`, ...). It reads a new file,
+  `src/schema_voyager/data/entities_1_21_1.json`, generated once from `mc/bot/node_modules/minecraft-data` (pc 1.21.1 `entities.json`,
+  `name` → `type`).
+- Fake priors (`src/schema_voyager/data/prior_rules_v2.json`, read by `_fake_priors_v2`):
+  - kill rules with vanilla ranges for `cow` (beef 1-3, leather 0-2), `pig` (porkchop 1-3), `chicken` (chicken 1,
+    feather 0-2), `sheep` (mutton 1-2, white_wool 1), `zombie` (rotten_flesh 0-2), `skeleton` (bone 0-2, arrow
+    0-2), `spider` (string 0-2, spider_eye 0-1) and `creeper` (gunpowder 0-2);
+  - smelt rules `beef → cooked_beef`, `porkchop → cooked_porkchop`, `chicken → cooked_chicken` and
+    `mutton → cooked_mutton`, each shaped like the iron smelt rule (station `furnace`, the same `fuel_any`);
+  - a kill rule comes in when its mob is asked, or when one of its yields is, as for every fake prior today.
+- The v2 revision and repair paths (`_fake_revisions_v2`, `_fake_repairs_v2`, the filters on `rule.subject`) skip
+  kill rules without error. A kill rule never mismatches, so nothing revises it.
+
+### v3.3e Backends (`adapter.py` stubs; lanes `kill-backend` and `kill-sim`)
+
+- `LifeBackend.look(blocks, radius=64, mobs=())`: mob hits come back in the same `LookResult`, keyed by the mob
+  name, as `{"x", "y", "z", "distance"}`. With no mobs, the request is unchanged.
+- `LifeBackend.follow(player: str | None, distance: float = 3.0) -> str | None` starts following and returns the
+  name of the player followed, or `None` when that player isn't found. `None` as the argument means the nearest
+  `BOT_OWNERS` player in view. `LifeBackend.stop_follow() -> None` ends it.
+- `Status.follow: dict | None = None`, set to `{"player", "distance"}` while following (stub on `main`).
+- `MineflayerBackend` (lane `kill-backend`):
+  - In natural mode, `act(Action("kill"))` calls `_kill_natural`, which sends `POST /attack {"mob", "weapon",
+    "max_distance": 32, "protect"}`.
+  - The `Outcome` has `ok`, `error`, `drops`, `picked_up`, `inventory_delta = picked_up`, `inventory`,
+    `blocks_walked`, `block_removed = False`, `travel` and `events`. `detail` holds `killed`, `mob`, `target`,
+    `weapon_used`, `death_position`, `inventory_before_step`, `position` and the bot's `detail`.
+  - In non-natural mode a kill answers `Outcome(ok=False, error="unknown_action")`.
+  - `look` sends `mobs` only when it's non-empty. `follow` calls `POST /follow`, `stop_follow` calls
+    `POST /follow/stop`, and `status()` parses `follow`.
+
+### v3.3f `Episode.act` for a kill (`episode.py`; lane `kill-backend`)
+
+- `not_found` takes the search branch. It explores toward the nearest sighting, as for a natural mine:
+  `_explore_toward` asks `look([], LOOK_RADIUS, mobs=[target])`, with the same dead-direction and `up` rules. A mob
+  has no "below the surface", so going `up` only happens for a hit more than 4 blocks above.
+- `escaped` is retried once in place (another mob of that type is usually close, and the chase already moved the
+  bot). It counts toward `MAX_RETRIES`.
+- `unreachable` is retried after an explore toward the mob. `timeout` is retried in place. Both count toward
+  `MAX_RETRIES`.
+- `interrupted` works as in v3.2b. Rest after a flight also covers `/attack`'s own `fled` (`detail.outcome`).
+- `MISSING_RESOURCE_ERRORS` doesn't change.
+
+### v3.3g The simulator (`environment.py`; lane `kill-sim`)
+
+- `NaturalWorld` adds `kill`, using the animals `_entities` already places in each region (`cow`, `pig`, `chicken`,
+  `sheep`). Hostiles (`zombie`, `skeleton`, `spider`) appear off peaceful only.
+  - A kill on a mob that has none left within `MAX_DISTANCE` (the region's count minus the kills made there) answers
+    `not_found`.
+  - Otherwise the bot travels to the mob (`blocks_walked`, seeded) and kills it. The drops are rolled within the
+    vanilla ranges of v3.3d, on a new stream `Random(f"{seed}:kills")`, so existing seeds give the same results.
+  - Animals escape with probability 0.05 (`escaped`).
+  - A hostile kill costs `FIGHT_DAMAGE` and adds a step-phase `damage` event, so it's quarantined, as on the bot.
+  - Events are `fight_start` and `fight_end` (`killed`). `detail` has `killed`, `mob` and `weapon_used`.
+- `kill` joins `THREATENED_ACTIONS`.
+- `SMELTS` gains beef, porkchop, chicken and mutton → their cooked forms.
+- `look(blocks, radius, mobs=())` returns seeded positions for the region's mobs.
+- `observe().entities` counts go down after kills.
+- `follow(player, distance)` returns `player`, or `"Otopo"` for `None`. `stop_follow()` ends it, and `status().follow`
+  reports it. There are no player threats in the simulator.
+
+### v3.3h Food from hunting (`life.py`, `curriculum.py`; lane `hunt-food`)
+
+- `WHITELIST` gains `cooked_beef`, `cooked_porkchop`, `cooked_chicken` and `cooked_mutton`. Two things stay out:
+  - leather and leather armor, because a kill's low end of leather is 0, so the planner never reaches it;
+  - `bread`, because no rule reaches wheat.
+- The hunger goal (v3.2e) ranks the candidate foods by:
+  1. whether the plan relies on a stochastic mine rule (any step whose rule is a mine rule and whose `kind_of` is
+     `stochastic`, such as apples from leaves), later if it does;
+  2. whether the plan kills a mob that hasn't been seen in the last 600 s (by `observed_mobs`), later if it does;
+  3. food points, highest first;
+  4. the name.
+  Cooked beef through kill and smelt then comes before apples. The goal is `hunger: 4 cooked_beef`. The 900 s skip
+  after a failure is unchanged.
+- **Mobs the bot has seen join the priors.**
+  - The names in `observation.entities` whose `kind` is `animal`, `hostile` or `mob`, plus the targets of kill
+    goals, are kept in `observed_mobs` in `life_state.json` as `{mob: last seen time}`.
+  - Every prior call sends the observed mobs not asked yet as `propose_prior_rules_v2(..., mobs=...)`. A family
+    such as `beef` can only come back as a kill rule when its mob is sent: without mobs, the schema has no `kill`.
+  - Asked mobs are remembered the way asked families are, so no mob is asked twice. With mobs to ask and no family,
+    the life still makes the call.
+  - For each kill rule's `allowed` item `x` where `cooked_x` is a vanilla item, `cooked_x` joins the wanted
+    families, so its smelt rule gets asked. In play mode nothing else would ask for `cooked_beef`.
+- Auto-eat may eat raw meat (it isn't on the ban list) before it's smelted. The plan then deviates and replans with
+  more kills. That's accepted.
+
+### v3.3i Kill and guard goals (`llm.py` `parse_goal`, lane `parse-kill-guard`; `goal_runners.py`, lane `goal-runners`)
+
+- **Parsing.**
+  - `SUPPORTED_GOAL_KINDS` gains `kill` and `guard`.
+  - `kill`: `target` is the mob, singular and checked against `vanilla_mobs()` (`"zombies"` → `zombie`). `count` is
+    the number of kills, 1 to 16.
+    - A name that isn't a mob gets `Unsupported("I don't know a creature called <x>.")`.
+    - `player` gets `Unsupported("I won't fight players.")`.
+  - `guard`: `target` is a player name or `"me"`, `count` 1.
+  - The fake parse reads "kill 3 zombies" as `kill zombie 3`, "guard me" as `guard me` and "guard Tester" as
+    `guard Tester`.
+  - `PARSE_GOAL_SYSTEM` and its schema stay byte-identical: they already describe `kill` and `guard`.
+- **"me".** When the goal is accepted, the life replaces it in `GoalSpec.target` with the player whose `!goal` chat
+  command submitted it. So it lasts across `--resume`. A panel goal gets `None`, and the bot follows the nearest
+  `BOT_OWNERS` player it sees.
+- The runners live in a new `goal_runners.py`, like `build_runner.py`. `life.py` only dispatches to them, passes
+  them bot events, and calls `backend.stop_follow()` at the start of a life.
+- **Arming first** (both runners). A kill goal on a mob whose `vanilla_mobs()` kind isn't `animal` or `passive`,
+  and every guard goal, first checks the last inventory. If it holds no sword and no axe, the runner pursues the first
+  of `ARM_SWORDS` that `make_plan` can reach, inside the goal. If it can't, the goal fails: "I need a sword first."
+- **The kill runner.**
+  - It repeats `Episode.act(Action("kill", mob, tool=<the best sword or axe held, else None>))` until the kills
+    reach `count`.
+  - A kill is a `fight_end` event with `target == mob` and `outcome == "killed"` that arrived after the goal
+    started. Events come from the step outcomes and from the life's bot poll. Each kill counts once, by the event's
+    `id` (the target entity's id): `seq` restarts when the bot does. Kills the guard makes count too, since the bot
+    killed the mob; they often arrive inside an `interrupted` act.
+  - The goal is `done` at `count` kills. It's `failed` after 3 acts in a row that fail with no new kill (any new
+    kill resets the streak), giving the last act's failure reason. It's also `failed` at its clock,
+    `max(goal_wall_clock_s, 60 s × count)`. Cancel, death and preemption are checked
+    between acts, as for any goal.
+  - The runner's acts are not checked against rules (as with build steps): only planned kill steps in obtain goals
+    are evidence. The goal record gains `kills`.
+- **The guard runner.**
+  - It calls `backend.follow(player, 3.0)`. `None` fails the goal: "I can't see <player>."
+  - Then, every 2 s, it checks for interrupts and polls the bot, until its clock (`goal_wall_clock_s`).
+    - A `follow_end` with reason `died` fails the goal: "<player> died."
+    - A `follow_end` with reason `gone` fails it: "I lost sight of <player>."
+    - Reaching the clock ends it `done`: the player stayed alive.
+  - `!stop` and `!cancel` cancel it like any user goal (v3.1g), and that is how the user ends a guard. The
+    cancelled goal's record still gets its `guard` stats.
+  - `backend.stop_follow()` always runs at the end, whatever ended the goal: an interrupt, an error or the bot going
+    down.
+  - The goal record gains `guard {"player", "alive", "duration_s", "fights", "kills"}`.
+
+### v3.3j Guard tactics (`lib/guard.js`; lane `follow-bot`)
+
+S07 already made the unarmed bot flee from every threat (92c5331), and added rest after a flight and the arming goal
+(ddcab3a). This section adds the armed tactics:
+
+- Fights sprint. `fight()` paths with a copy of the fight movements that has `allowSprinting = true`, for the
+  guard's fights and for `/attack`. Walking otherwise keeps v3.2's rule: sprint on peaceful only.
+- Ranged mobs (`skeleton`, `stray`, `bogged`, `pillager`, `witch`) get 8 s out of reach before a fight ends `lost`,
+  not 5 s, so the bot closes in on a skeleton that keeps its range.
+- Deferred: breaking line of sight.
+
+### v3.3k Fights and evidence (adds to v3.2c)
+
+1. `/attack`'s own fight is the step:
+   - damage taken during it quarantines the kill;
+   - drops count only where the target died, within 0.5 s before and 1.5 s after its death;
+   - another living entity dying within 4 blocks in that window is `interference`, which also quarantines.
+2. The guard cutting into `/attack` for another threat makes the step `interrupted`, a `failed` check. `/attack`'s
+   own target is never the guard's threat while `/attack` runs.
+3. Kills by the guard, idle or cutting in, are never evidence (v3.2c rule 7). They count only toward a kill goal.
+4. Acts by the kill and guard runners aren't checked against rules.
+5. A kill rule is never exact (v3.3b). Babies (`/attack` skips them), fire kills (cooked drops) and Looting can't
+   contradict one; at worst they're `neutral`.
+
+### v3.3l Who owns what (S08)
+
+| Group | Lane | Files |
+|---|---|---|
+| 1 | `attack-bot` | `mc/bot/lib/attack.js` (new), `mc/bot/server.js` (`/attack` route and validator, the `/look` validator), `mc/bot/lib/targets.js`, `mc/bot/lib/guard.js` (`setQuarry`, the `fight()` options `flee` and `sprint`, `id` on `fight_end`), `mc/bot/test/unit/attack.test.js` |
+| 1 | `kill-rules` | `planner.py`, `verifier.py`, `schema_store.py`, `agent.py`, `seed_report.py`, `tests/test_v3_kill_rules.py` |
+| 1 | `kill-sim` | `environment.py`, `tests/test_v3_kill_sim.py` |
+| 1 | `kill-llm` | `llm.py` (priors, `vanilla_mobs`), `src/schema_voyager/data/prior_rules_v2.json`, `src/schema_voyager/data/entities_1_21_1.json` (new), `tests/test_v3_kill_llm.py` |
+| 2 | `kill-backend` | `mineflayer_backend.py`, `episode.py`, `tests/test_v3_kill_backend.py` |
+| 2 | `follow-bot` | `mc/bot/lib/follow.js` (new), `mc/bot/server.js` (the two routes, `/status.follow`, `/reset_episode` ends following), `mc/bot/lib/guard.js` (the followed player's threats, v3.3j tactics), `mc/bot/test/unit/follow.test.js` |
+| 2 | `parse-kill-guard` | `llm.py` (`parse_goal`, `_checked_goal`, the fake parse), `tests/test_v3_parse_kill_guard.py` |
+| 2 | `hunt-food` | `life.py` (hunger ranking, `observed_mobs`, mobs and `cooked_x` in priors), `curriculum.py`, `tests/test_v3_hunt_food.py` |
+| 3 | `goal-runners` | `goal_runners.py` (new), `life.py` (dispatch, "me", events to the runners, `stop_follow` at start), `tests/test_v3_goal_runners.py` |
+| live | `hunt-live` | `mc/bot/test/v3_hunt_live.js` |
+
+- Deferred: a datapack that changes a mob's loot table, as a new hidden change in `CHANGE_STEPS`. With kill rules
+  always stochastic, noticing it needs an out-of-range count, which M3 doesn't keep.
 
 ## v3.4 Blueprints and building actions
 

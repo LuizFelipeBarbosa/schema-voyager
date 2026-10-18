@@ -42,7 +42,7 @@ pushed to `origin` until the user says so.
 | S05 contracts for M1 and M2 | done | none | Contracts v3.1/v3.2 and stubs merged 1b80640; plugin pins in v3.2g; prompt changes for S06/S07 in v3.2h |
 | S06 goals you give it | done | a | M1: 9 lanes merged (pytest 715, bot 212, panel and goals pass); live `runs/v3-m1-live` 4 of 4 checks plus the panel box; not pushed |
 | S07 survival | done | b | 24 lanes merged (pytest 840, bot 266); live guard test ALL PASS; soaks `runs/v3-soak-1..3` (soak 3 on the final code: 30/32 goals, 0 deaths, 0 false contradictions); not pushed |
-| S08 combat and hunting | not started | b | |
+| S08 combat and hunting | running | b | Contract v3.3; lanes attack-bot, kill-rules, kill-sim, kill-llm, then kill-backend, follow-bot, parse-kill-guard, hunt-food, then goal-runners, then hunt-live |
 | S09 building foundations | done | a | Contract v3.4a and bot API v3.4; 5 lanes merged (pytest 821, bot 258); `runs/s09-place-live` ALL PASS (16 checks) from `main`; not pushed |
 | S10 build goals | done | a | Contract v3.4b and bot API v3.4b; 12 lanes merged (pytest 997, bot 312); live `runs/v3-build-live` and `-easy`: Claude's house approved in the panel, built and matched (0 failed steps); protection checked live; not pushed |
 | S11 duels | not started | b | |
@@ -129,6 +129,7 @@ pushed to `origin` until the user says so.
 - 06:04 S14 2b3fd71 merge `v3/panel-live` (no `run`: the one run whose `live.json` pid is alive, else 409 `ambiguous_run` with `runs`, else the newest `goals.jsonl`; the goals box shows `Run: <name>` and honors `?run=`); 899f7e3 merge `v3/door-species` (`ensure_door_planks` before a build's door: craft `<species>_planks` from the best species, or gather 2 more logs first). pytest 1033 (1 skipped), bot 313, panel, goals and preview pass.
 - 06:22 S14 b9ff10b merge `v3/trace-interrupted` (`INTERRUPTED (<reason>)` in the terminal trace); **8cf585a merge `v3/life-polish` (S08: S14's second `life.py` change)**: play mode's `_needed_items` has no frontier, a goal cancelled after its last step says "Cancelled: ...", `!status` between goals says "Next: u004: 10 torches. Queued: 2.". pytest 1044 (1 skipped).
 - 06:36 S14 52d3d42 merge `v3/bot-polish` (build `Movements` follow `sprintAllowed`, `autoeat_error` skips "No food found.", `v3_guard_live.js` builds its arena at y 200 over the bot and teleports it there; architect's fix: the cleanup box covers the glass ceiling); 32091e2 merge `v3/build-scaffold` (`travel.placed_cells`, `Episode.placed_cells`, `clear_scaffold` after a matched build, `scaffold_cleared`/`scaffold_left` in `build_done`; architect's fix: four bot unit tests expected the old empty travel). pytest 1051 (1 skipped), bot 316, panel, goals and preview pass.
+- 06:10 S08 contract v3.3 (kill rules, `/attack`, mobs in `/look`, `/follow`, kill and guard goals) in both documents after the advisor's review (GO with changes: `escaped` never blocks, quarry set at the candidate, kills by `fight_end` id, baby animals only, sprint copy restored, seen mobs and `cooked_x` in priors, runners in `goal_runners.py`); stubs `kill` in `ActionKind`, `Action.describe`, `Rule.subject`/`yields` for kill, `Status.follow`, `LifeBackend.look(mobs=)`/`follow`/`stop_follow`. pytest 1051 (1 skipped).
 
 ## S01 setup and baseline (done 2026-10-17)
 

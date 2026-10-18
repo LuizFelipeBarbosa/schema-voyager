@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any, Protocol
 
 from .layouts import Layout
@@ -46,7 +47,18 @@ class LifeBackend(Backend, Protocol):
         bot is False. See docs/v3-interfaces.md, v3.0h."""
         ...
 
-    def look(self, blocks: list[str], radius: int = 64) -> LookResult: ...
+    def look(self, blocks: list[str], radius: int = 64, mobs: Sequence[str] = ()) -> LookResult:
+        """Nearest hits per direction. v3.3: mobs (entity names) come back in the same map, keyed by mob name."""
+        ...
+
+    def follow(self, player: str | None, distance: float = 3.0) -> str | None:
+        """v3.3: follow a player (None: the nearest BOT_OWNERS player in view) with the guard defending them; the
+        name followed, or None when not found. See docs/v3-interfaces.md, v3.3e."""
+        ...
+
+    def stop_follow(self) -> None:
+        """v3.3: stop following."""
+        ...
 
     def probe(self, grid: list[list[str | None]]) -> dict[str, Any]:
         """The recipe output for a crafting grid, without spending anything: {"output": {"item", "count"} | None}."""
