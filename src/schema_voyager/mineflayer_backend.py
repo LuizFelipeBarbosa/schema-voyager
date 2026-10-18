@@ -13,6 +13,7 @@ from typing import Any
 from . import normalize
 from .adapter import DIRECTIONS, LookResult
 from .arena import Arena
+from .inventory import SCAFFOLD_BLOCKS
 from .layouts import Layout
 from .models import Action, Observation, Outcome, Status, Task
 
@@ -22,8 +23,6 @@ REQUEST_TIMEOUT_S = 150
 SMELT_TIMEOUT_S = 150  # plus SMELT_TIMEOUT_PER_ITEM_S per item smelted
 SMELT_TIMEOUT_PER_ITEM_S = 12
 
-# v2: the only blocks natural-mode pathing may place. Not cobblestone, which plans spend.
-SCAFFOLD_BLOCKS = ("dirt", "cobbled_deepslate", "netherrack", "andesite", "diorite", "granite", "tuff")
 MINE_MAX_DISTANCE = 32
 EXPLORE_DISTANCE = 32
 

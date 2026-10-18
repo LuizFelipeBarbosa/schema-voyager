@@ -73,7 +73,7 @@ Models and backends:
     (raw id or `normalize.family`); an item in `wanted` (raw id or family).
   - **Rule items**: those a rule names (raw id or family) in `preconditions.consumes`, `station`, `tool_any` or
     `fuel_any`. The first stack (`stack_size` items) of each raw id is kept; the rest is surplus.
-  - **Junk**: everything else. Of the junk in `SCAFFOLD_BLOCKS` (`mineflayer_backend.py`), enough is kept that the
+  - **Junk**: everything else. Of the junk in `SCAFFOLD_BLOCKS` (`inventory.py`), enough is kept that the
     bot still holds `scaffold_reserve` scaffold blocks in total: scaffold blocks kept for other reasons count first,
     then junk scaffold blocks in `SCAFFOLD_BLOCKS` order.
   - Once triggered, it tosses all the junk: junk that isn't a scaffold block, then the scaffold surplus. Then, only

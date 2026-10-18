@@ -7,8 +7,10 @@ from __future__ import annotations
 from collections.abc import Iterable
 
 from . import curriculum, normalize
-from .mineflayer_backend import SCAFFOLD_BLOCKS
 from .models import Rule
+
+# v2: the only blocks natural-mode pathing may place. Not cobblestone, which plans spend.
+SCAFFOLD_BLOCKS = ("dirt", "cobbled_deepslate", "netherrack", "andesite", "diorite", "granite", "tuff")
 
 # Names or suffixes of items that don't stack (stack size 1).
 _UNSTACKABLE_NAMES = (
