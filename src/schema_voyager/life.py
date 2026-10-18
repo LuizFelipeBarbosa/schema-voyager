@@ -335,7 +335,8 @@ class _Life:
             for repair in proposed:
                 self.store.add_rule(repair)
             added |= bool(proposed)
-            message = f"Rethinking {rule.kind} {rule.subject}: nothing I know gives {' or '.join(dead_items)}."
+            dead_text = " or ".join(item.lstrip("#") for item in dead_items)
+            message = f"Rethinking {rule.kind} {rule.subject.lstrip('#')}: nothing I know gives {dead_text}."
             print(f"[repair] {rule.id}: no source for {', '.join(dead_items)}; proposed {[r.id for r in proposed]}")
             self.backend.say(message[:MAX_CHAT_CHARS])
             self._repairs_unreported.append(
