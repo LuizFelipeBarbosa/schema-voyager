@@ -53,7 +53,7 @@ function smeltShortfall (counts, { ingredient, fuel, times }) {
 async function smelt (bot, { ingredient, item, times = 1, fuel }, { tracker }) {
   const before = inventoryCounts(bot)
   tracker.log.setPhase('step')
-  const result = { ingredient, item, times, fuel, fuel_used: 0, smelted: 0, output_taken: 0, used_furnace: false, furnace_retrieved: null }
+  const result = { ingredient, item, times, fuel, fuel_used: 0, smelted: 0, output_taken: 0, used_furnace: false, furnace_retrieved: null, tools_broken: [] }
   const finish = (error, extra = {}) => {
     const inventory = inventoryCounts(bot)
     return {
@@ -96,10 +96,12 @@ async function smelt (bot, { ingredient, item, times = 1, fuel }, { tracker }) {
     smeltError = err.message
   }
   if (placedPos) {
-    result.furnace_retrieved = await retrieveStation(bot, placedPos, 'furnace', before.furnace || 0, {
+    const { retrieved, toolsBroken } = await retrieveStation(bot, placedPos, 'furnace', before.furnace || 0, {
       withBestTool: true,
       onDrop: (entity) => tracker.ownDrops.add(entity.id)
     })
+    result.furnace_retrieved = retrieved
+    result.tools_broken = toolsBroken
   }
   await resyncWindow(bot, bot.inventory)
   await settleInventory(bot)

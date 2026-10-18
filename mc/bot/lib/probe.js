@@ -13,12 +13,14 @@ async function probe (bot, { grid }, { tracker }) {
   await settleInventory(bot)
   const before = inventoryCounts(bot)
   tracker.log.setPhase('step')
+  let toolsBroken = []
   const finish = (error, extra = {}) => {
     const inventory = inventoryCounts(bot)
     return {
       ok: !error,
       error: error || null,
       output: null,
+      tools_broken: toolsBroken,
       ...extra,
       inventory_delta: countDelta(before, inventory),
       held_outside_inventory: heldOutsideInventory(bot)
@@ -54,9 +56,9 @@ async function probe (bot, { grid }, { tracker }) {
   }
   await clearCraftingGrids(bot)
   if (placedTablePos) {
-    await retrieveStation(bot, placedTablePos, 'crafting_table', before.crafting_table || 0, {
+    ({ toolsBroken } = await retrieveStation(bot, placedTablePos, 'crafting_table', before.crafting_table || 0, {
       onDrop: (entity) => tracker.ownDrops.add(entity.id)
-    })
+    }))
   }
   await settleInventory(bot)
 
