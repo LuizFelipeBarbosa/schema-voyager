@@ -87,9 +87,9 @@ sv2_rcon() {
   "$SV2_PYTHON" -I -c '
 import sys
 from rcon.source import Client
-with Client("127.0.0.1", int(sys.argv[1]), passwd=sys.argv[2], timeout=10) as c:
+with Client("127.0.0.1", int(sys.argv[1]), passwd=sys.argv[2], timeout=float(sys.argv[4])) as c:
     print(c.run(sys.argv[3]))
-' "$SV2_RCON_PORT" "$RCON_PASSWORD" "$1"
+' "$SV2_RCON_PORT" "$RCON_PASSWORD" "$1" "${SV2_RCON_TIMEOUT:-10}"
 }
 
 # Usage: sv2_wait_until <seconds> <command...>

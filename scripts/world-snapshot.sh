@@ -14,6 +14,7 @@ target="$SERVER_DIR/snapshots/$name"
 mkdir -p "$SERVER_DIR/snapshots"
 sv2_rcon "save-off" >/dev/null
 trap 'sv2_rcon "save-on" >/dev/null' EXIT
-sv2_rcon "save-all flush" | grep -q "Saved the game" || die "save-all flush did not complete"
+# Flushing a freshly generated world can take well over the default 10 s RCON timeout.
+SV2_RCON_TIMEOUT=120 sv2_rcon "save-all flush" | grep -q "Saved the game" || die "save-all flush did not complete"
 cp -cR "$world" "$target"
 echo "snapshot '$name' saved: $target"
