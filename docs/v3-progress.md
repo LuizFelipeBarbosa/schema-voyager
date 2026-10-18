@@ -40,7 +40,7 @@ pushed to `origin` until the user says so.
 | S03 retest demoted rules | done | none | v3.0f; 3 lanes merged (pytest 642, bot 191 on e76ea39); a demoted rule gets one retest as `<id>.retest@<world>`; offline only; not pushed |
 | S04 full inventory | done | a | `/toss`, `free_slots`, `inventory.py`, 36-slot sim, junk tossed before a goal; live `runs/s04-junk`; pytest 445, bot 120; not pushed |
 | S05 contracts for M1 and M2 | done | none | Contracts v3.1/v3.2 and stubs merged 1b80640; plugin pins in v3.2g; prompt changes for S06/S07 in v3.2h |
-| S06 goals you give it | running | a | Contract 3649653; lanes goal-queue, goal-parse, chat-bot, panel-ui, then panel-routes, life-queue, then goal-narration |
+| S06 goals you give it | done | a | M1: 9 lanes merged (pytest 715, bot 212, panel and goals pass); live `runs/v3-m1-live` 4 of 4 checks plus the panel box; not pushed |
 | S07 survival | running | b | Lanes: entities-bot, guard-core, survival-plugins, handler-abort, then guard-wire, smelt-abort, python-survival, sim-threats, then difficulty-env, whitelist, death-handling (after S06 life-queue), live |
 | S08 combat and hunting | not started | b | |
 | S09 building foundations | not started | a | |
@@ -97,6 +97,10 @@ pushed to `origin` until the user says so.
 - 01:31 S06 dae44b8 merge `v3/life-queue` (rebased over S03's retest-life): the life parses typed and `!goal` goals, runs queued goals first through one ending (`_end_goal`), cancels and preempts between steps (`_before_step`, a marked place for S07's death check), `--mode play` idles. **S07 `death-handling` can start.** pytest 642, bot 189, panel and goals pass.
 - 01:32 S07 2f4d8fc merge `v3/survival-plugins` (`attachSurvival(bot, eventLog)` → `{hold, onIdleTick}`, armor pickup listener removed, auto-eat at 14 or 17 while hurt, no off-hand, `ate`); 00839d4 merge `v3/guard-core` (`lib/guard.js`: threats at 5 blocks or 8 and closing, attackers for 3 s, creeper back-off, fight/flee under one 30 s deadline); f35e754 merge `v3/handler-abort` (`session.signal` through walks, pickups and stations; an aborted walk marks no target; `/craft` remembers a table left standing); 83e8045 merge `v3/guard-fixes` (orchestrator review: owners' hits ignored, no eat during a hold). pytest 642, bot 191, panel pass.
 - 01:44 S07 2208b23 merge `v3/python-survival` (`Observation.entities`, 409 busy retried 0.25 s then 0.5 s up to 60 s, `say` never, `interrupted` detail flat, in-place retry `MAX_INTERRUPTS` 4, `REQUEST_TIMEOUT_S` 180); 23c1d72 merge `v3/sim-threats` (`NaturalWorld(difficulty=)`: seeded threats answer `interrupted` with fight events, food and sim auto-eat, entities, `die()`; `_candidates` KeyError fixed; seed 1 on easy 15/15 goals with 4 interrupted steps, 0 contradictions); 2366eef merge `v3/smelt-abort` (furnace drained first with `interference`, abort takes items back, `reachStation`); 28af805 merge `v3/guard-wire` (`lib/action_lock.js`, cut-in → `interrupted`, busy until settled and through the fight, 409 `orphan`/`guard`, 45 s backstop, `POST /guard`). pytest 680, bot 212, panel pass.
+- 01:44 S06 ad4d699 merge `v3/goal-narration`: "On it: 10 torches (7 steps)" for a user goal's first plan, `finish(announce=False)` for life goals, trace lines for `goal` and `goal_interrupted`, "Your goal: ..." on the goal card (the card is in `site/dist/life.js`, not `trace.js`; the lane took `life.js` and `trace.test.mjs`). 62fc748 merge `v3/chat-live` (`mc/bot/test/v3_chat_live.js`). pytest 680, bot 196.
+- 01:38-01:53 S06 live `runs/v3-m1-live` (instance a, `fresh-2024`, `BOT_OWNERS=Otopo,Tester`, `--mode play --minutes 15 --cap-usd 2`; bot, panel (port 8767) and Python from `sv2` at ad4d699, the run's `COMMIT`). (1) `curl -X POST` "get me 10 torches" -> u001 done in 117 s from an empty inventory (16 actions, 12 torches), panel `done`; chat "Queued u001: 10 torches", "On it: 10 torches (14 steps)", "Done: 10 torches", no "Goal reached". (2)-(4) `node mc/bot/test/v3_chat_live.js --checks 2,3,4`: ALL PASS. `!goal 4 sticks` -> u002 done (target_count 7, held 3); `!goal build a castle` -> "I can't build yet. ...", u003 unsupported; `!goal 20 iron ingots` then `!cancel` after 2 steps -> `goal_interrupted` cancelled 6 s later, 1 in-flight step after the cancel, "Cancelled u004: 20 iron ingots" once. Stopped on `wall_clock`.
+- 01:54-02:00 S06 live `--resume --minutes 6` of `runs/v3-m1-live`: the panel's own `site/dist/goals.js` (driven by node with real fetch and the page's Origin against the live panel; no browser in this headless session; same src as ad4d699) sent "get me 10 torches" -> u005 queued, running, done in 30 s. Total spend $0.076.
+- 01:56 S06 dcba09f merge `v3/goal-endings` (advisor): sim tests for the wall-clock requeue, the per-goal clock and the failure-reason order; no code change needed. pytest 715, bot 212, panel and goals pass.
 
 ## S01 setup and baseline (done 2026-10-17)
 
@@ -238,3 +242,35 @@ pushed to `origin` until the user says so.
 - Open: a retest's outcome is reported at the next `_repair_dead_ingredients`, so one still pending when the life ends is
   only in the store. Not yet seen live: the first live life with a false demotion should show `retest started` then
   `match` in the next goals' traces, and `change_report` unchanged.
+
+## S06 goals you give it (done 2026-10-18)
+
+- Contract: 3649653 extends v3.1 (on the advisor's first verdict and the orchestrator's notes): `count` means the
+  target for curriculum goals and "how many more" for user/system goals; `goal_label`; the pass never observes when
+  idle; one `mark(running, target_count=)`; a user goal's plan, budget and clock (30 s per planned step,
+  `life_clock_limits_goal` compares with it), planned with `_excluded_rules()`; the failure-reason order; one ending
+  (`_end_goal`); `wanted` keeps queued and done user goals' items; `seq <= bot_seq` skipped; the narration split
+  (`run_schemavoyager(goal=)` says "On it", the life says "Done"/"Couldn't get"/"Cancelled", `Episode.finish(announce=)`).
+- Merges: 8f479eb `goal-queue`, a78281d `goal-parse`, b8cac25 `chat-bot`, 2337d21 `panel-ui`, 0297fc3 `panel-routes`,
+  dae44b8 `life-queue` (rebased over S03's retest-life), ad4d699 `goal-narration`, 62fc748 `chat-live`, dcba09f
+  `goal-endings`. Suite on dcba09f: pytest 715, bot unit 212, `node site/dist/trace.test.mjs` and
+  `node site/dist/goals.test.mjs` pass (the full offline suite now includes `goals.test.mjs`).
+- Re-split: the goal card lives in `site/dist/life.js` (`goalCardHtml`), so `goal-narration` owned `life.js` and
+  `trace.test.mjs` instead of `trace.js`. No existing test was edited.
+- Live (`runs/v3-m1-live`, instance a): all four checks pass, plus the panel box itself driving a goal to `done`
+  (see Log, 01:38 and 01:54). Instance a is down with no lock; the panel on 8767 is stopped; no S06 worktrees or
+  `v3/*` branches are left. Not pushed.
+- Open (advisor's final review and the run):
+  - Without `run`, the panel posts to whichever `goals.jsonl` changed last; a sim or soak life started in the same
+    `runs/` (learn mode too) takes the panel's goals.
+  - Play mode: S03's `_needed_items` still adds the curriculum frontier (unlike `_unasked_families`), so a retest can
+    start, and be announced, for an item nobody asked for.
+  - A panel cancel after the last step: `mark(done)` is refused (the queue stays `cancelled`) but chat says "Done: ...".
+  - `!status` says "Idle." between goals even when goals are queued.
+  - A `BackendError` mid-goal still crashes the life and leaves the goal `running` until `--resume` (as in v2).
+  - A 20-iron-ingot goal gets a 13-minute clock (26 steps x 30 s), most of a 15-minute life.
+  - The terminal trace prints `FAIL actions=3` for an interrupted episode (`episode_end`).
+  - The fake parser needs the number before the item ("4 torches", not "torch 4").
+  - Not clicked in a real browser (headless session): `goals.js` was driven by node with real fetch and the page's
+    Origin against the live panel. Preemption by a system goal is sim-tested only (no system goal before S07's hunger).
+  - The Tester client logs a mineflayer `PartialReadError` (armor-trim registry) on join; harmless.
