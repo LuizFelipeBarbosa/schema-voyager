@@ -32,7 +32,7 @@ function load(source) {
 const plain = (value) => JSON.parse(JSON.stringify(value));
 const readTrace = (path) => readFileSync(path, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
 const now = load(['life.js', 'minimap.js', 'trace.js'].map((name) => readFileSync(join(here, name), 'utf8')).join('\n'));
-const before = load(execFileSync('git', ['show', 'v2/open-world:site/dist/trace.js'], { cwd: here, encoding: 'utf8' }));
+const before = load(execFileSync('git', ['show', 'main:site/dist/trace.js'], { cwd: here, encoding: 'utf8' }));
 
 // v2: every logged line is readable text
 const g009 = readTrace(join(V2_DIR, 'D_life_g009_torch.jsonl'));
