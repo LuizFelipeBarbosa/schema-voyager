@@ -33,12 +33,13 @@ test('travelSummary: distance rounded, gains only, dug and placed passed through
     distance: 23.4,
     dug: { dirt: 3, stone: 1 },
     placed: { dirt: 1 },
-    picked_up: { dirt: 2, cobblestone: 1 }
+    picked_up: { dirt: 2, cobblestone: 1 },
+    placed_cells: []
   })
 })
 
 test('emptyTravel is all zero and empty', () => {
-  assert.deepEqual(emptyTravel(), { distance: 0, dug: {}, placed: {}, picked_up: {} })
+  assert.deepEqual(emptyTravel(), { distance: 0, dug: {}, placed: {}, picked_up: {}, placed_cells: [] })
 })
 
 test('recordTravel counts completed digs and placements, then unwraps bot.dig', async () => {
@@ -54,7 +55,7 @@ test('recordTravel counts completed digs and placements, then unwraps bot.dig', 
   await bot.dig({ name: 'dirt' })
   await bot.dig({ name: 'stone' })
   await assert.rejects(bot.dig({ name: 'bedrock' })) // aborted digs do not count
-  bot.emit('blockPlaced', { name: 'air' }, { name: 'dirt' })
+  bot.emit('blockPlaced', { name: 'air' }, { name: 'dirt', position: { x: 3, y: 64, z: -2 } })
   episode.walked = 12.34
   await recording.settle()
   const travel = recording.finish()
@@ -62,5 +63,23 @@ test('recordTravel counts completed digs and placements, then unwraps bot.dig', 
   assert.equal(calls, 4)
   assert.equal(bot.dig, originalDig)
   assert.equal(bot.listenerCount('blockPlaced'), 0)
-  assert.deepEqual(travel, { distance: 7.3, dug: { dirt: 2, stone: 1 }, placed: { dirt: 1 }, picked_up: {} })
+  assert.deepEqual(travel, {
+    distance: 7.3,
+    dug: { dirt: 2, stone: 1 },
+    placed: { dirt: 1 },
+    picked_up: {},
+    placed_cells: [[3, 64, -2, 'dirt']]
+  })
+})
+
+test('recordTravel lists each placement with its cell and name, in order', () => {
+  const bot = new EventEmitter()
+  bot.inventory = { slots: [] }
+  const recording = recordTravel(bot, { walked: 0 })
+  bot.emit('blockPlaced', { name: 'air' }, { name: 'dirt', position: { x: 1, y: 64, z: 2 } })
+  bot.emit('blockPlaced', { name: 'air' }, { name: 'cobblestone', position: { x: 1, y: 65, z: 2 } })
+  bot.emit('blockPlaced', { name: 'air' }, { name: 'dirt', position: { x: -4, y: 63, z: 0 } })
+  const travel = recording.finish()
+  assert.deepEqual(travel.placed_cells, [[1, 64, 2, 'dirt'], [1, 65, 2, 'cobblestone'], [-4, 63, 0, 'dirt']])
+  assert.deepEqual(travel.placed, { dirt: 2, cobblestone: 1 })
 })

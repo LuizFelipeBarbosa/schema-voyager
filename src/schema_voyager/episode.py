@@ -66,6 +66,8 @@ class Episode:
     actions: int = 0
     inventory: dict[str, int] = field(default_factory=dict)
     used_skills: list[str] = field(default_factory=list)
+    # v3.0h: [x, y, z, block] of every block the walks placed, over all attempts, in order.
+    placed_cells: list[tuple[int, int, int, str]] = field(default_factory=list)
     revisions: int = 0
     # v3: rule id -> the error that blocked it for the rest of this goal (see agent.py).
     blocked_rules: dict[str, str] = field(default_factory=dict)
@@ -259,6 +261,7 @@ class Episode:
         outcome = self.backend.act(action)
         self.actions += 1
         self.inventory = outcome.inventory
+        self.placed_cells += [tuple(cell) for cell in outcome.travel.get("placed_cells", [])]
         annotations = annotate(outcome) if annotate else {}
         natural_fields: dict[str, Any] = {}
         if self.natural:

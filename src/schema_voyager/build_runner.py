@@ -49,6 +49,7 @@ class BuildPlan:
     steps: list[BuildStep]  # from the scan prepare_build made
     needs: dict[str, int]  # family -> count to hold: needed(steps) by normalize.family, plus scaffold
     gather_steps: int  # planner steps to gather what isn't held (for the budget and the clock)
+    protected: list[Box] = field(default_factory=list)  # everything built: scaffold is never cleared inside
     placed: int = 0  # builder.progress of the latest cell states; run_build updates it as it goes
 
     @property
@@ -93,7 +94,8 @@ def prepare_build(
         )
     except PlanningError as error:
         return f"no plan: {error}"[:_MAX_REASON_CHARS]
-    return BuildPlan(spec, origin, site, steps, needs, len(gathering), placed=builder.progress(bp, origin, scan)[0])
+    return BuildPlan(spec, origin, site, steps, needs, len(gathering),
+                     protected=protected, placed=builder.progress(bp, origin, scan)[0])
 
 
 def run_build(
@@ -113,7 +115,10 @@ def run_build(
     finally:
         episode.backend.set_keep_out(None)
 
-    episode.log.event("build_done", matched=not reason, mismatched=[list(pos) for pos in run.mismatched[:10]])
+    episode.log.event(
+        "build_done", matched=not reason, mismatched=[list(pos) for pos in run.mismatched[:10]],
+        scaffold_cleared=run.scaffold_cleared, scaffold_left=run.scaffold_left,
+    )
     result = episode.finish(success=not reason, announce=False)
     episode.log.event("certified", rules=store.certify())
     return BuildOutcome(result, reason[:_MAX_REASON_CHARS], plan.placed, run.total)
@@ -132,6 +137,11 @@ def _pick_site(backend: LifeBackend, bp: dict, protected: list[Box]) -> Site | N
         if site is not None:
             return site
     return None
+
+
+def _inside(pos: Pos, box: Box) -> bool:
+    """Whether `pos` is in the half-open box (origin, size)."""
+    return all(low <= value < low + extent for value, low, extent in zip(pos, *box))
 
 
 def _touches(origin: Pos, size: tuple[int, int], protected: list[Box]) -> bool:
@@ -171,6 +181,8 @@ class _BuildRun:
     steps: list[BuildStep] = field(default_factory=list)
     mismatched: list[Pos] = field(default_factory=list)  # from the latest scan
     failed_cells: dict[Pos, str] = field(default_factory=dict)  # cell -> the error it failed with, this goal
+    scaffold_cleared: int = 0
+    scaffold_left: int = 0
 
     @property
     def bp(self) -> dict:
@@ -196,6 +208,7 @@ class _BuildRun:
         reason = self.gather_materials(plan.needs)
         if reason:
             return reason
+        placed_before_build = len(episode.placed_cells)
         for number in range(1, MAX_BUILD_PASSES + 1):
             reason = self.scan_on_site(number)
             if reason:
@@ -207,8 +220,27 @@ class _BuildRun:
                 return reason
             self.scan(number)  # the final scan
             if not self.mismatched:
+                self.clear_scaffold(episode.placed_cells[placed_before_build:])
                 return ""
         return f"{len(self.mismatched)} cells don't match"
+
+    def clear_scaffold(self, placed_cells: list[tuple[int, int, int, str]]) -> None:
+        """Clear the scaffold the build's walks placed outside the house box and every protected box, highest first,
+        where the cell still holds the recorded block. A failed scan or clear leaves the cell. Never evidence."""
+        from .mineflayer_backend import BackendError  # here, not at the top: it pulls in rcon (see Episode)
+
+        last_block = {(x, y, z): block for x, y, z, block in placed_cells}  # the last name recorded per cell
+        outside = [cell for cell in last_block if not any(_inside(cell, box) for box in [self.box, *self.plan.protected])]
+        for cell in sorted(outside, key=lambda pos: -pos[1]):
+            try:
+                holds_scaffold = self.episode.backend.scan(cell, (1, 1, 1)).get(cell) == last_block[cell]
+                cleared = holds_scaffold and self.episode.act(Action("clear", pos=cell, scaffold=False)).ok
+            except BackendError:
+                cleared = False
+            if cleared:
+                self.scaffold_cleared += 1
+            else:
+                self.scaffold_left += 1
 
     def announce(self) -> None:
         """One chat line: the build's place and, if anything is missing, what it will gather."""
