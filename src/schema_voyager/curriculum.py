@@ -23,6 +23,8 @@ WHITELIST: tuple[str, ...] = (
     "stone_pickaxe", "stone_axe", "stone_shovel", "stone_sword",
     "furnace", "torch", "chest", "ladder",
     "iron_ingot", "iron_pickaxe", "iron_axe", "iron_shovel", "iron_sword", "bucket", "shears",
+    # Leather armor joins in M3, when leather can be obtained.
+    "iron_helmet", "iron_chestplate", "iron_leggings", "iron_boots", "shield",
 )
 SEED_FRONTIER: tuple[str, ...] = (
     "#planks", "stick", "crafting_table", "wooden_pickaxe", "stone_pickaxe", "torch",
@@ -31,11 +33,16 @@ SEED_FRONTIER: tuple[str, ...] = (
 
 KEPT_STATIONS = ("crafting_table", "furnace", "chest")
 KEPT_TOOL_SUFFIXES = ("_pickaxe", "_axe", "_shovel", "_sword")
+KEPT_ARMOR_SUFFIXES = ("_helmet", "_chestplate", "_leggings", "_boots")
 
 
 def is_kept_item(item: str) -> bool:
-    """A station or tool: one is enough, so learn mode doesn't craft another while one is held."""
-    return item in KEPT_STATIONS or item in ("bucket", "shears") or item.endswith(KEPT_TOOL_SUFFIXES)
+    """A station, tool, armor piece or shield: one is enough, so learn mode doesn't craft another while one is held."""
+    return (
+        item in KEPT_STATIONS
+        or item in ("bucket", "shears", "shield")
+        or item.endswith(KEPT_TOOL_SUFFIXES + KEPT_ARMOR_SUFFIXES)
+    )
 
 
 @dataclass(frozen=True)
