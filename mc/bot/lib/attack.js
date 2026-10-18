@@ -5,7 +5,7 @@
 const { goals } = require('mineflayer-pathfinder')
 const { fight } = require('./guard')
 const { horizontalDistance } = require('./geometry')
-const { validateProtect } = require('./protect')
+const { insideAny, validateProtect } = require('./protect')
 const { isAlive } = require('./targets')
 const { emptyTravel, recordTravel } = require('./travel')
 const {
@@ -46,25 +46,31 @@ function isBabyAnimal (bot, entity) {
   return entity.metadata?.[index >= 0 ? index : 16] === true
 }
 
-// Living entities of the mob's name within maxDistance, nearest first; no baby animals.
-function findCandidates (bot, mob, maxDistance) {
+// Living entities of the mob's name within maxDistance, nearest first; no baby animals, none inside a protected box.
+function findCandidates (bot, mob, maxDistance, protect = []) {
   const origin = bot.entity.position
   return Object.values(bot.entities)
-    .filter((entity) => entity.name === mob && entity.position && isAlive(entity) && !isBabyAnimal(bot, entity))
+    .filter((entity) => entity.name === mob && entity.position && isAlive(entity) && !isBabyAnimal(bot, entity) && !insideAny(protect, entity.position))
     .map((entity) => ({ entity, distance: origin.distanceTo(entity.position) }))
     .filter(({ distance }) => distance <= maxDistance)
     .sort((a, b) => a.distance - b.distance)
 }
 
 // Walks until the bot is within NEAR_BLOCKS of `target`, re-aimed as it moves. Resolves
-// 'reached', 'escaped' (it died, vanished or got too far), 'unreachable' or 'timeout'.
-async function walkToTarget (bot, target, { movements, maxDistance, timeoutMs, signal }) {
+// 'reached', 'escaped' (it died, vanished or got too far), 'protected' (it entered a protected box),
+// 'unreachable' or 'timeout'.
+async function walkToTarget (bot, target, { movements, maxDistance, protect, timeoutMs, signal }) {
+  const inProtectedBox = () => {
+    const live = bot.entities[target.id]
+    return Boolean(live) && insideAny(protect, live.position)
+  }
   const gotAway = () => {
     const live = bot.entities[target.id]
-    return !live || !isAlive(live) || bot.entity.position.distanceTo(live.position) > maxDistance + ESCAPE_MARGIN_BLOCKS
+    return !live || !isAlive(live) || inProtectedBox() || bot.entity.position.distanceTo(live.position) > maxDistance + ESCAPE_MARGIN_BLOCKS
   }
+  const gotAwayHow = () => (inProtectedBox() ? 'protected' : 'escaped')
   let escaped = gotAway()
-  if (escaped) return 'escaped'
+  if (escaped) return gotAwayHow()
   const watch = setInterval(() => {
     if (escaped || !gotAway()) return
     escaped = true
@@ -73,7 +79,7 @@ async function walkToTarget (bot, target, { movements, maxDistance, timeoutMs, s
   try {
     bot.pathfinder.setMovements(movements)
     const walk = await gotoGoalDetailed(bot, new goals.GoalFollow(target, NEAR_BLOCKS), timeoutMs, { signal })
-    if (escaped || (!walk.reached && gotAway())) return 'escaped'
+    if (escaped || (!walk.reached && gotAway())) return gotAwayHow()
     if (walk.reached) return 'reached'
     return walk.end === 'timeout' ? 'timeout' : 'unreachable'
   } finally {
@@ -125,7 +131,7 @@ const cellOf = (pos) => ({ x: round(pos.x, 1), y: round(pos.y, 1), z: round(pos.
 // `movements`: the walking movements (the world-preserving ones server.js builds).
 async function attack (bot, body, { episode, tracker, guard, movements, signal = null, fightMs = FIGHT_MS }) {
   signal?.throwIfAborted()
-  const { mob, weapon = null, max_distance: maxDistance = DEFAULT_MAX_DISTANCE } = body
+  const { mob, weapon = null, max_distance: maxDistance = DEFAULT_MAX_DISTANCE, protect = [] } = body
   const deadline = Date.now() + BUDGET_MS
   const result = {
     mob,
@@ -139,11 +145,17 @@ async function attack (bot, body, { episode, tracker, guard, movements, signal =
     inventory_before_step: inventoryCounts(bot),
     travel: emptyTravel()
   }
+  let letGoProtected = false // the target (the last candidate tried, or the one fought) entered a protected box
   const finish = (error, detail) => ({
-    ok: !error, error: error || null, ...result, ...(detail && { detail }), inventory: inventoryCounts(bot)
+    ok: !error,
+    error: error || null,
+    ...result,
+    ...(error === 'escaped' && letGoProtected && { protected: true }),
+    ...(detail && { detail }),
+    inventory: inventoryCounts(bot)
   })
 
-  const candidates = findCandidates(bot, mob, maxDistance).slice(0, MAX_CANDIDATES)
+  const candidates = findCandidates(bot, mob, maxDistance, protect).slice(0, MAX_CANDIDATES)
   if (candidates.length === 0) return finish('not_found')
 
   // Travel: the first candidate that can be reached.
@@ -159,14 +171,15 @@ async function attack (bot, body, { episode, tracker, guard, movements, signal =
       }
       guard.setQuarry(candidate.entity.id)
       const end = await walkToTarget(bot, candidate.entity, {
-        movements, maxDistance, timeoutMs: Math.min(WALK_MS, deadline - Date.now()), signal
+        movements, maxDistance, protect, timeoutMs: Math.min(WALK_MS, deadline - Date.now()), signal
       })
       if (end === 'reached') {
         target = candidate.entity
         result.target = { id: target.id, ...cellOf(target.position), distance: round(candidate.distance, 1) }
         break
       }
-      failure = end
+      letGoProtected = end === 'protected'
+      failure = end === 'protected' ? 'escaped' : end
     }
   } finally {
     result.travel = recording.finish()
@@ -178,12 +191,18 @@ async function attack (bot, body, { episode, tracker, guard, movements, signal =
   tracker.log.setPhase('step')
   result.inventory_before_step = inventoryCounts(bot)
   const kill = watchKill(bot, target, { onNearbyItem: (entity) => tracker.ownDrops.add(entity.id) })
+  const targetInProtectedBox = () => {
+    const live = bot.entities[target.id]
+    if (!live || !insideAny(protect, live.position)) return false
+    letGoProtected = true
+    return true
+  }
   let fought
   let seen
   try {
     fought = await fight(bot, target, {
       timeoutMs: Math.max(0, Math.min(fightMs, deadline - Date.now())), flee: false, sprint: true, weapon,
-      shouldStop: () => signal?.aborted === true, movements, eventLog: tracker.log, deadline
+      shouldStop: () => signal?.aborted === true || targetInProtectedBox(), movements, eventLog: tracker.log, deadline
     })
     result.weapon_used = bot.heldItem?.name ?? null
     signal?.throwIfAborted()
@@ -241,4 +260,4 @@ async function attack (bot, body, { episode, tracker, guard, movements, signal =
   return finish(null)
 }
 
-module.exports = { attack, validateAttack }
+module.exports = { attack, findCandidates, validateAttack }

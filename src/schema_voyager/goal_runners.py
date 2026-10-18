@@ -24,6 +24,7 @@ NEED_SWORD = "I need a sword first."
 WEAPON_TIERS = ("netherite", "diamond", "iron", "stone", "golden", "wooden")
 UNARMED_KINDS = frozenset({"animal", "passive"})  # mobs a kill goal fights bare-handed
 KILL_SECONDS_PER_KILL = 60  # a kill goal's clock is at least this per kill
+KILL_SEARCH_RADIUS = 64.0  # blocks, horizontal, from where the bot stood when the kill goal started
 FAILED_ACTS_TO_GIVE_UP = 3  # acts in a row that fail with no new kill
 GUARD_DISTANCE = 3.0
 GUARD_POLL_S = 2.0
@@ -52,6 +53,8 @@ def run_kill(
         outcome.reason = NEED_SWORD
         return episode.finish(success=False, announce=False)
 
+    x, _, z = episode.backend.observe().position
+    episode.search_bound = ((x, z), KILL_SEARCH_RADIUS)
     deadline = _monotonic() + clock_s
     kills = failed_in_a_row = 0
     while kills < spec.count:
@@ -67,6 +70,8 @@ def run_kill(
         failed_in_a_row = 0 if act.ok or kills > kills_before else failed_in_a_row + 1
         if failed_in_a_row == FAILED_ACTS_TO_GIVE_UP:
             break
+    if kills < spec.count and not outcome.reason and episode.outside_search_bound():
+        outcome.reason = "not found nearby"
     return episode.finish(success=kills >= spec.count, announce=False)
 
 
