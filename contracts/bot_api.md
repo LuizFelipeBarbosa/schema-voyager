@@ -1045,8 +1045,10 @@ home's chest and stations stand outside the walls.
 Put items into the chest at `pos`. `items` is validated as `/toss`'s. It takes the action lock, the guard cuts into
 it (`cutIn: true`), and it honours `session.signal`. 60 s.
 
-1. Walk to `GoalNear(pos, 2)` with `/goto`'s world-preserving movements (no digging, no scaffold, no doors), at most
-   45 s. Not there: `unreachable` with `travel`.
+1. Walk to `GoalNear(pos, 3)` with `/goto`'s world-preserving movements (no digging, no scaffold, no doors), at most
+   45 s, ending early after 8 s without progress (`failFast`). Not there: `unreachable` with `travel`. (Range 3, not 2:
+   a chest opens from 4.5 blocks, and in `runs/v3-m5-live-try1` the last step to range 2, under a canopy and up a
+   ledge, stalled for the whole 45 s.)
 2. The block at `pos` must be a `chest`: else `not_found` (with `detail: {"found": "<block>" | null}`).
 3. Open it (`bot.openContainer`, 5 s), move up to each count of each item, items in request order (a stack at a
    time), never the held tool, stop when the chest has no room, close the window (also on any error or abort),
@@ -1080,7 +1082,7 @@ The same walk and check; opens the chest, reads it and closes it. `{"ok": true, 
   spot outside every `protect` box (`findSpots` skips a cell inside one) and dug up after the step, as today; no
   such spot falls through to 4 when a `station` is given (without one, and when the server refuses a placement, it
   stays `craft_failed` as today); 4. the `station` given, when the block there is that station: walk to
-  `GoalNear(station, 2)` with the world-preserving movements (at most 45 s), use it, never dig it up
+  `GoalNear(station, 3)` with the world-preserving movements (at most 45 s, 8 s without progress ends it), use it, never dig it up
   (`table_retrieved`/`furnace_retrieved` `null`, `used_home_station: true`); a home furnace is drained first as a
   remembered one is. A walk that doesn't get there answers `unreachable` with `station_unreachable: true` and
   `travel`. 5. Else `missing_crafting_table` / `missing_furnace`, with `station_gone: true` when `station` was given

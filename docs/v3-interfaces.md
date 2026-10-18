@@ -2038,7 +2038,7 @@ class Episode:  # episode.py, new field
   tests and tools; Python doesn't call it); `/craft` gets `"station"`
   (the home crafting_table) and `/smelt` gets `"station"` (the home furnace) when set, and both get `protect`.
   `station_gone`, `station_unreachable` and `used_home_station` go into the outcome's detail.
-- `NaturalWorld`: a chest is a `place`d `chest` cell with contents (27 slots, `stack_size`). Chest calls walk like `goto` (range 2) and answer `not_found`
+- `NaturalWorld`: a chest is a `place`d `chest` cell with contents (27 slots, `stack_size`). Chest calls walk like `goto` (range 3) and answer `not_found`
   when the cell isn't a chest. `craft`/`smelt` without the station held use the `set_stations` one when the cell
   still holds it (walk there, `used_home_station: true`, `table_retrieved`/`furnace_retrieved` `None`), else
   `missing_crafting_table`/`missing_furnace` with `station_gone: true` if a station was given. `withdraw` joins
