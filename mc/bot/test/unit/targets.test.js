@@ -33,9 +33,14 @@ function oreWorld (ores, open = []) {
   return fakeWorldBot(blocks)
 }
 
-test('chooseTargets takes the nearest exposed block over a nearer buried one', () => {
-  const bot = oreWorld({ '2,10,0': 'coal_ore', '9,10,0': 'deepslate_coal_ore' }, ['9,10,0'])
+test('chooseTargets takes an exposed block over a buried one a little farther', () => {
+  const bot = oreWorld({ '20,10,0': 'coal_ore', '9,10,0': 'deepslate_coal_ore' }, ['9,10,0'])
   assert.deepEqual(search(bot).pos, new Vec3(9, 10, 0))
+})
+
+test('chooseTargets takes a near buried block over a far exposed one', () => {
+  const bot = oreWorld({ '2,10,0': 'coal_ore', '30,10,0': 'coal_ore' }, ['30,10,0'])
+  assert.deepEqual(search(bot).pos, new Vec3(2, 10, 0))
 })
 
 test('chooseTargets falls back to the nearest buried block, but only with dig_through', () => {
@@ -154,9 +159,9 @@ test('chooseTargets prefers a block with a place to stand over a nearer one with
   assert.deepEqual(search(bot).positions, [new Vec3(11, 10, 0), new Vec3(3, 10, 0)])
 })
 
-test('chooseTargets keeps buried blocks after every exposed one', () => {
+test('chooseTargets orders by reach cost, a buried block counting as a detour', () => {
   const bot = oreWorld({ '2,10,0': 'coal_ore', '9,10,0': 'coal_ore', '14,10,4': 'coal_ore' }, ['14,10,4'])
-  assert.deepEqual(search(bot).positions, [new Vec3(14, 10, 4), new Vec3(2, 10, 0), new Vec3(9, 10, 0)])
+  assert.deepEqual(search(bot).positions, [new Vec3(2, 10, 0), new Vec3(9, 10, 0), new Vec3(14, 10, 4)])
 })
 
 test('chooseTargets leaves out remembered unreachable targets', () => {

@@ -10,6 +10,7 @@ const MAX_CANDIDATES = 1024
 const MAX_HAZARD_EVENTS = 3 // per search; the rest of the candidates are skipped quietly
 const UNREACHABLE_TTL_MS = 10 * 60 * 1000
 const NO_STANDING_SPOT_PENALTY = 16
+const BURIED_PENALTY = 12 // digging in costs about this much walking, however near the block is
 const LOOK_MAX_RADIUS = 96
 const LOOK_DEFAULT_RADIUS = 64
 const LOOK_CANDIDATES_PER_ID = 4096
@@ -68,22 +69,21 @@ function hasStandingSpot (bot, pos) {
 }
 
 // Lower is better: how costly `pos` is to reach from `origin`. Height
-// differences count double (digging or pillaring across them is slow), and an
-// exposed block with no spot to stand beside it is penalised, since reaching
-// it needs digging.
+// differences count double (digging or pillaring across them is slow). A
+// buried block is penalised, and so is an exposed one with no spot to stand
+// beside it, since reaching either needs digging.
 function reachCost (bot, pos, origin, exposed) {
   const centre = pos.offset(0.5, 0.5, 0.5)
-  const standing = !exposed || hasStandingSpot(bot, pos)
-  return origin.distanceTo(centre) + 2 * Math.abs(centre.y - origin.y) + (standing ? 0 : NO_STANDING_SPOT_PENALTY)
+  const digging = exposed ? (hasStandingSpot(bot, pos) ? 0 : NO_STANDING_SPOT_PENALTY) : BURIED_PENALTY
+  return origin.distanceTo(centre) + 2 * Math.abs(centre.y - origin.y) + digging
 }
 
 // The blocks named in `blockNames` within `maxDistance` that are worth trying,
 // best first: not in `skipped` (Vec3#toString keys), not in the `unreachable`
 // memory, and not beside lava or flowing water (each of those is reported
-// through `onHazard({kind, position})`). Exposed blocks (an air neighbour)
-// come before buried ones, which only count with `buried` allowed; within each
-// group the order is by reachCost, so near the bot's own height and with a
-// place to stand wins, and distance breaks ties. Returns {positions, hazard}:
+// through `onHazard({kind, position})`). Buried blocks (no air neighbour) only
+// count with `buried` allowed. The order is by reachCost, so a block near the
+// bot's own height, exposed and with a place to stand, wins. Returns {positions, hazard}:
 // `hazard` is true when at least one candidate was refused for lava or water.
 function chooseTargets (bot, { blockNames, maxDistance, buried, skipped, unreachable, onHazard }) {
   const ids = blockIds(bot, blockNames)
@@ -103,9 +103,9 @@ function chooseTargets (bot, { blockNames, maxDistance, buried, skipped, unreach
     }
     const exposed = hasAirNeighbour(bot, pos)
     if (!exposed && !buried) continue
-    ranked.push({ pos, exposed, cost: reachCost(bot, pos, origin, exposed) })
+    ranked.push({ pos, cost: reachCost(bot, pos, origin, exposed) })
   }
-  ranked.sort((a, b) => Number(b.exposed) - Number(a.exposed) || a.cost - b.cost)
+  ranked.sort((a, b) => a.cost - b.cost)
   return { positions: ranked.map((entry) => entry.pos), hazard }
 }
 
