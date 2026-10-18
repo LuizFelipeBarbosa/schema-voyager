@@ -42,7 +42,7 @@ pushed to `origin` until the user says so.
 | S05 contracts for M1 and M2 | done | none | Contracts v3.1/v3.2 and stubs merged 1b80640; plugin pins in v3.2g; prompt changes for S06/S07 in v3.2h |
 | S06 goals you give it | done | a | M1: 9 lanes merged (pytest 715, bot 212, panel and goals pass); live `runs/v3-m1-live` 4 of 4 checks plus the panel box; not pushed |
 | S07 survival | done | b | 24 lanes merged (pytest 840, bot 266); live guard test ALL PASS; soaks `runs/v3-soak-1..3` (soak 3 on the final code: 30/32 goals, 0 deaths, 0 false contradictions); not pushed |
-| S08 combat and hunting | running | b | Contract v3.3; lanes attack-bot, kill-rules, kill-sim, kill-llm, then kill-backend, follow-bot, parse-kill-guard, hunt-food, then goal-runners, then hunt-live |
+| S08 combat and hunting | done | b | Contract v3.3; 12 lanes merged (pytest 1173, bot 357); live `runs/v3-m3-live` ALL PASS (cooked beef by kill and smelt with stochastic in-range kills and 0 mismatches, kill 3 zombies, guard me); soak `runs/v3-m3-soak` 25/28, 0 deaths; not pushed |
 | S09 building foundations | done | a | Contract v3.4a and bot API v3.4; 5 lanes merged (pytest 821, bot 258); `runs/s09-place-live` ALL PASS (16 checks) from `main`; not pushed |
 | S10 build goals | done | a | Contract v3.4b and bot API v3.4b; 12 lanes merged (pytest 997, bot 312); live `runs/v3-build-live` and `-easy`: Claude's house approved in the panel, built and matched (0 failed steps); protection checked live; not pushed |
 | S11 duels | not started | b | |
@@ -137,6 +137,8 @@ pushed to `origin` until the user says so.
 - 06:32-06:48 S14 live `runs/v3-polish-live` session 2 (`--resume --minutes 15`, the same world with u002's house, bot restarted on main at 77b4bd1, Python and panel from `sv2` at e2a734a). u003 "build a small wooden house with a door": approved in the panel, `done` in 5 min at [4, 76, 31], 72/72 placed, an independent scan `mismatches` `[]`; `build_done` `scaffold_cleared` 2, `scaffold_left` 0, `scaffold_from {walks: 2, ring: 2}` (the new recorder caught the tower by itself); both cells air on a rescan. **The live scaffold check passes on u003.** u002's 2-block tower at (15, 67..68, 13) is still in instance a's world: it was built before `scaffold-record` and `scaffold-ring` (the next `world-restore.sh fresh-2024` removes it). Ended `wall_clock`, `live.json` removed, lock released; $0.076.
 - 06:49 S14 live `node mc/bot/test/v3_guard_live.js` (instance a, under the lock, main at fed3117's bot code): ALL PASS (5 checks) in the new arena at y 200 over the bot; afterwards the bot was back on the ground and a scan of the arena's 6727 cells found no block left. Instance a down, panel stopped, lock released.
 - 07:07 S08 796807f merge `v3/goal-runners` (`goal_runners.py`: arm first, kill until n `fight_end` kills by id with a 3-failure streak and a clock, guard until the clock or the player dies or is lost, `stop_follow` always; the life dispatches them, resolves "me" to the `!goal` speaker, buffers fight and follow events, stops following at start). pytest 1170 (1 skipped), bot 356, panel pass.
+- 07:08-07:38 S08 live on instance b (`fresh-2024`, easy, `BOT_OWNERS=Otopo,Tester`, play mode, live LLM): `runs/v3-m3-live-try1` (arena outside the world border: 3 border deaths, the life's `deaths` stop; checks 1-2 passed on natural mobs); `runs/v3-m3-live`: checks 1-2 pass, check 3 failed twice (criterion during fights; then the follower rested 5.5 blocks away), a261840 merge `v3/follow-tight`, `--resume`, then `node mc/bot/test/v3_hunt_live.js` ALL PASS in one invocation on a261840 (`logs/s08-hunt-live-final2.log`). 4d332d2 merge `v3/hunt-live`. 0 deaths, 0 mismatches.
+- 07:37-07:57 S08 live `runs/v3-m3-soak` (learn mode, easy, daylight on, scramble, 20 min): 25/28 ok, 0 deaths, mismatches only at fired changes, mines 64 reached / 2 stalled / 0 unreachable; no hunting (no cow in view at a prior call). 7d94718 merge `v3/kill-polish`. pytest 1173 (1 skipped), bot 357, panel pass.
 
 ## S01 setup and baseline (done 2026-10-17)
 
@@ -525,3 +527,56 @@ pushed to `origin` until the user says so.
     rewrites it).
   - v3.0h gaps: pillars from an earlier, requeued attempt and scaffold placed while gathering aren't cleared.
   - The README gif still waits for the user's approval.
+
+## S08 combat and hunting (done 2026-10-18)
+
+- Contract: de8c337 v3.3 in `docs/v3-interfaces.md` and `contracts/bot_api.md` (kill rules, `/attack`, mobs in `/look`, `/follow`, kill and
+  guard goals), after the advisor's review (GO with changes, all applied: `escaped` never blocks a rule, the quarry set when a candidate is
+  picked, kills counted by `fight_end` `id`, only baby animals skipped, the sprint copy restored, seen mobs and `cooked_x` sent to the priors
+  because the real schema only returns kill rules for mobs it is asked about, runners in `goal_runners.py`, `bread` dropped). Stubs: `kill` in
+  `ActionKind`, `Action.describe`, `Rule.subject`/`yields` for kill, `Status.follow`, `LifeBackend.look(mobs=)`/`follow`/`stop_follow`.
+- Deviation from the prompt: kill rules keep integer `drops` (the planner expects each range's low end; items whose low end is 0 aren't
+  planned) plus `allowed` ranges, the shape stochastic mine rules already had, instead of ranges in `drops`. `kind_of` makes every kill rule
+  stochastic, so a kill step is `stochastic`, `failed` or `quarantined`, never `mismatch`.
+- Merges: 94c0a1e `kill-rules`, 2e15be9 `kill-llm`, 76692c9 `kill-sim`, a5f7966 `attack-bot`; eb518fb `parse-kill-guard`, d671c09
+  `kill-backend`, c159ded `hunt-food`, fed3117 `follow-bot` (with v3.3j: fights sprint, ranged mobs 8 s); 796807f `goal-runners`; live fixes
+  a261840 `follow-tight` and 4d332d2 `hunt-live`. Re-splits from the prompt: `hunt-goals` became `hunt-food` (group 2), `parse-kill-guard`
+  (group 2) and `goal-runners` (group 3, new `goal_runners.py`); the armed guard tactics went into `follow-bot`. Existing tests changed: two
+  that asserted the old "can't hunt" replies (`test_v3_parse_goal.py`, `test_v3_life_queue.py`), three LLM test doubles gained `mobs=()`
+  (`test_v2_life.py`, `test_v2_repair.py`), one follow test (moving during its no-re-set tick). Suite on 4d332d2: pytest 1170 (1 skipped),
+  bot unit 357, panel pass.
+- Live, instance b, `fresh-2024`, easy, `BOT_OWNERS=Otopo,Tester`, play-mode life with the live LLM, `runs/v3-m3-live`
+  (`node mc/bot/test/v3_hunt_live.js`, `logs/s08-hunt-live-final2.log`: one invocation, ALL PASS, bot a261840, Python 7c415fb..a261840):
+  1. "get me 2 cooked beef" with 4 summoned cows: u009 done; two kills `stochastic` "drops in range" (beef 1 + leather 1, beef 1 +
+     leather 2), smelt `match`, 0 mismatches.
+  2. "!goal kill 3 zombies": u010 done, `kills` 3, three distinct `fight_end` killed ids.
+  3. "!goal guard me": follows (distance 2.9 after a 10-block walk), defends (`player_near` and `player_attacked` threats, 3 zombies killed,
+     Tester at 20 health), rejoins (3.3), `!stop` cancels u011 and `follow` goes null.
+  Whole run: 11 user goals, 0 deaths, 0 mismatches, 4 kill checks in range, 3 smelt matches. Claude's priors: `kill_cow` beef 1-3, leather
+  0-2; `kill_zombie` rotten_flesh 0-2 plus carrot, potato, iron_ingot 0-1 (plans nothing).
+  `runs/v3-m3-live-try1`: the script's first arena (x ≈ 1000) was outside the 512-block world border; the border killed the bot three times
+  and the life stopped on `deaths`. Checks 1-2 still passed there against natural mobs near spawn.
+- Learn-mode easy life `runs/v3-m3-soak` (fresh `fresh-2024`, easy, daylight on, `--keep-going --change scramble --minutes 20 --cap-usd 2`,
+  code 4d332d2): `wall_clock`, 28 goals, 25 ok, $0.25, 0 deaths, 1 guard cut-in (a `mine`, retried), 3 mismatches, all at the fired
+  scramble changes (planks2, coal_tool, stick2). S13's open item: `/mine` reach on easy ended `reached` 64 times and `stalled` twice, with
+  no `unreachable` and no hazard death. No hunting: the only mob in view at a prior call was a skeleton (`kill_skeleton`, bone and arrow
+  0-2), so no `kill_cow` was learned. Food stayed at 8 or more, so no hunger goal ran. Two `iron_ingot` goals failed on smelt
+  `craft_failed` (`used_furnace: false`, at y 57); a later `bucket` smelted fine (not investigated).
+- After the live runs: 7d94718 `kill-polish` (advisor follow-ups: kill targets are living kinds only, so "kill 3 boats" is no creature;
+  the panels label a kill rule "kill cow → beef 1-3, leather 0-2" instead of "craft undefined"). Suite on 7d94718: pytest 1173
+  (1 skipped), bot unit 357, panel pass.
+- Advisor (one Opus `Plan`, two consultations): contract GO with changes (above); final check DONE.
+- Instance b is down, with no lock. No S08 worktrees or `v3/*` branches are left. Not pushed.
+- Open:
+  - Mobs join the priors only when they're in view (16 blocks) at a prior call between goals. A learn-mode life can go a whole session
+    without `kill_cow` (the soak did), and then neither the hunger goal nor the curriculum's cooked meats can be planned. Fix: record
+    `observation.entities` on every observation, not only at prior time. Also, a drop asked before its mob is seen goes out without
+    `kill` in the schema.
+  - Hunting in a curriculum or hunger goal is only proven by user goals so far (live check 1); hunger itself never fired live.
+  - Kill-goal steps aren't rule evidence (only planned kill steps are). Leather and leather armor stay unplannable (low end 0).
+  - `kill <mob>` hunts beyond view by exploring blind and then toward `look` sightings. In try1 a daytime zombie hunt walked about 260
+    blocks, and the guard's kills finished the goal.
+  - A guard kill polled just after a kill goal starts counts toward it (minor).
+  - Deferred: a datapack changing a mob's loot table (a new `CHANGE_STEPS` hidden change; with kill rules always stochastic, noticing it
+    needs out-of-range counts M3 doesn't keep), breaking line of sight against skeletons, `/attack` ignores `protect` (its walks never dig),
+    the simulator's creeper kill answers `not_found`.
