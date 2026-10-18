@@ -122,16 +122,13 @@ def test_a_build_goal_is_announced_and_waits_for_approval(tmp_path):
     assert len(plan) <= 240 and "#" not in plan
 
 
-def test_yes_approves_and_the_unwired_runner_fails_the_goal_cleanly(tmp_path):
+def test_yes_approves_and_the_goal_leaves_awaiting_approval(tmp_path):
     world = ChatWorld({2: chat("goal", "build a small house"), 6: chat("yes")})
 
-    summary = run(tmp_path, world, wall_clock_s=0.5)
+    run(tmp_path, world, wall_clock_s=0.5)
 
     assert "Approved u001: small hut." in world.said
-    failed = entry(tmp_path, "u001")
-    assert (failed.status, failed.reason) == ("failed", "building isn't wired yet")
-    assert "Couldn't build small hut: building isn't wired yet" in world.said
-    assert summary["stop_reason"] == "wall_clock"
+    assert entry(tmp_path, "u001").status != "awaiting_approval"  # the build runs (tests/test_v3_build_life.py)
 
 
 def test_no_discards(tmp_path):
