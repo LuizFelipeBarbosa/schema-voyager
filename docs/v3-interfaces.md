@@ -508,6 +508,21 @@ Plan S0.10. Lanes: `station-dig`, `mobs-seen`, `panel-pid`, `explore-cap`; then 
   the panel's polls take nothing from the life's. `_poll_bot` records each `mob_seen` (same kind filter) at the
   event's `t`. The simulator logs the same events for its nearby mobs. `mob_seen` is not a quarantine event.
 
+**Keeping raw food for the smelt** (`keep-food`; bot API v3.0i)
+
+- Live (`runs/v3-polish2-hunger3`): during a hunger goal food is below auto-eat's `startAt` (it fires under 8), so
+  the plugin ate each raw beef as it was picked up; the goal killed 6 cows, never held 4 beef and never smelted.
+- Bot `POST /keep_food {"items": ["beef"]}` answers `{"ok": true, "kept": [...]}` without taking the action lock (as
+  `/guard`). It sets auto-eat's `bannedFood` to a copy of the plugin's default list (taken when the plugin attaches,
+  never edited in place) plus the items; `[]` restores the default. While the bot is starving (food 0 and health 8
+  or less) the kept items are eaten anyway. A restarted bot keeps nothing.
+- `LifeBackend.keep_food(items)` (stub on `main`): `MineflayerBackend` posts it; the simulator does nothing; v2's
+  scripted backends lack it (`hasattr`).
+- The life, when an `obtain` goal starts whose item is a vanilla food: the ingredients of every usable smelt rule
+  that yields that item (so a replan from cow to sheep stays covered), sent before the goal's first action, if any.
+  Cleared with `[]` in a `finally` around the goal's run (every ending); not after a lost bot (`_bot_gone`), and a
+  failed clear is only printed. After `bot_back` nothing is resent: the requeued goal sends it when it starts.
+
 **A stuck bot** (`bot-stuck`)
 
 - A bot that answers `409` for over 60 s while `/health` says connected was waited for, came back at once, failed the

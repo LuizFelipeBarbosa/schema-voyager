@@ -52,6 +52,11 @@ class LifeBackend(Backend, Protocol):
         A failed walk is `unreachable` with `detail["position"]`, where it ended. See docs/v3-interfaces.md, v3.0i."""
         ...
 
+    def keep_food(self, items: Sequence[str]) -> None:
+        """v3.0i: auto-eat leaves these raw items alone (for a smelt); [] lets it eat anything again. See
+        docs/v3-interfaces.md, v3.0i."""
+        ...
+
     def look(self, blocks: list[str], radius: int = 64, mobs: Sequence[str] = ()) -> LookResult:
         """Nearest hits per direction. v3.3: mobs (entity names) come back in the same map, keyed by mob name."""
         ...
