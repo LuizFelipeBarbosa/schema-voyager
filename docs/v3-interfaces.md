@@ -704,6 +704,12 @@ Written by S05 for S07 (M2: plan steps S2.1–S2.8). The bot side (guard, entiti
   of their own, `MAX_INTERRUPTS = 4` per step, separate from `MAX_RETRIES` (S07: at night several fights can land
   on one step, and the shared budget of 2 would fail it). The usual `budget_left` and `out_of_time` checks still
   apply.
+  **Resting after a flight** (S07, from `runs/v3-soak-2`, where in-place retries walked a bot at 4.8 health back
+  into a skeleton's arrows twice): after an `interrupted` whose outcome is `fled` and whose events show health below
+  10 (the `fled` event's `health`, else the last `damage` event's `health`), `Episode.act` doesn't retry at once. If
+  `backend.status().food` is 18 or more (health only regenerates then), it polls `status()` every 2 s until health is
+  14 or more, at most 60 s, then retries in place. With food below 18 it can't heal, so the step ends `interrupted`
+  with no more in-place retries.
   It is never evidence:
   - a step whose last attempt is `interrupted` is a `failed` check, which records no transition;
   - each retry is judged only on its own response window;
@@ -803,6 +809,13 @@ The guard must never turn a fight into evidence. These rules hold (S07 tests the
 - The bot's auto-eat eats the food when food is 14 or less and no action holds the lock. Some may be eaten before
   the goal counts them. The goal then gathers a little more, which is fine.
 - M3 makes this `obtain cooked_beef 4`, planned as kill cow then smelt beef.
+- **The arming goal** (S07, from `runs/v3-soak-2`, where both deaths came from fights with bare hands). When the poll
+  sees a `threat` event while the bot holds no sword or axe (by the last inventory the life saw) and no system goal
+  is `queued` or `running`, the life queues `arm: 1 <sword>` (`submit` then `accept`, `kind="obtain"`,
+  `source="system"`, `count=1`) for the first of `iron_sword`, `stone_sword`, `wooden_sword` that `make_plan` can
+  reach with the usable rules (minus `excluded`). A sword whose arming goal failed is skipped for 900 s, as a hunger
+  food is. With none reachable it does nothing. Like any system goal it preempts a running user or curriculum goal at
+  its next step, and a death cancels it.
 
 ### v3.2f Difficulty and daylight (`scripts/v2-env.sh`, S07 `difficulty-env`)
 
