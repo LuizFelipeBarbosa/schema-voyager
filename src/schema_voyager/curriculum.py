@@ -29,6 +29,15 @@ SEED_FRONTIER: tuple[str, ...] = (
 )
 
 
+KEPT_STATIONS = ("crafting_table", "furnace", "chest")
+KEPT_TOOL_SUFFIXES = ("_pickaxe", "_axe", "_shovel", "_sword")
+
+
+def is_kept_item(item: str) -> bool:
+    """A station or tool: one is enough, so learn mode doesn't craft another while one is held."""
+    return item in KEPT_STATIONS or item in ("bucket", "shears") or item.endswith(KEPT_TOOL_SUFFIXES)
+
+
 @dataclass(frozen=True)
 class Goal:
     item: str  # normalized name
@@ -48,13 +57,13 @@ class Curriculum:
         self, inventory: dict[str, int], store: SchemaStore, world_id: str, visible: dict[str, int] | None = None
     ) -> Goal | None:
         """The cheapest frontier goal whose plan uses an uncertified rule (ties: fewest
-        uncertified rules, then name), planned with the producers in `visible` preferred. Skipped items and items that can't be planned
-        from here are passed over."""
+        uncertified rules, then name), planned with the producers in `visible` preferred. Skipped items, kept items already held and items that
+        can't be planned from here are passed over."""
         held = normalize.counts(inventory)
         rules = store.usable_rules(world_id)
         best: Goal | None = None
         for item in self.frontier:
-            if item in self.skipped:
+            if item in self.skipped or (is_kept_item(item) and held.get(item, 0) >= 1):
                 continue
             count = held.get(item, 0) + 1
             try:
