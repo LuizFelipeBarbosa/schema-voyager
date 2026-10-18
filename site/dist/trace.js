@@ -5,6 +5,13 @@
 const SYSTEM_NAMES = { D: 'SchemaVoyager', B: 'Skill-only baseline', 'B+': 'Baseline with effect feedback' };
 // What the holdout world changed, shown to the audience. The agent is never told.
 const HIDDEN_RULES = { h3: 'coal ore drops coal only when mined with a stone-tier pickaxe.' };
+// What the v2 life world changed mid-run (`world_change.change`). The agent is never told.
+const WORLD_CHANGES = {
+  r2: 'coal ore now drops coal only for a stone-tier pickaxe',
+  stick2: 'sticks now craft 2 instead of 4'
+};
+// Normalized item groups (`#log`) as the audience should read them.
+const GROUP_NAMES = { log: 'log (any wood)', planks: 'planks (any wood)', leaves: 'leaves (any)', sapling: 'sapling (any)', cobblestone: 'cobblestone (any)' };
 const EFFECT_LABELS = { block_removed: 'block removed', drops: 'drops', inventory_delta: 'inventory' };
 const FOLLOW_NEWEST = 'newest';
 const DROPPED = 'dropped';
@@ -176,6 +183,8 @@ function control(action) {
 function stateAt(events, index) {
   const state = {
     start: null,
+    goal: null, // v2 life: why this goal was picked
+    worldChange: null, // v2 life: the hidden rule change, once it has happened
     end: null,
     plan: null,
     plans: 0,
@@ -188,13 +197,31 @@ function stateAt(events, index) {
     contradictions: 0
   };
   for (const event of events.slice(0, index + 1)) applyEvent(state, event);
+  // v2 explore goals write no episode_start; the goal event stands in for it.
+  if (!state.start && state.goal) state.start = startFromGoal(state.goal, state.end);
   return state;
+}
+
+function startFromGoal(goal, end) {
+  return {
+    system: 'D',
+    task: `g${pad(goal.index)}`,
+    description: `Obtain ${goal.count} ${goal.item}`,
+    world_id: end ? end.world_id : 'life-',
+    budget: goal.budget
+  };
 }
 
 function applyEvent(state, event) {
   switch (event.kind) {
     case 'episode_start':
       state.start = event;
+      break;
+    case 'goal':
+      state.goal = event;
+      break;
+    case 'world_change':
+      state.worldChange = event;
       break;
     case 'plan':
       state.plans += 1;
@@ -318,22 +345,28 @@ function episodeHtml(state) {
     const waiting = player.followNewest ? 'Waiting for an episode to start…' : 'No episode loaded. Pick a trace above, or drop a .jsonl trace here.';
     return `<p class="waiting">${waiting}</p>`;
   }
+  const life = isLife(start);
+  const exploring = life && (start.description.startsWith('Obtain 1 explore') || Boolean(state.goal && state.goal.item === 'explore'));
   const [statusClass, statusText] = state.end
-    ? (state.end.success ? ['success', 'SUCCESS'] : ['fail', 'FAIL'])
+    ? (exploring ? ['neutral', 'EXPLORED'] : state.end.success ? ['success', 'SUCCESS'] : ['fail', 'FAIL'])
     : ['running', isLive() ? '● LIVE' : 'REPLAY'];
-  const hidden = HIDDEN_RULES[start.task];
+  const hidden = life ? null : HIDDEN_RULES[start.task];
+  const title = life
+    ? `GOAL ${Number(start.task.slice(1))}${start.world_id === 'life-' ? '' : ` · ${start.world_id}`}`
+    : `${start.task.toUpperCase()} · layout ${start.layout} · world ${start.world_id}`;
   const end = state.end;
   return `
     <div class="episode-head">
       <span class="system ${start.system === 'D' ? 'system-D' : ''}">${esc(start.system)}</span>
       <div class="episode-title">
         <strong>${esc(SYSTEM_NAMES[start.system] || start.system)}</strong>
-        <span>${esc(start.task.toUpperCase())} · layout ${esc(start.layout)} · world ${esc(start.world_id)}</span>
+        <span>${esc(title)}</span>
       </div>
       <span class="status ${statusClass}">${statusText}</span>
     </div>
-    <p class="goal">${esc(start.description)}</p>
+    <p class="goal">${say(start.description)}</p>
     ${hidden ? `<p class="hidden-rule"><b>HIDDEN RULE</b>In this world, ${esc(hidden)} The agent is not told.</p>` : ''}
+    ${state.worldChange ? `<p class="hidden-rule"><b>HIDDEN CHANGE</b>${esc(describeWorldChange(state.worldChange))}. The agent is not told.</p>` : ''}
     ${end ? `<p class="result">${end.actions} actions · ${plural(end.llm_calls, 'Claude call')} · ${formatNumber(end.llm_tokens)} tokens · ${plural(end.repeated_failures, 'repeated failure')}</p>` : ''}`;
 }
 
@@ -357,7 +390,7 @@ function planHtml(state) {
   const steps = plan.steps.map((step, i) => {
     const classes = [step.status, step.experimental ? 'experimental' : '', step.index === currentIndex ? 'current' : ''];
     const tag = step.experimental ? 'HYPOTHESIS' : (step.status === 'failed' ? 'RETRYING' : '');
-    return `<li class="${classes.join(' ')}"><span class="n">${pad(i + 1)}</span><span>${esc(step.action)}</span><span class="tag">${tag}</span></li>`;
+    return `<li class="${classes.join(' ')}"><span class="n">${pad(i + 1)}</span><span>${say(step.action)}</span><span class="tag">${tag}</span></li>`;
   });
   return `
     ${cardHead(plan.title, plan.note)}
@@ -367,18 +400,21 @@ function planHtml(state) {
 
 function stepHtml(step, system) {
   if (!step) return `${cardHead('CURRENT STEP')}<p class="empty">No action yet.</p>`;
+  const travel = travelSummary(step.travel);
   const action = `
     <div class="step-action">
       <span class="n">#${pad(step.index)}</span>
-      <strong>${esc(step.action)}</strong>
-      ${step.rule ? `<span class="rule">rule ${esc(step.rule)}</span>` : ''}
-    </div>`;
+      <strong>${say(step.action)}</strong>
+      ${step.rule ? `<span class="rule">rule ${say(step.rule)}</span>` : ''}
+    </div>
+    ${travel ? `<p class="travel">${say(travel)}</p>` : ''}`;
   if (!step.ok) {
-    const missing = step.detail && step.detail.missing ? `<small>missing ${esc(formatCounts(step.detail.missing))}</small>` : '';
+    const missing = step.detail && step.detail.missing ? `<small>missing ${say(formatCounts(step.detail.missing))}</small>` : '';
     return `${cardHead('CURRENT STEP')}${action}<div class="verdict failed">failed: ${esc(step.error)}${missing}</div>`;
   }
-  const observed = step.observed || observedEffects(step);
-  if (!observed) return `${cardHead('CURRENT STEP')}${action}<p class="empty">Walked one leg of the search spiral.</p>`;
+  // A quarantined step's `observed` holds only the raw error and events.
+  const observed = step.check === 'quarantined' ? observedEffects(step) : step.observed || observedEffects(step);
+  if (!observed) return `${cardHead('CURRENT STEP')}${action}<p class="empty">${exploreSummary(step)}</p>`;
 
   const predicted = step.predicted && step.check ? step.predicted : null;
   const predictedColumn = predicted
@@ -394,8 +430,20 @@ function stepHtml(step, system) {
     ${verdictHtml(step, observed)}`;
 }
 
+function exploreSummary(step) {
+  const direction = step.action_obj.direction;
+  if (direction === 'up') return 'Climbed back to open sky';
+  if (direction) return `Explored ${esc(direction)} (${Math.round(step.travel ? step.travel.distance : 0)} blocks)`;
+  return 'Walked one leg of the search spiral.';
+}
+
 function verdictHtml(step, observed) {
-  const note = step.check_detail ? `<small>${esc(step.check_detail)}</small>` : '';
+  const note = step.check_detail ? `<small>${say(step.check_detail)}</small>` : '';
+  if (step.check === 'quarantined') {
+    const types = [...new Set((step.events || []).map((event) => event.type))];
+    return `<div class="verdict quarantined">⚠ QUARANTINED — not evidence${types.length ? `<small>${esc(types.join(', '))}</small>` : ''}</div>`;
+  }
+  if (step.check === 'stochastic') return `<div class="verdict stochastic">~ random drop, checked against the allowed range${note}</div>`;
   if (step.check === 'mismatch') return `<div class="verdict mismatch">✕ MISMATCH${note}</div>`;
   if (step.check === 'match') return `<div class="verdict match">✓ matches the prediction${note}</div>`;
   if (droppedNothing(observed)) {
@@ -414,7 +462,7 @@ function observedEffects(step) {
 function effectRows(effects, compareTo) {
   return Object.entries(effects).map(([key, value]) => {
     const differs = compareTo && JSON.stringify(compareTo[key]) !== JSON.stringify(value);
-    return `<dt>${EFFECT_LABELS[key] || esc(key)}</dt><dd class="${differs ? 'differs' : ''}">${esc(formatEffect(key, value))}</dd>`;
+    return `<dt>${EFFECT_LABELS[key] || esc(key)}</dt><dd class="${differs ? 'differs' : ''}">${say(formatEffect(key, value))}</dd>`;
   }).join('');
 }
 
@@ -423,8 +471,8 @@ function storeHtml(state) {
   if (!state.changes.length) return `${head}<p class="empty">No changes yet. Rules that predict correctly stay as they are.</p>`;
   const changes = state.changes.map((change, i) => `
     <li class="change ${change.tone}${i === state.changes.length - 1 ? ' latest' : ''}">
-      <strong>${esc(change.title)}</strong>
-      ${change.detail ? `<p>${esc(change.detail)}</p>` : ''}
+      <strong>${say(change.title)}</strong>
+      ${change.detail ? `<p>${say(change.detail)}</p>` : ''}
       ${change.hypotheses ? hypothesesHtml(change.hypotheses) : ''}
     </li>`);
   return `${head}<ol class="changes">${changes.join('')}</ol>`;
@@ -435,8 +483,8 @@ function hypothesesHtml(hypotheses) {
     const why = hypothesis.kept ? hypothesis.rule.rationale : 'Rejected: as written, it predicts the drop that just failed to happen.';
     return `
       <li class="${hypothesis.kept ? '' : 'rejected'}">
-        <code>${esc(ruleLabel(hypothesis.rule))}</code><span class="badge">${hypothesis.kept ? 'KEPT' : 'REJECTED'}</span>
-        <span class="why">${esc(why)}</span>
+        <code>${say(ruleLabel(hypothesis.rule))}</code><span class="badge">${hypothesis.kept ? 'KEPT' : 'REJECTED'}</span>
+        <span class="why">${say(why)}</span>
       </li>`;
   });
   return `<ol class="hypotheses">${items.join('')}</ol>`;
@@ -458,7 +506,13 @@ function renderLog() {
   log.scrollTop = log.scrollHeight;
 }
 
+// [tone, text] for the event log; text is null for events that are not listed.
 function logLine(event) {
+  const [tone, text] = rawLogLine(event);
+  return [tone, text === null ? null : readable(text)];
+}
+
+function rawLogLine(event) {
   switch (event.kind) {
     case 'episode_start':
       return ['', `start · ${event.description} · budget ${event.budget}`];
@@ -484,18 +538,54 @@ function logLine(event) {
       return ['bad', `no plan · ${event.reason}`];
     case 'episode_end':
       return [event.success ? 'good' : 'bad', `${event.success ? 'SUCCESS' : 'FAIL'} · ${event.actions} actions · ${formatNumber(event.llm_tokens)} tokens`];
-    default:
-      return ['', event.kind];
+    case 'goal':
+      return ['', `goal ${event.index} · ${event.count} ${event.item} · ${event.reason}`];
+    case 'travel': {
+      const summary = travelSummary(event);
+      return summary ? ['dim', summary] : ['', null];
+    }
+    case 'world_change':
+      return ['change', `WORLD CHANGED (the agent is not told): ${describeWorldChange(event)}`];
+    case 'look':
+      return ['', `look for ${event.target}: ${event.seen ? `${event.direction} (seen)` : `nothing in sight, trying ${event.direction}`}`];
+    case 'quarantined':
+      return ['warn', `quarantined · ${event.reason} · not evidence`];
+    case 'repair':
+      return ['llm', `Claude repair · ${event.rule} needs ${event.dead_items.join(', ')} · proposed ${event.proposed.length}`];
+    default: {
+      const { kind, t, ...rest } = event;
+      const details = JSON.stringify(rest);
+      return ['', details.length > 2 ? `${kind} ${details.length > 120 ? `${details.slice(0, 117)}...` : details}` : kind];
+    }
   }
+}
+
+function describeWorldChange(event) {
+  return WORLD_CHANGES[event.change] || `${event.action} ${event.subject} changed (${event.change})`;
+}
+
+// "travel 45 blocks · dug stone 3 · picked up cobblestone 2", or '' when nothing happened.
+function travelSummary(travel) {
+  if (!travel) return '';
+  const counts = (label, items) => (Object.keys(items || {}).length ? [`${label} ${Object.entries(items).map(([item, n]) => `${item} ${n}`).join(', ')}`] : []);
+  const parts = [
+    ...(travel.distance >= 1 ? [`travel ${Math.round(travel.distance)} blocks`] : []),
+    ...counts('dug', travel.dug),
+    ...counts('placed', travel.placed),
+    ...counts('picked up', travel.picked_up)
+  ];
+  return parts.join(' · ');
 }
 
 function stepLogLine(step) {
   const prefix = `#${pad(step.index)} ${step.action} →`;
   if (!step.ok) return ['warn', `${prefix} failed: ${step.error}`];
   if (step.check === 'mismatch') return ['bad', `${prefix} MISMATCH, ${step.check_detail}`];
+  if (step.check === 'quarantined') return ['warn', `${prefix} quarantined, not evidence`];
   const observed = step.observed || observedEffects(step);
   if (!observed) return ['', `${prefix} done`];
   const effect = 'drops' in observed ? `drops ${formatCounts(observed.drops)}` : formatDelta(observed.inventory_delta);
+  if (step.check === 'stochastic') return ['', `${prefix} ${effect}, random drop within range`];
   if (step.check === 'match') return [isRevision(step.rule) ? 'good' : '', `${prefix} ok, ${effect}`];
   return [droppedNothing(observed) ? 'warn' : '', `${prefix} ${effect}`];
 }
@@ -575,6 +665,22 @@ function plural(count, noun) {
 
 function pad(value) {
   return String(value).padStart(2, '0');
+}
+
+// Normalized names for display: `#log` is any wood, and a rule id loses its world suffix.
+function readable(text) {
+  return String(text ?? '')
+    .replace(/\.(rev|fix)(\d+)@life-[\w-]+/g, ' $1$2')
+    .replace(/@life-[\w-]+/g, '')
+    .replace(/#(log|planks|leaves|sapling|cobblestone)\b/g, (_, group) => GROUP_NAMES[group]);
+}
+
+function say(value) {
+  return esc(readable(value));
+}
+
+function isLife(start) {
+  return String(start.world_id).startsWith('life-');
 }
 
 function esc(value) {
