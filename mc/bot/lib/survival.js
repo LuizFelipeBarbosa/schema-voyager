@@ -8,6 +8,9 @@ const STARTS_AT_FULL_HEALTH = 14
 // Health only regenerates at food 18 or more, so while hurt the bot eats earlier.
 const STARTS_AT_HURT = 17
 
+// Hungry with nothing to eat is the normal case until M3's hunting: not worth a log line every 2 s.
+const NO_FOOD_MESSAGE = 'No food found.'
+
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 function logError (what, error) {
@@ -41,7 +44,9 @@ function attachSurvival (bot, eventLog, {
   bot.on('autoeat_finished', (item) => {
     eventLog.record('ate', { item: item && item.name, food: bot.food })
   })
-  bot.on('autoeat_error', (error) => logError('autoeat_error', error))
+  bot.on('autoeat_error', (error) => {
+    if (error?.message !== NO_FOOD_MESSAGE) logError('autoeat_error', error)
+  })
 
   let holds = 0
   let settled = Promise.resolve() // the first hold's wait for the plugins to go quiet
@@ -64,8 +69,7 @@ function attachSurvival (bot, eventLog, {
     try {
       if (bot.autoEat) await bot.autoEat.eat()
     } catch (error) {
-      // Hungry with nothing to eat is the normal case until M3's hunting: not worth a log line every 2 s.
-      if (error?.message !== 'No food found.') logError('eat', error)
+      if (error?.message !== NO_FOOD_MESSAGE) logError('eat', error)
     }
   }
 

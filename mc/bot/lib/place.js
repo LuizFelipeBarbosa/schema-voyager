@@ -6,6 +6,7 @@
 const { Movements, goals } = require('mineflayer-pathfinder')
 const { Vec3 } = require('vec3')
 const { watchServerBlockChange } = require('./blockchange')
+const { sprintAllowed } = require('./movements')
 const { insideAny, placeExclusion, validateProtect } = require('./protect')
 const { hazardNear } = require('./targets')
 const { emptyTravel, recordTravel } = require('./travel')
@@ -199,6 +200,7 @@ async function withBuildMovements (bot, { scaffoldNames, keepOut, protect }, fn)
   const movements = new Movements(bot)
   movements.canDig = false
   movements.canOpenDoors = false
+  movements.allowSprinting = sprintAllowed(bot)
   movements.scafoldingBlocks = scaffoldNames.map((name) => bot.registry.itemsByName[name]?.id).filter((id) => id !== undefined)
   movements.allow1by1towers = movements.scafoldingBlocks.length > 0
   if (keepOut) movements.exclusionAreasPlace.push(keepOutExclusion(keepOut))
