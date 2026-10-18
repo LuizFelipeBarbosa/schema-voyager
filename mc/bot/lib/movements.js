@@ -73,6 +73,7 @@ class DiggingMovements extends Movements {
     this.dontCreateFlow = true
     this.dontMineUnderFallingBlock = true
     this.maxDropDown = MAX_DROP_DOWN
+    this.infiniteLiquidDropdownDistance = false // else a drop of any height into water is planned
     this.liquidCost = LIQUID_COST
 
     this.scafoldingBlocks = scaffoldNames
