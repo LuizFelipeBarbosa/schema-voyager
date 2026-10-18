@@ -187,6 +187,7 @@ class _Life:
             self.observed_blocks: set[str] = set(state["observed_blocks"])
             self.goals_done: int = state["goal_index"]
             self.explores_done: int = state.get("explores_done", 0)
+            self.repaired: set[str] = set(state.get("repaired", []))
             self.earlier_tokens: int = state["tokens"]
             llm.carried_usd = state["spend_usd"]
         else:
@@ -195,10 +196,12 @@ class _Life:
             self.curriculum = Curriculum()
             self.asked, self.observed_blocks = set(), set()
             self.goals_done, self.earlier_tokens, self.explores_done = 0, 0, 0
+            self.repaired = set()
             self.log_path.write_text("", encoding="utf-8")
         llm.spend_cap_usd = config.spend_cap_usd
         self._calls_marked = len(llm.calls)
         self._certified_marked = self._certified_ids()
+        self._repairs_unreported: list[dict[str, Any]] = []  # shown in the next goal's trace and record
 
     # -- the loop ---------------------------------------------------------
 
@@ -212,6 +215,8 @@ class _Life:
                 return "wall_clock"
             try:
                 observation = self._learn_priors()
+                if self._repair_dead_ingredients(observation):
+                    observation = self._learn_priors()  # the repairs may name families nobody asked about
                 goal = self.curriculum.next_goal(
                     normalize.counts(observation.inventory), self.store, self.world_id, normalize.counts(observation.nearby)
                 )
@@ -269,6 +274,33 @@ class _Life:
         wanted = (needed - produced) | (self.observed_blocks - AMBIENT_BLOCKS)
         return sorted(wanted - self.asked)
 
+    def _repair_dead_ingredients(self, observation: Observation) -> bool:
+        """A rule that consumes an item nothing the agent knows produces can never be executed,
+        so it is never contradicted. Once the item's family has been asked about, ask for
+        alternatives to each such rule, once per rule per life. Returns whether any rule was added."""
+        rules = self.store.usable_rules(self.world_id)
+        produced = {item for rule in rules for item in rule.yields()}
+        dead = {item for rule in rules for item in rule.preconditions.get("consumes", {})} - produced
+        dead &= self.asked
+        obtainable = sorted(produced | set(normalize.counts(observation.inventory)))
+        added = False
+        for rule in rules:
+            dead_items = sorted(dead & set(rule.preconditions.get("consumes", {})))
+            if not dead_items or rule.id in self.repaired:
+                continue
+            proposed = self.llm.repair_rule_v2(rule, dead_items, obtainable, self.world_id)
+            self.repaired.add(rule.id)
+            for repair in proposed:
+                self.store.add_rule(repair)
+            added |= bool(proposed)
+            message = f"Rethinking {rule.kind} {rule.subject}: nothing I know gives {' or '.join(dead_items)}."
+            print(f"[repair] {rule.id}: no source for {', '.join(dead_items)}; proposed {[r.id for r in proposed]}")
+            self.backend.say(message[:MAX_CHAT_CHARS])
+            self._repairs_unreported.append(
+                {"rule": rule.id, "dead_items": dead_items, "proposed": [r.id for r in proposed]}
+            )
+        return added
+
     def _expand_frontier(self) -> bool:
         candidates = self.curriculum.unused_whitelist()
         if not candidates:
@@ -300,6 +332,8 @@ class _Life:
             deadline=time.monotonic() + min(self.config.goal_wall_clock_s, max(self._remaining_s(), 0.0)),
         )
         log.event("goal", index=index, item=goal.item, count=goal.count, reason=goal.reason, budget=budget)
+        for repair in self._repairs_unreported:
+            log.event("repair", **repair)
         self.backend.say(f"Next goal: {goal.item} ({goal.reason})"[:MAX_CHAT_CHARS])
 
         result = run_schemavoyager(episode, self.store, self.hooks.before_step)
@@ -309,6 +343,8 @@ class _Life:
             self.curriculum.record(goal, result.success)
         self.goals_done = index
         record = self._goal_record(index, goal, budget, result, started_at, interrupted)
+        if self._repairs_unreported:
+            record["repairs"], self._repairs_unreported = self._repairs_unreported, []
         self._save(record)
         if self.hooks.after_goal is not None:
             self.hooks.after_goal(record)
@@ -376,7 +412,7 @@ class _Life:
         self.store.save(self.store_path)
         state = {
             "world_id": self.world_id, "goal_index": self.goals_done, "explores_done": self.explores_done, "curriculum": self.curriculum.to_dict(),
-            "asked": sorted(self.asked), "observed_blocks": sorted(self.observed_blocks),
+            "asked": sorted(self.asked), "repaired": sorted(self.repaired), "observed_blocks": sorted(self.observed_blocks),
             "tokens": self.earlier_tokens + self.llm.total_tokens, "spend_usd": self.llm.spent_usd,
         }
         self.state_path.write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
