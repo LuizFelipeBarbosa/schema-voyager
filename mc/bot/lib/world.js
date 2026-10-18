@@ -8,6 +8,8 @@ const { isInCell } = require('./geometry')
 const TICK_MS = 50
 const SCAN_RADIUS = 16
 const PATH_TIMEOUT_MS = 30000
+const STALL_CHECK_MS = 500
+const STALL_PROGRESS_BLOCKS = 1 // moving less than this counts as standing still
 const DROP_RADIUS = 1.5
 const AIR_BLOCKS = new Set(['air', 'cave_air', 'void_air'])
 const NEARBY_IGNORED = new Set([
@@ -199,17 +201,33 @@ function stopMoving (bot) {
 // Paths to `goal`; true when the bot ends inside the goal. pathfinder.goto
 // can resolve without reaching the goal (empty path), so the end is checked
 // the same way the pathfinder does (feet block, or one above on slabs).
-async function gotoGoal (bot, goal, timeoutMs = PATH_TIMEOUT_MS) {
+// (The pathfinder already rejects on 'noPath'.) With `failFast`, the attempt
+// also ends when the bot has neither moved a block nor been digging for
+// `failFast.stallMs`.
+async function gotoGoal (bot, goal, timeoutMs = PATH_TIMEOUT_MS, { failFast = null } = {}) {
   let timer = null
-  const timeout = new Promise((resolve, reject) => {
+  let stallCheck = null
+  const giveUp = new Promise((resolve, reject) => {
     timer = setTimeout(() => reject(new Error(`path timeout after ${timeoutMs} ms`)), timeoutMs)
+    if (!failFast) return
+    let markedAt = Date.now()
+    let marked = bot.entity.position.clone()
+    stallCheck = setInterval(() => {
+      if (bot.targetDigBlock || bot.entity.position.distanceTo(marked) >= STALL_PROGRESS_BLOCKS) {
+        markedAt = Date.now()
+        marked = bot.entity.position.clone()
+      } else if (Date.now() - markedAt >= failFast.stallMs) {
+        reject(new Error(`no progress for ${failFast.stallMs} ms`))
+      }
+    }, STALL_CHECK_MS)
   })
   try {
-    await Promise.race([bot.pathfinder.goto(goal), timeout])
+    await Promise.race([bot.pathfinder.goto(goal), giveUp])
   } catch (err) {
     stopMoving(bot)
   } finally {
     clearTimeout(timer)
+    clearInterval(stallCheck)
   }
   const feet = bot.entity.position.floored()
   return goal.isEnd(feet) || goal.isEnd(feet.offset(0, 1, 0))
