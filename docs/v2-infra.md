@@ -59,6 +59,9 @@ and hands it back on exit if the previous holder is still alive, else removes it
 Shell: `sv2_lock_acquire <purpose>` / `sv2_lock_release` in `v2-env.sh`; Python:
 `schema_voyager.instance_lock.hold(instance, purpose)`. A left-over lock of a live pid:
 stop that process, or `scripts/v2-demo.sh stop`.
+`screen -S sv2-<inst>-life -X quit` is not a stop: the Python life outlives the screen and keeps the lock
+(seen in S12's `runs/v3-m5-live*`). Stop a life with SIGINT to the pid in `run/lock-<inst>` (it saves and
+releases the lock), or `scripts/v2-demo.sh stop`, then quit the screen.
 
 ## The demo in one command
 
