@@ -512,3 +512,53 @@ root).
 and talks to RCON (M3) on `SV2_RCON_PORT`. **The guard:** it refuses to start
 when `SV2_BOT_PORT` or `SV2_RCON_PORT` is unset, when the bot port is 3000, or
 when the RCON port is 25575, and says why. `--backend sim` needs none of them.
+
+## v2.3: trace events for the stage (lanes `story` and `lifeview`)
+
+The panel must show, at every moment, the goal, where the bot is in its plan,
+and the hypothesis the current step tests. These additions are backwards
+compatible (new keys and one new event kind; v1 traces are unchanged).
+
+- **`plan` event**, each entry of `steps` adds:
+  `status` (the rule's status: `certified`, `hypothesis`, `prior`, ...),
+  `confirmed` (confirmations so far in the rule's current epoch, an int),
+  `needed` (confirmations certification needs, an int), and
+  `predicts` (one human line, at most 120 characters, for what the rule
+  predicts, e.g. `"2 planks -> 4 stick"`, `"coal_ore with wooden_pickaxe -> 1 coal"`,
+  `"raw_iron + 1 coal in a furnace -> 1 iron_ingot"`). Existing keys stay.
+- **`step_start` event (new)**, logged by the step loop right before each
+  backend call: `{"kind": "step_start", "index": <the step event's index>,
+  "action": "<describe()>", "rule": "<rule id>", "experimental": bool,
+  "status", "confirmed", "needed", "predicts"}`. A `step` event with the same
+  `index` follows when the call returns (or the episode ends).
+- **`episode_end`** for an exploration goal (`task.goal_item` is the
+  exploration marker the life uses) reports `success` = the exploration found a
+  new block family; it no longer says FAIL because the goal item isn't held.
+- **Chat narration (`/chat`)** stays at most 3 messages of 240 characters per
+  burst. The stage moments, each one message: the goal (`Goal: 4 torch, to test
+  coal_ore with wooden_pickaxe`), the mismatch (`MISMATCH: expected 1 coal,
+  got nothing`), the hypothesis (`Hypothesis: coal_ore needs stone_pickaxe`),
+  the recovery (`Recovered: got 1 coal with stone_pickaxe`), and the
+  certification (`Certified: mine coal_ore`).
+- **Panel server:** besides `runs/<run>/episodes/*.jsonl`, it serves
+  `runs/<run>/life.jsonl`, `runs/<run>/changes.jsonl` and
+  `runs/<run>/store.json` read-only (404 when missing), and `/runs.json` (run
+  directories, newest first, with whether each has a `life.jsonl`).
+
+## v2.3: the instance lock (lane `launch`)
+
+One live owner per instance. `run/lock-<instance>` (under `SV2_HOME`) holds one
+JSON line `{"pid", "session", "purpose", "started"}`.
+
+- Shell (`scripts/v2-env.sh`): `sv2_lock_acquire <purpose>` takes the lock or
+  dies naming the holder (a lock whose pid is dead is stale and is taken over
+  with a warning); `sv2_lock_release` removes it only if this shell's
+  session holds it. `SV2_LOCK_SESSION` names the session (default
+  `$$-<purpose>`); a child script that inherits the same `SV2_LOCK_SESSION`
+  passes through instead of refusing (so `v2-demo.sh` can call `world-restore.sh`).
+- Scripts that take it: `v2-up.sh`, `v2-new-world.sh`, `world-restore.sh`,
+  `v2-change.sh` (install, enable, disable), `v2-seeds.sh`, `v2-demo.sh`.
+  `v2-down.sh` and `v2-change.sh status` don't.
+- Python (`src/schema_voyager/instance_lock.py`): `hold(instance, purpose)`, a
+  context manager with the same file format and rules, used by
+  `life --backend mc` for the whole life.

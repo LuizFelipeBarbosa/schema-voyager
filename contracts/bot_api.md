@@ -277,6 +277,16 @@ fills the grid itself (the `/probe` code path), takes the output and reports
 the real delta. Only if that fails: `missing_ingredients` with
 `"detail": "mixed_species"`.
 
+**v2.3, no items left behind.** After every craft, mixed-variant fill and
+probe, whether it worked or not, the bot moves whatever is left in the crafting
+grid (window slots 1-4 of the inventory, or 1-9 of a table) and on the cursor
+back into the inventory, resyncs, and settles. Only then is `inventory_delta`
+measured. A craft answers `ok: true` only when the delta is a whole number of
+runs of one recipe for `item` (the crafted item gained `n × count` and the
+ingredients lost `n ×` theirs, `n ≥ 1`); otherwise it answers `craft_failed`
+with `"detail": "partial_delta"` and the real delta. Nothing lost in a grid can
+turn into a false contradiction.
+
 ## POST /explore (v2 options)
 
 ```jsonc
@@ -319,10 +329,13 @@ bot's position (`N` is centred on -z). It doesn't move the bot.
 
 ## POST /smelt  `{"ingredient": "raw_iron", "item": "iron_ingot", "times": 3, "fuel": "coal"}`
 
-1. Inventory needs `times` of `ingredient`, enough `fuel` (coal and charcoal
-   smelt 8 items each; anything else is counted as 1 item per fuel item), and a
-   placed furnace within 4 blocks or a `furnace` in the inventory. Else
+1. Inventory needs `times` of `ingredient`, enough `fuel`, and a placed
+   furnace within 4 blocks or a `furnace` in the inventory. Else
    `missing_ingredients` (with `missing`) or `missing_furnace`.
+   **v2.3 fuel values** (items smelted per fuel item, vanilla burn time / 200
+   ticks): coal and charcoal 8; any `*_log`, `*_wood`, `*_stem`, `*_planks` 1.5;
+   stick 0.5. Fuel needed is `ceil(times / value)`. Any other fuel is refused
+   with `missing_ingredients` and `"detail": "not_fuel"`.
 2. Place the furnace like the crafting table (same cell retries), load the
    input and fuel, wait for the output (about 10 s per item), take it, take back
    any unburnt fuel and unsmelted input, then dig the furnace with the best
@@ -330,6 +343,10 @@ bot's position (`N` is centred on -z). It doesn't move the bot.
 3. Resync and settle as for `/craft`. `inventory_delta` is measured from
    `inventory_before_step`. `fuel_used` reports the fuel removed (tolerant).
    The action timeout for `/smelt` is `30 s + 12 s × times`.
+4. **v2.3:** the response adds `smelted` (outputs taken out). `ok: true` only
+   when `smelted == times`; any shortfall (fuel ran out, timeout, furnace
+   closed) answers `craft_failed` with `"detail": "smelted <n> of <times>"` and
+   the real delta, so the check is `failed` (tolerant), never a mismatch.
 
 ```jsonc
 {
