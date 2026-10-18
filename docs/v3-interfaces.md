@@ -795,6 +795,9 @@ The guard must never turn a fight into evidence. These rules hold (S07 tests the
 - The food is the first one, highest food points first, that `make_plan` (`planner.py`) can reach with the usable
   rules (minus `excluded`) from the current inventory. The goal is `submit("hunger: 4 <food>", "system")` then
   `accept(GoalSpec(kind="obtain", source="system", item=food, count=4, ...))`.
+- A food whose hunger goal ended `failed` isn't chosen again for 900 s (S07: in `runs/v3-soak-1` the planner reached
+  `apple` through a "mine leaves → apple" rule, and apples are a rare drop, so the life queued 15 hunger goals in a
+  row, 14 failed, about half the life).
 - With no such food, which is the normal case until M3's hunting, it logs `hungry {"food"}` in `life_events.jsonl`
   at most once per 300 s and carries on.
 - The bot's auto-eat eats the food when food is 14 or less and no action holds the lock. Some may be eaten before
