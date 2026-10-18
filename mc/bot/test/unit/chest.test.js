@@ -21,7 +21,8 @@ function useFastTimers (t) {
 }
 
 // A bot beside a chest block (or `blockName`) with a window like mineflayer's: container slots first,
-// then the bot's slots 9..44. `inventory` and `chest` are lists of [name, count], one stack each.
+// then the bot's slots 9..44. Like mineflayer, the bot's own inventory only shows the moved items once
+// the window is closed; until then the window works on its own copy of the bot's slots. `inventory` and `chest` are lists of [name, count], one stack each.
 // `walksTo` is where the pathfinder ends; `failOn` makes window.deposit/withdraw throw.
 function chestBot ({ blockName = 'chest', inventory = [], chest = [], heldSlot = null, walksTo = [5, 76, 34], failOn = null } = {}) {
   const bot = fakeWorldBot({ [CHEST_POS.join(',')]: blockName })
@@ -53,15 +54,14 @@ function chestBot ({ blockName = 'chest', inventory = [], chest = [], heldSlot =
       count -= amount
     }
   }
-  const inventoryView = () => slots.slice(9, 45)
-  const sync = (view) => view.forEach((stack, i) => { slots[9 + i] = stack })
+  let windowInventory = null
+  const inventoryView = () => windowInventory
   const transfer = (kind, from, into) => async (type, meta, count) => {
     log.moves.push({ kind, name: registry.items[type].name, count })
     if (failOn === kind) throw new Error('click failed')
     const source = from()
     const dest = into()
     move(source, dest, type, count)
-    if (kind === 'deposit') { sync(source) } else { sync(dest) }
   }
   const window = {
     inventoryStart: CHEST_SLOTS,
@@ -93,8 +93,17 @@ function chestBot ({ blockName = 'chest', inventory = [], chest = [], heldSlot =
     setGoal () {},
     goto: async () => { bot.entity.position = new Vec3(...walksTo).offset(0.5, 0, 0.5) }
   }
-  bot.openContainer = async () => { log.opens++; bot.currentWindow = window; return window }
-  bot.closeWindow = async () => { log.closes++; bot.currentWindow = null }
+  bot.openContainer = async () => {
+    log.opens++
+    windowInventory = slots.slice(9, 45).map((stack) => stack && { ...stack })
+    bot.currentWindow = window
+    return window
+  }
+  bot.closeWindow = async () => {
+    log.closes++
+    bot.currentWindow = null
+    windowInventory.forEach((stack, i) => { slots[9 + i] = stack })
+  }
   return { bot, log, chestSlots, slots }
 }
 
@@ -161,6 +170,19 @@ test('withdraw takes less than asked when the chest has less, and ok stays true'
   assert.equal(result.inventory_full, false)
   assert.deepEqual(result.inventory, { coal: 2, dirt: 4 })
   assert.equal(result.free_slots, 34)
+})
+
+test('inventory and free_slots are read after the window closes: withdrawn items in, deposited items out', async (t) => {
+  useFastTimers(t)
+  const taken = chestBot({ inventory: [['dirt', 3]], chest: [['coal', 2]] })
+  const withdrawn = await withdraw(taken.bot, { pos: CHEST_POS, items: { coal: 2 } }, session())
+  assert.deepEqual(withdrawn.inventory, { dirt: 3, coal: 2 })
+  assert.equal(withdrawn.free_slots, 34)
+
+  const given = chestBot({ inventory: [['dirt', 3], ['coal', 2]] })
+  const deposited = await deposit(given.bot, { pos: CHEST_POS, items: { coal: 2 } }, session())
+  assert.deepEqual(deposited.inventory, { dirt: 3 })
+  assert.equal(deposited.free_slots, 35)
 })
 
 test('withdraw stops at inventory_full: room in a partial stack and one empty slot, then nothing', async (t) => {
@@ -240,6 +262,7 @@ test('the window is closed when a move fails', async (t) => {
   const { bot, log } = chestBot({ inventory: [['coal', 5]], failOn: 'deposit' })
   await assert.rejects(deposit(bot, { pos: CHEST_POS, items: { coal: 5 } }, session()), /click failed/)
   assert.equal(log.closes, 1)
+  assert.deepEqual(bot.inventory.items().map((s) => s.name), ['coal'])
 })
 
 test('an abort between moves closes the window and throws the signal reason', async (t) => {

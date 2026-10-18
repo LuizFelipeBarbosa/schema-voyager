@@ -31,7 +31,9 @@ const validateWithdraw = validateDeposit
 
 // Walks next to the chest at `body.pos`, opens it and runs `useChest(window)`, whose result (merged
 // with `chest`, `chest_free_slots` and `travel`) is the answer. The window is closed whatever happens.
-async function withChest (bot, body, { episode, signal = null }, useChest) {
+// With `reportInventory` the answer also has `inventory` and `free_slots`; the bot's inventory only shows
+// the moved items once the window is closed and the server resends it, so they are read after that.
+async function withChest (bot, body, { episode, signal = null }, useChest, { reportInventory = false } = {}) {
   signal?.throwIfAborted()
   const [x, y, z] = body.pos
   const recording = recordTravel(bot, episode)
@@ -50,9 +52,10 @@ async function withChest (bot, body, { episode, signal = null }, useChest) {
   if (block?.name !== 'chest') return { ok: false, error: 'not_found', detail: { found: block?.name ?? null }, travel }
 
   const window = await withTimeout(bot.openContainer(block), OPEN_CHEST_TIMEOUT_MS, 'the chest did not open')
+  let answer
   try {
     const moved = await useChest(window)
-    return {
+    answer = {
       ok: true,
       ...moved,
       chest: countItems(window.containerItems()),
@@ -62,6 +65,9 @@ async function withChest (bot, body, { episode, signal = null }, useChest) {
   } finally {
     await bot.closeWindow(window)
   }
+  if (!reportInventory) return answer
+  await settleInventory(bot)
+  return { ...answer, inventory: inventoryCounts(bot), free_slots: freeSlots(bot) }
 }
 
 function countItems (stacks) {
@@ -102,9 +108,8 @@ async function deposit (bot, body, session) {
         break
       }
     }
-    await settleInventory(bot)
-    return { deposited, chest_full: chestFull, inventory: inventoryCounts(bot), free_slots: freeSlots(bot) }
-  })
+    return { deposited, chest_full: chestFull }
+  }, { reportInventory: true })
 }
 
 async function withdraw (bot, body, session) {
@@ -129,9 +134,8 @@ async function withdraw (bot, body, session) {
         break
       }
     }
-    await settleInventory(bot)
-    return { withdrawn, inventory_full: inventoryFull, inventory: inventoryCounts(bot), free_slots: freeSlots(bot) }
-  })
+    return { withdrawn, inventory_full: inventoryFull }
+  }, { reportInventory: true })
 }
 
 async function readChest (bot, body, session) {
