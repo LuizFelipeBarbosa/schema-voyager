@@ -50,6 +50,19 @@ def make_plan(
     return planner.achieve(goal_item, goal_count, Counter(inventory), [])
 
 
+def make_plan_for(
+    needs: dict[str, int],
+    inventory: dict[str, int],
+    rules: list[Rule],
+    skill_for: Callable[[str], Skill | None] = lambda item: None,
+    visible: dict[str, int] | None = None,
+) -> list[PlanStep]:
+    """Steps that leave every need (item -> count to hold) held at once, deeper items first; a need that spends
+    another (sticks spend planks) is gathered again. Several needs are what a build asks for (v3.4b)."""
+    planner = _Planner(rules, skill_for, visible)
+    return planner._gather(needs, Counter(inventory), [], "could not hold every need at once")
+
+
 class _Planner:
     def __init__(self, rules: list[Rule], skill_for: Callable[[str], Skill | None], visible: dict[str, int] | None):
         self.producers: dict[str, list[Rule]] = {}

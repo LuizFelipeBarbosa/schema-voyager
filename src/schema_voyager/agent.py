@@ -15,7 +15,7 @@ from .episode import Episode
 from .goals import goal_label
 from .llm import LLM, LLMError
 from .models import Action, EpisodeResult, GoalSpec, Outcome, Rule, Skill
-from .planner import PlanningError, PlanStep, make_plan
+from .planner import PlanningError, PlanStep, make_plan, make_plan_for
 from .schema_store import MIN_CONFIRMATIONS, MIN_EPISODES, SchemaStore, Transition, applies
 from .tasks import CRAFTABLE_ITEMS, MINEABLE_BLOCKS
 from .verifier import Check, check, predict
@@ -66,28 +66,55 @@ def run_schemavoyager(
         "episode_start", system=episode.system, task=task.task_id, description=task.description,
         world_id=episode.world_id, budget=task.budget, layout=episode.layout_seed,
     )
+    completed = pursue(
+        episode, store, {task.goal_item: task.goal_count}, before_step=before_step, excluded=excluded, goal=goal
+    )
+    result = episode.finish(announce=goal is None)  # a goal from the life is closed by the life's own "Done: ..."
+    certified = store.certify()
+    episode.log.event("certified", rules=certified)
+    changed_skill: Skill | None = None
+    if result.success and task.split == "train":
+        existing = store.skills.get(f"skill_{task.goal_item}")
+        previous_rule_ids = list(existing.rule_ids) if existing is not None else None
+        skill = store.compile_skill(task.goal_item, task.goal_count, completed, episode.episode_id)
+        episode.log.event("skill", skill=skill.id, rule_ids=skill.rule_ids)
+        if previous_rule_ids is None or previous_rule_ids != skill.rule_ids:
+            changed_skill = skill
+    _narrate_learning(episode, store, certified, changed_skill)
+    return result
+
+
+def pursue(
+    episode: Episode, store: SchemaStore, needs: dict[str, int], *, before_step: BeforeStep | None = None,
+    excluded: frozenset[str] = frozenset(), goal: GoalSpec | None = None, narrate: bool = True,
+) -> list[tuple[Action, str]]:
+    """Plan and run steps until every need (item -> count to hold) is held or the episode can't act, replanning
+    after any step that fails or surprises (see `run_schemavoyager`). Returns the completed steps (rule ids, for
+    a skill). `narrate=False` only silences the plan's chat line: the plan is still logged."""
     completed: list[tuple[Action, str]] = []
     first_plan = True  # v1 narrates every plan; a natural goal is announced once
     awaiting_recovery = False  # natural: a revision was proposed, no step has run under it yet
     failed_steps: set[tuple[str, str, tuple[tuple[str, int], ...]]] = set()
 
-    while not episode.goal_met and episode.can_act:
+    while not _all_held(episode, needs) and episode.can_act:
         try:
             visible = normalize.counts(episode.backend.observe().nearby) if episode.natural else None
             rules = [
                 rule for rule in store.usable_rules(episode.world_id)
                 if rule.id not in excluded and rule.id not in episode.blocked_rules
             ]
-            plan = make_plan(
-                task.goal_item, task.goal_count, episode.counts, rules, store.skill_for, visible=visible,
-            )
+            if len(needs) == 1:
+                (item, count), = needs.items()
+                plan = make_plan(item, count, episode.counts, rules, store.skill_for, visible=visible)
+            else:
+                plan = make_plan_for(needs, episode.counts, rules, store.skill_for, visible=visible)
         except PlanningError as error:
             episode.log.event("plan_failed", reason=str(error))
             break
         if not plan:
-            episode.log.event("plan_failed", reason=f"empty plan, but {task.goal_item} is not held")
+            episode.log.event("plan_failed", reason=f"empty plan, but {', '.join(needs)} is not held")
             break
-        _log_plan(episode, store, plan, narrate=first_plan or not episode.natural, goal=goal)
+        _log_plan(episode, store, plan, narrate=narrate and (first_plan or not episode.natural), goal=goal)
         first_plan = False
 
         for position, step in enumerate(plan):
@@ -126,20 +153,12 @@ def run_schemavoyager(
             completed.append((step.action, step.rule.id))
             if _deviates(episode, outcome, step, plan[position + 1:]):
                 break  # a drop rolled out of reach; replan without revising anything
+    return completed
 
-    result = episode.finish(announce=goal is None)  # a goal from the life is closed by the life's own "Done: ..."
-    certified = store.certify()
-    episode.log.event("certified", rules=certified)
-    changed_skill: Skill | None = None
-    if result.success and task.split == "train":
-        existing = store.skills.get(f"skill_{task.goal_item}")
-        previous_rule_ids = list(existing.rule_ids) if existing is not None else None
-        skill = store.compile_skill(task.goal_item, task.goal_count, completed, episode.episode_id)
-        episode.log.event("skill", skill=skill.id, rule_ids=skill.rule_ids)
-        if previous_rule_ids is None or previous_rule_ids != skill.rule_ids:
-            changed_skill = skill
-    _narrate_learning(episode, store, certified, changed_skill)
-    return result
+
+def _all_held(episode: Episode, needs: dict[str, int]) -> bool:
+    held = episode.counts
+    return all(held.get(item, 0) >= count for item, count in needs.items())
 
 
 def _block_repeated_failure(
