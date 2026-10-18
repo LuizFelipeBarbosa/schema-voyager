@@ -339,6 +339,7 @@ class NaturalWorld:
         self._chunks: dict[tuple[int, int], _Chunk] = {}
         self._changes: dict[Pos, str] = {}
         self._keep_out: tuple[Pos, Pos] | None = None
+        self._protected: list[Box] = []
         self._skipped: set[Pos] = set()
         self._events: list[dict[str, Any]] = []
         self._seq = 0
@@ -416,6 +417,8 @@ class NaturalWorld:
         x, _, z = self._cell
         result: LookResult = {direction: {} for direction in DIRECTIONS}
         for _, pos, block in sorted(self._candidates(set(blocks), min(radius, 96))):
+            if self._is_protected(pos):
+                continue
             angle = math.degrees(math.atan2(pos[0] - x, z - pos[2]))  # N is -z
             sector = result[DIRECTIONS[round(angle / 45) % 8]]
             if block not in sector:
@@ -483,8 +486,12 @@ class NaturalWorld:
         """Remembered only: the simulator has no scaffold to keep out of the box."""
         self._keep_out = box
 
+    def set_protected(self, boxes: list[Box]) -> None:
+        """What the bot built (v3.4b): never mined, dug through, looked at or surveyed over."""
+        self._protected = list(boxes)
+
     def survey(self, size: tuple[int, int], radius: int = 24) -> list[Site]:
-        return self._rank_sites(size, radius, protected=[])
+        return self._rank_sites(size, radius, protected=self._protected)
 
     def _rank_sites(self, size: tuple[int, int], radius: int, protected: list[Box]) -> list[Site]:
         """The ranking of docs/v3-interfaces.md v3.4b `/survey`, over this world's columns."""
@@ -803,9 +810,12 @@ class NaturalWorld:
             for level in range(y + 1, self._column(x, z)[0] + SKY_SCAN_HEIGHT)
             if (block := self.block_at((x, level, z))) not in PASSABLE and not block.endswith("_leaves")
         }
-        liquid_at = min((level for level, block in overhead.items() if block in LIQUIDS), default=None)
-        climb = [level for level in overhead if liquid_at is None or level < liquid_at]
-        sky = liquid_at is None
+        stopped_at = min(
+            (level for level, block in overhead.items() if block in LIQUIDS or self._is_protected((x, level, z))),
+            default=None,
+        )
+        climb = [level for level in overhead if stopped_at is None or level < stopped_at]
+        sky = stopped_at is None
         if not climb and not sky:
             return self._fail("unreachable")
 
@@ -1004,10 +1014,14 @@ class NaturalWorld:
         for pass_exposed in (True, False):
             for candidate in candidates if pass_exposed else buried:
                 _, pos, block = candidate
+                if self._is_protected(pos):
+                    continue
                 if pass_exposed and not self._exposed(pos):
                     buried.append(candidate)
                     continue
                 path = [] if pass_exposed else self._dig_path(pos)
+                if any(self._is_protected(cell) for cell in path):
+                    continue
                 if pos in self._skipped or any(self._near_lava(cell) for cell in [pos, *path]):
                     hazard_seen = True
                     if pos not in self._skipped:
@@ -1050,6 +1064,12 @@ class NaturalWorld:
         dx, dy, dz = pos[0] - x, pos[1] - y, pos[2] - z
         steps = max(abs(dx), abs(dy), abs(dz))
         return [(x + round(dx * i / steps), y + round(dy * i / steps), z + round(dz * i / steps)) for i in range(1, steps)]
+
+    def _is_protected(self, pos: Pos) -> bool:
+        return any(
+            ox <= pos[0] < ox + w and oy <= pos[1] < oy + h and oz <= pos[2] < oz + d
+            for (ox, oy, oz), (w, h, d) in self._protected
+        )
 
     def _stand_next_to(self, pos: Pos) -> Pos:
         """The free cell beside pos nearest to the bot, dropped to the floor."""

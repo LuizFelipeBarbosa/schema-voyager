@@ -14,6 +14,7 @@ from typing import Any
 from . import normalize
 from .adapter import DIRECTIONS, LookResult
 from .arena import Arena
+from .blueprint import Box
 from .inventory import SCAFFOLD_BLOCKS
 from .layouts import Layout
 from .models import Action, Observation, Outcome, Site, Status, Task
@@ -54,6 +55,7 @@ class MineflayerBackend:
         self.arena = None if natural else (arena or Arena())
         self._latest_inventory: dict[str, int] | None = None
         self._keep_out: tuple[tuple[int, int, int], tuple[int, int, int]] | None = None
+        self._protected: list[Box] = []
 
     def reset(self, task: Task, layout: Layout) -> Observation:
         self.arena.prepare_world()
@@ -75,7 +77,7 @@ class MineflayerBackend:
         if self.natural:
             return self._act_natural(action)
         if action.kind == "mine":
-            body = self._post("/mine", {"block": action.target, "tool": action.tool})
+            body = self._post("/mine", self._with_protect({"block": action.target, "tool": action.tool}))
             return Outcome(
                 ok=body["ok"],
                 error=body.get("error"),
@@ -97,7 +99,7 @@ class MineflayerBackend:
                 blocks_walked=body.get("blocks_walked", 0.0),
                 detail=_detail(body, "position", "missing", "used_table", "table_retrieved", "detail"),
             )
-        body = self._post("/explore")
+        body = self._post("/explore", self._with_protect({}))
         return Outcome(
             ok=body["ok"],
             error=body.get("error"),
@@ -111,6 +113,16 @@ class MineflayerBackend:
     def set_keep_out(self, box: tuple[tuple[int, int, int], tuple[int, int, int]] | None) -> None:
         self._keep_out = box
 
+    def set_protected(self, boxes: list[Box]) -> None:
+        self._protected = list(boxes)
+
+    def _with_protect(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """The payload with the protected boxes (v3.4b), when there are any."""
+        if not self._protected:
+            return payload
+        boxes = [{"origin": list(origin), "size": list(size)} for origin, size in self._protected]
+        return payload | {"protect": boxes}
+
     def scan(self, origin: tuple[int, int, int], size: tuple[int, int, int]) -> dict[tuple[int, int, int], str | None]:
         body = self._post("/scan", {"origin": list(origin), "size": list(size)})
         ox, oy, oz = origin
@@ -123,7 +135,7 @@ class MineflayerBackend:
 
     def survey(self, size: tuple[int, int], radius: int = 24) -> list[Site]:
         payload: dict[str, Any] = {"size": list(size), "radius": radius}
-        body = self._post("/survey", payload)
+        body = self._post("/survey", self._with_protect(payload))
         return [
             Site(tuple(site["origin"]), site["cut"], site["fill"], float(site["distance"])) for site in body["sites"]
         ]
@@ -133,7 +145,7 @@ class MineflayerBackend:
         if action.pos is None:
             raise ValueError("a goto action needs a pos")
         x, y, z = action.pos
-        body = self._post("/goto", {"x": x, "y": y, "z": z, "range": GOTO_RANGE})
+        body = self._post("/goto", self._with_protect({"x": x, "y": y, "z": z, "range": GOTO_RANGE}))
         inventory = self._inventory(body)
         before = body.get("inventory_before_step")
         travel = body.get("travel") or {}
@@ -157,6 +169,7 @@ class MineflayerBackend:
         if self._keep_out is not None:
             origin, size = self._keep_out
             payload["keep_out"] = {"origin": list(origin), "size": list(size)}
+        payload = self._with_protect(payload)
         if action.kind == "place":
             body = self._post("/place", {"block": action.target} | payload)
             detail_keys = ("block", "placed", "found", "inventory_before_step", "detail")
@@ -218,7 +231,7 @@ class MineflayerBackend:
         )
 
     def look(self, blocks: list[str], radius: int = 64) -> LookResult:
-        body = self._post("/look", {"blocks": blocks, "radius": radius})
+        body = self._post("/look", self._with_protect({"blocks": blocks, "radius": radius}))
         directions = body.get("directions") or {}
         return {direction: directions.get(direction) or {} for direction in DIRECTIONS}
 
@@ -236,14 +249,14 @@ class MineflayerBackend:
 
     def _mine_natural(self, action: Action) -> Outcome:
         blocks = normalize.members(action.target or "")
-        body = self._post("/mine", {
+        body = self._post("/mine", self._with_protect({
             "block": blocks[0],
             "blocks": blocks,
             "tool": action.tool,
             "dig_through": True,
             "max_distance": MINE_MAX_DISTANCE,
             "scaffold": list(SCAFFOLD_BLOCKS),
-        })
+        }))
         detail = _detail(body, "position", "target", "block", "tool", "inventory_before_step", "detail")
         if "tool_used" in body:  # null is meaningful: an empty hand
             detail["tool_used"] = body["tool_used"]
@@ -363,7 +376,7 @@ class MineflayerBackend:
                 "dig_through": True,
                 "scaffold": list(SCAFFOLD_BLOCKS),
             }
-        body = self._post("/explore", request)
+        body = self._post("/explore", self._with_protect(request or {}))
         return Outcome(
             ok=body["ok"],
             error=body.get("error"),
