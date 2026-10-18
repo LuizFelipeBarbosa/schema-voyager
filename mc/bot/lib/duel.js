@@ -13,6 +13,10 @@ const START_POLL_MS = 20
 const MAX_START_AHEAD_MS = 10000
 const REENGAGE_PAUSE_MS = 100
 const SHIELD_BLOCK_STATUS = 29
+const DISENGAGE_HEALTH = 6
+const DISENGAGE_FLEE_MS = 2000
+const DISENGAGE_FLEE_BLOCKS = 6
+const HEALING_FOODS = ['golden_apple', 'enchanted_golden_apple']
 const PLAYER_HEALTH_METADATA = 9 // 'health' in registry.entitiesByName.player.metadataKeys (1.21.1)
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
@@ -41,6 +45,16 @@ function metadataHealth (entity) {
   return typeof health === 'number' ? health : null
 }
 
+// Equips and eats `food`; an error just goes on, the duel does not depend on the meal.
+async function eat (bot, food, eventLog) {
+  const health = bot.health
+  try {
+    await bot.equip(food, 'hand')
+    await bot.consume()
+    eventLog.record('duel_ate', { item: food.name, health })
+  } catch {}
+}
+
 // Fights body.player until the duel ends. Never rejects; records `duel_end` exactly once and resolves
 // its fields. `signal` is the action lock's, `stopSignal` is /duel/stop's; either one ends it `stopped`.
 // Waits for body.start_at first; the timeout and `duration` count from the start instant.
@@ -58,6 +72,7 @@ async function runDuel (bot, body, {
 
   const count = { swings: 0, hits: 0, crits: 0, blocked: 0, theirBlocked: 0, damageTaken: 0, damageDealt: null }
   let engagements = 0
+  let retreats = 0
   let botHealth = bot.health
   let opponentHealth = metadataHealth(bot.players[opponent]?.entity)
   if (opponentHealth !== null) count.damageDealt = 0
@@ -86,7 +101,8 @@ async function runDuel (bot, body, {
       blocked: count.blocked,
       their_blocked: count.theirBlocked,
       health_end: round(bot.health, 1),
-      engagements
+      engagements,
+      retreats
     }
     eventLog.record('duel_end', result)
   }
@@ -143,11 +159,22 @@ async function runDuel (bot, body, {
       } else {
         missingSince = null
         engagements++
-        // `disengage` (later lane) changes fleeBelow here and adds the eating.
-        await fight(bot, bot.players[opponent].entity, {
+        // Below DISENGAGE_HEALTH, `disengage` breaks off, flees briefly, eats and comes back. Once the
+        // food is gone the bot fights on: health stays low a while after the meal, a second retreat only loses time.
+        const healingFood = duelTactics.names.includes('disengage')
+          ? bot.inventory.items().find((item) => HEALING_FOODS.includes(item.name))
+          : undefined
+        const fleeOptions = healingFood
+          ? { fleeBelow: DISENGAGE_HEALTH, fleeMs: DISENGAGE_FLEE_MS, fleeDistance: DISENGAGE_FLEE_BLOCKS }
+          : { fleeBelow: 0 }
+        const { outcome } = await fight(bot, bot.players[opponent].entity, {
           timeoutMs: deadline - now(), deadline, movements, eventLog, flee: false, sprint: true,
-          tactics: duelTactics, fleeBelow: 0, shouldStop: () => Boolean(result) || opponentDied || isStopped()
+          tactics: duelTactics, ...fleeOptions, shouldStop: () => Boolean(result) || opponentDied || isStopped()
         })
+        if (outcome === 'fled') {
+          retreats++ // fight() has already run the flight
+          if (!result && !opponentDied && !isStopped()) await eat(bot, healingFood, eventLog)
+        }
         if (!result) await sleep(REENGAGE_PAUSE_MS)
       }
     }

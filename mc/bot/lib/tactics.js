@@ -274,6 +274,11 @@ const REGISTRY = {
         lastGateTick = null
       }
     }
+  },
+
+  // No hooks: a flag the duel loop reads (break off below 6 health, eat a golden apple, come back).
+  disengage () {
+    return {}
   }
 }
 

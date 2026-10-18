@@ -506,3 +506,17 @@ test('fight: fleeBelow 0 keeps fighting at 3 health; the default ends fled below
   later(50, () => { careful.target.position = new Vec3(17, 64, 0) })
   assert.equal((await fight(careful.bot, careful.target, { timeoutMs: 1000 })).outcome, 'fled')
 })
+
+test('fight: after a fled, flee gets fleeMs and fleeDistance; the defaults are 10 s and 16 blocks', async () => {
+  const fled = async (options) => {
+    const { bot, target } = fakeFightBot()
+    later(20, () => { bot.health = 5; bot.emit('health') })
+    const startedAt = Date.now()
+    await fight(bot, target, { timeoutMs: 1000, ...options })
+    return { elapsed: Date.now() - startedAt, range: bot.setGoals.find((goal) => goal).goal.rangeSq ** 0.5 }
+  }
+  const short = await fled({ fleeMs: 100, fleeDistance: 6 })
+  assert.equal(short.range, 6)
+  assert.ok(short.elapsed < 400, `elapsed ${short.elapsed}`)
+  assert.equal((await fled({ fleeMs: 100 })).range, 16)
+})
