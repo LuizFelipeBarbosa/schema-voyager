@@ -28,7 +28,8 @@ _ALLOWED_TRANSITIONS: dict[str, set[str]] = {
     "cancelled": set(),
     "unsupported": set(),
 }
-_MARK_FIELDS = {"reason", "target_count", "deaths"}
+_MARK_FIELDS = {"reason", "target_count", "deaths", "replanned"}
+_TERMINAL = {"done", "failed", "cancelled", "unsupported"}
 _ID_PREFIX = {"user": "u", "system": "s"}
 _UNCOUNTABLE = {"coal", "charcoal", "redstone", "glass", "sand", "gravel", "dirt", "cobblestone", "stone", "flint"}
 
@@ -55,6 +56,9 @@ class GoalEntry:
     reason: str = ""  # why it is failed, cancelled or unsupported (the reply)
     target_count: int | None = None  # obtain: the count to hold, fixed when it first runs (D5)
     deaths: int = 0  # the bot's deaths during this goal
+    parent: str | None = None  # a child's composite parent (v3.5f)
+    children: tuple[str, ...] = ()  # a parent's children in order, replaced ones included
+    replanned: bool = False  # a parent: its remaining children were replaced once
 
     def to_json(self) -> dict[str, Any]:
         """The goals.jsonl line, also served by the panel's GET /goals.json."""
@@ -67,12 +71,15 @@ class GoalEntry:
             "text": self.text,
             "kind": spec.kind if spec else None,
             "item": spec.item if spec else None,
-            "count": spec.count if spec else None,
+            "count": spec.count if spec and spec.kind != "composite" else None,
             "target": spec.target if spec else None,
             "blueprint": spec.blueprint if spec else None,
             "reason": self.reason,
             "target_count": self.target_count,
             "deaths": self.deaths,
+            "parent": self.parent,
+            "children": list(self.children),
+            "replanned": self.replanned,
         }
 
 
@@ -87,7 +94,7 @@ def _entry_from_json(record: dict[str, Any]) -> GoalEntry:
             source,
             text,
             item=record.get("item"),
-            count=record.get("count", 1),
+            count=record.get("count") or 1,
             target=record.get("target"),
             blueprint=record.get("blueprint"),
         )
@@ -101,6 +108,9 @@ def _entry_from_json(record: dict[str, Any]) -> GoalEntry:
         reason=record.get("reason", ""),
         target_count=record.get("target_count"),
         deaths=record.get("deaths", 0),
+        parent=record.get("parent"),
+        children=tuple(record.get("children") or ()),
+        replanned=record.get("replanned", False),
     )
 
 
@@ -153,31 +163,105 @@ class GoalQueue:
         return [g for g in self.goals() if g.status == "submitted"]
 
     def next(self) -> GoalSpec | None:
-        """The queued goal to run: system before user, then oldest first. Writes nothing."""
-        queued = [g for g in self.goals() if g.status == "queued" and g.spec is not None]
+        """The queued goal to run: system before user, then oldest first. Writes nothing. A parent never runs,
+        and a child waits until every earlier child of its parent is final."""
+        goals = self._read()
+        queued = [g for g in goals.values() if g.status == "queued" and g.spec is not None and g.spec.kind != "composite"]
         for source in ("system", "user"):
             for goal in queued:
-                if goal.source == source:
+                if goal.source == source and self._earlier_children_final(goal, goals):
                     return goal.spec
         return None
 
+    def accept_children(self, parent_id: str, specs: list[GoalSpec]) -> list[GoalSpec]:
+        """Give each child the next id and write it queued (a build: awaiting_approval) under the parent, whose
+        children grow and which moves submitted -> queued. Returns the specs with their ids ([] for a missing or final parent)."""
+        accepted: list[GoalSpec] = []
+
+        def build(goals: dict[str, GoalEntry]) -> list[GoalEntry]:
+            parent = goals.get(parent_id)
+            if parent is None or parent.status in _TERMINAL:
+                return []
+            now = time.time()
+            last = max((int(g[1:]) for g in goals if g[0] == "u" and g[1:].isdigit()), default=0)
+            lines = []
+            for number, spec in enumerate(specs, start=last + 1):
+                child = replace(spec, id=f"u{number:03d}", source="user")
+                status = "awaiting_approval" if child.kind == "build" else "queued"
+                lines.append(GoalEntry(child.id, status, "user", child.text, now, spec=child, parent=parent_id))
+                accepted.append(child)
+            parent_spec = parent.spec or GoalSpec(parent.id, "composite", parent.source, parent.text)
+            parent_status = "queued" if parent.status == "submitted" else parent.status
+            children = parent.children + tuple(child.id for child in accepted)
+            return lines + [replace(parent, status=parent_status, t=now, spec=parent_spec, children=children)]
+
+        self._append_many(build)
+        return accepted
+
+    def settle(self, parent_id: str) -> GoalStatus | None:
+        """Once no child is pending, the parent is done if a child is done, else cancelled. Returns the new
+        status; None while a child is pending, when there are no children, or when the parent is final."""
+        settled: list[GoalStatus] = []
+
+        def build(goals: dict[str, GoalEntry]) -> list[GoalEntry]:
+            parent = goals.get(parent_id)
+            if parent is None or parent.status in _TERMINAL or not parent.children:
+                return []
+            statuses = [goals[child].status for child in parent.children if child in goals]
+            if any(status not in _TERMINAL for status in statuses):
+                return []
+            settled.append("done" if "done" in statuses else "cancelled")
+            return [replace(parent, status=settled[0], t=time.time())]
+
+        self._append_many(build)
+        return settled[0] if settled else None
+
+    def children_of(self, parent_id: str) -> list[GoalEntry]:
+        """A parent's children, in order."""
+        goals = self._read()
+        parent = goals.get(parent_id)
+        return [goals[child] for child in parent.children if child in goals] if parent else []
+
+    def parent_of(self, goal_id: str) -> GoalEntry | None:
+        goals = self._read()
+        entry = goals.get(goal_id)
+        return goals.get(entry.parent) if entry and entry.parent else None
+
     def mark(self, goal_id: str, status: GoalStatus, **fields: Any) -> bool:
-        """Move a goal to `status`; False (and nothing written) for an unknown id or a refused transition."""
+        """Move a goal to `status`; False (and nothing written) for an unknown id or a refused transition.
+        A child going running also moves its queued parent to running, in the same write."""
         unknown = fields.keys() - _MARK_FIELDS
         if unknown:
             raise ValueError(f"mark cannot set {sorted(unknown)}; only {sorted(_MARK_FIELDS)}")
 
-        def build(goals: dict[str, GoalEntry]) -> GoalEntry | None:
+        def build(goals: dict[str, GoalEntry]) -> list[GoalEntry]:
             entry = goals.get(goal_id)
             if entry is None or status not in _ALLOWED_TRANSITIONS[entry.status]:
-                return None
-            return replace(entry, status=status, t=time.time(), **fields)
+                return []
+            now = time.time()
+            lines = [replace(entry, status=status, t=now, **fields)]
+            parent = goals.get(entry.parent) if entry.parent else None
+            if status == "running" and parent is not None and parent.status == "queued":
+                lines.append(replace(parent, status="running", t=now))
+            return lines
 
-        return self._append(build) is not None
+        return bool(self._append_many(build))
 
     def cancel(self, goal_id: str) -> bool:
-        """Cancel a goal that isn't final; False otherwise."""
-        return self.mark(goal_id, "cancelled")
+        """Cancel a goal that isn't final, and a parent's children with it; False otherwise."""
+
+        def build(goals: dict[str, GoalEntry]) -> list[GoalEntry]:
+            entry = goals.get(goal_id)
+            if entry is None or "cancelled" not in _ALLOWED_TRANSITIONS[entry.status]:
+                return []
+            now = time.time()
+            lines = [replace(entry, status="cancelled", t=now)]
+            for child in entry.children:
+                if child in goals and "cancelled" in _ALLOWED_TRANSITIONS[goals[child].status]:
+                    lines.append(replace(goals[child], status="cancelled", t=now))
+            return lines
+
+        return bool(self._append_many(build))
 
     def get(self, goal_id: str) -> GoalEntry | None:
         return self._read().get(goal_id)
@@ -187,8 +271,8 @@ class GoalQueue:
         return list(self._read().values())
 
     def requeue_running(self) -> list[str]:
-        """On --resume: every running goal goes back to queued. Returns their ids."""
-        running = [g.id for g in self.goals() if g.status == "running"]
+        """On --resume: every running goal goes back to queued (a parent stays running). Returns their ids."""
+        running = [g.id for g in self.goals() if g.status == "running" and not g.children]
         return [goal_id for goal_id in running if self.mark(goal_id, "queued")]
 
     def _read(self) -> dict[str, GoalEntry]:
@@ -197,21 +281,34 @@ class GoalQueue:
         except FileNotFoundError:
             return {}
 
+    @staticmethod
+    def _earlier_children_final(goal: GoalEntry, goals: dict[str, GoalEntry]) -> bool:
+        parent = goals.get(goal.parent) if goal.parent else None
+        if parent is None or goal.id not in parent.children:
+            return True
+        earlier = parent.children[: parent.children.index(goal.id)]
+        return all(goals[child].status in _TERMINAL for child in earlier if child in goals)
+
     def _append(self, build: Callable[[dict[str, GoalEntry]], GoalEntry | None]) -> GoalEntry | None:
         """Under the file lock, rebuild the state and append the line `build` makes from it (None: write nothing)."""
+        entries = self._append_many(lambda goals: [entry] if (entry := build(goals)) else [])
+        return entries[0] if entries else None
+
+    def _append_many(self, build: Callable[[dict[str, GoalEntry]], list[GoalEntry]]) -> list[GoalEntry]:
+        """Under the file lock, rebuild the state and append the lines `build` makes from it ([]: write nothing)."""
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.path.open("a+b") as f:
             fcntl.flock(f, fcntl.LOCK_EX)
             try:
                 f.seek(0)
                 data = f.read()
-                entry = build(_rebuild(data))
-                if entry is None:
-                    return None
+                entries = build(_rebuild(data))
+                if not entries:
+                    return []
                 separator = b"\n" if data and not data.endswith(b"\n") else b""
-                f.write(separator + (json.dumps(entry.to_json()) + "\n").encode())
+                f.write(separator + "".join(json.dumps(e.to_json()) + "\n" for e in entries).encode())
                 f.flush()
-                return entry
+                return entries
             finally:
                 fcntl.flock(f, fcntl.LOCK_UN)
 
