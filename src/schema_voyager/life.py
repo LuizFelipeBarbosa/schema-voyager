@@ -31,6 +31,7 @@ MIN_GOAL_BUDGET = 30
 BUDGET_PER_PLAN_STEP = 4
 MAX_CHAT_CHARS = 240
 EXPLORES_PER_ROUND = 3
+BLOCKED_GOALS_TO_EXCLUDE = 2  # goals that block a rule with missing_ingredients before the life leaves it out
 # A goal that fails with one of these is followed by an exploration round, to start the next one elsewhere.
 MISSING_RESOURCE_ERRORS = frozenset({"not_found", "unreachable"})
 # Blocks around the bot that no rule is worth asking about.
@@ -230,6 +231,7 @@ class _Life:
             self.goals_done: int = state["goal_index"]
             self.explores_done: int = state.get("explores_done", 0)
             self.repaired: set[str] = set(state.get("repaired", []))
+            self.blocked: dict[str, int] = dict(state.get("blocked", {}))
             self.earlier_tokens: int = state["tokens"]
             llm.carried_usd = state["spend_usd"]
         else:
@@ -239,6 +241,7 @@ class _Life:
             self.asked, self.observed_blocks = set(), set()
             self.goals_done, self.earlier_tokens, self.explores_done = 0, 0, 0
             self.repaired = set()
+            self.blocked = {}
             self.log_path.write_text("", encoding="utf-8")
         llm.spend_cap_usd = config.spend_cap_usd
         self._calls_marked = len(llm.calls)
@@ -262,7 +265,8 @@ class _Life:
                 if self._repair_dead_ingredients(observation):
                     observation = self._learn_priors()  # the repairs may name families nobody asked about
                 goal = self.curriculum.next_goal(
-                    normalize.counts(observation.inventory), self.store, self.world_id, normalize.counts(observation.nearby)
+                    normalize.counts(observation.inventory), self.store, self.world_id, normalize.counts(observation.nearby),
+                    excluded=self._excluded_rules(),
                 )
                 if goal is None:
                     if self._expand_frontier():
@@ -398,7 +402,12 @@ class _Life:
         for repair in self._repairs_unreported:
             log.event("repair", **repair)
 
-        result = run_schemavoyager(episode, self.store, self.hooks.before_step)
+        result = run_schemavoyager(episode, self.store, self.hooks.before_step, excluded=self._excluded_rules())
+        for rule, error in episode.blocked_rules.items():
+            if error == "missing_ingredients":
+                self.blocked[rule] = self.blocked.get(rule, 0) + 1
+                if self.blocked[rule] == BLOCKED_GOALS_TO_EXCLUDE:
+                    print(f"[blocked] {rule}: blocked in {BLOCKED_GOALS_TO_EXCLUDE} goals, left out for the rest of the life")
         # Cut short by the life's own clock (not the goal's deadline or budget): no attempt to count.
         interrupted = not result.success and life_clock_limits_goal and episode.out_of_time and episode.budget_left > 0
         if not interrupted:
@@ -478,10 +487,13 @@ class _Life:
         self.store.save(self.store_path)
         state = {
             "world_id": self.world_id, "goal_index": self.goals_done, "explores_done": self.explores_done, "curriculum": self.curriculum.to_dict(),
-            "asked": sorted(self.asked), "repaired": sorted(self.repaired), "observed_blocks": sorted(self.observed_blocks),
+            "asked": sorted(self.asked), "repaired": sorted(self.repaired), "blocked": self.blocked, "observed_blocks": sorted(self.observed_blocks),
             "tokens": self.earlier_tokens + self.llm.total_tokens, "spend_usd": self.llm.spent_usd,
         }
         self.state_path.write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
+
+    def _excluded_rules(self) -> frozenset[str]:
+        return frozenset(rule for rule, goals in self.blocked.items() if goals >= BLOCKED_GOALS_TO_EXCLUDE)
 
     def _certified_ids(self) -> set[str]:
         return {rule.id for rule in self.store.rules.values() if rule.status == "certified"}

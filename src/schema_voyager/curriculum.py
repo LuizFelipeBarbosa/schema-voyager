@@ -54,13 +54,14 @@ class Curriculum:
     skipped: dict[str, str] = field(default_factory=dict)  # item -> why
 
     def next_goal(
-        self, inventory: dict[str, int], store: SchemaStore, world_id: str, visible: dict[str, int] | None = None
+        self, inventory: dict[str, int], store: SchemaStore, world_id: str, visible: dict[str, int] | None = None,
+        excluded: frozenset[str] = frozenset(),
     ) -> Goal | None:
         """The cheapest frontier goal whose plan uses an uncertified rule (ties: fewest
         uncertified rules, then name), planned with the producers in `visible` preferred. Skipped items, kept items already held and items that
-        can't be planned from here are passed over."""
+        can't be planned from here are passed over. Rules in `excluded` are left out of the plans."""
         held = normalize.counts(inventory)
-        rules = store.usable_rules(world_id)
+        rules = [rule for rule in store.usable_rules(world_id) if rule.id not in excluded]
         best: Goal | None = None
         for item in self.frontier:
             if item in self.skipped or (is_kept_item(item) and held.get(item, 0) >= 1):
