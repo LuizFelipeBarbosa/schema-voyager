@@ -291,7 +291,7 @@ barriers, before lava, or after 30 s. Response: v1 fields plus `travel`,
 
 `{"direction": "up", "dig_through": true, "scaffold": [...]}` (v2.1) returns
 the bot to open sky: it climbs, digs upward and pillars (with `scaffold`
-blocks only) until it stands where nothing solid is above it, within 60 s.
+blocks only) until it stands where nothing solid is above it, within 100 s.
 Already under open sky: `ok: true`, nothing moves. It never digs straight
 down, and stops before water or lava overhead. Response as above plus
 `"sky": true|false` (whether it reached open sky); `unreachable` when it

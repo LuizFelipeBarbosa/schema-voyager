@@ -16,7 +16,7 @@ const STEP_BLOCKS = 10
 const EXPLORE_TIMEOUT_MS = 30000
 const LEG_BLOCKS = 16
 const DEFAULT_DISTANCE = 32
-const CLIMB_TIMEOUT_MS = 60000
+const CLIMB_TIMEOUT_MS = 100000 // under the 120 s action timeout; about 50 blocks of rock
 const DIRECTIONS = [{ x: 1, z: 0 }, { x: 0, z: 1 }, { x: -1, z: 0 }, { x: 0, z: -1 }] // E, S, W, N
 
 function newSpiral () {
