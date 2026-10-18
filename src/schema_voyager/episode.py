@@ -19,6 +19,10 @@ MAX_NATURAL_EXPLORES_PER_TARGET = 4
 LOOK_RADIUS = 64
 # A hit this far above the bot's feet is reached by climbing to open sky, not by walking toward it.
 HIT_ABOVE_BLOCKS = 4
+# An explore that moved the bot less than this got nowhere: its direction is dead for the goal.
+MIN_EXPLORE_BLOCKS = 2
+# One that moved it at least this far is a new place, where dead directions get another chance.
+NEW_PLACE_BLOCKS = 8
 # Failures of pathing, digging or the bot itself, which say nothing about the
 # world's rules: retried after an explore, so the bot tries from somewhere else.
 RETRIED_ERRORS = frozenset({"unreachable", "craft_failed", "dig_failed", "timeout"})
@@ -50,6 +54,9 @@ class Episode:
     natural: bool = False
     deadline: float | None = None
     _next_direction: int = 0
+    # Compass directions whose explore got nowhere, for the rest of the goal.
+    _dead_directions: set[str] = field(default_factory=set)
+    _search_exhausted: bool = False
     _tokens_at_start: int = 0
     _calls_at_start: int = 0
 
@@ -67,7 +74,7 @@ class Episode:
 
     @property
     def can_act(self) -> bool:
-        return self.budget_left > 0 and not self.out_of_time
+        return self.budget_left > 0 and not self.out_of_time and not self._search_exhausted
 
     @property
     def counts(self) -> dict[str, int]:
@@ -99,7 +106,11 @@ class Episode:
             if searching and explores < max_explores:
                 explores += 1
                 if self.natural and action.kind == "mine":
-                    explore = self._explore_toward(action.target, not went_up, previous_direction)
+                    toward = self._explore_toward(action.target, not went_up, previous_direction)
+                    if toward is None:
+                        self._search_exhausted = True  # every direction is dead: fail now, not at the deadline
+                        break
+                    explore = toward
                     went_up = went_up or explore.direction == "up"
                     previous_direction = explore.direction
                 else:
@@ -109,31 +120,62 @@ class Episode:
                 explore = Action("explore")
             else:
                 break
-            self._act_once(explore, None)
+            self._remember_explore(explore, self._act_once(explore, None))
             outcome = self._act_once(action, annotate)
         return outcome
 
-    def _explore_toward(self, target: str | None, may_go_up: bool, previous: str | None) -> Action:
+    def _explore_toward(self, target: str | None, may_go_up: bool, previous: str | None) -> Action | None:
         """Natural mode: look for the target's raw ids and explore toward the nearest
-        hit, or up when that hit is well above the bot (it is out of a mine's reach
-        until the bot is back near the surface). Never straight back where the
-        previous explore of this target came from, unless that is the only hit.
-        With none in sight, first back up to open sky (once per target: most
-        resources are at the surface), then try the next compass direction."""
+        hit in a live direction, or up when that hit is well above the bot (it is out
+        of a mine's reach until the bot is back near the surface). Never straight back
+        where the previous explore of this target came from, unless that is the only
+        hit, and never into a dead direction (one that got nowhere this goal).
+        With no live hit in sight: with nothing seen at all, first back up to open sky
+        (once per target: most resources are at the surface), then the live compass direction
+        furthest from the dead ones; when every direction is dead, None."""
         hits = self.backend.look(normalize.members(target), LOOK_RADIUS)  # type: ignore[attr-defined]
         seen = [(found["distance"], direction, found) for direction, blocks in hits.items() for found in blocks.values()]
-        not_behind = [hit for hit in seen if hit[1] != _opposite(previous)]
-        nearest = min(not_behind or seen, key=lambda hit: hit[0], default=None)
+        live = [hit for hit in seen if hit[1] not in self._dead_directions]
+        not_behind = [hit for hit in live if hit[1] != _opposite(previous)]
+        nearest = min(not_behind or live, key=lambda hit: hit[0], default=None)
+        direction: str | None
         if nearest is not None:
             above = "y" in nearest[2] and nearest[2]["y"] - self.backend.observe().position[1] > HIT_ABOVE_BLOCKS
             direction = "up" if above and may_go_up else nearest[1]
-        elif may_go_up:
+        elif not seen and may_go_up:
             direction = "up"
         else:
-            direction = DIRECTIONS[self._next_direction % len(DIRECTIONS)]
-            self._next_direction += 1
-        self.log.event("look", target=target, direction=direction, seen=nearest is not None)
-        return Action("explore", direction=direction)
+            direction = self._next_live_compass_direction() or ("up" if may_go_up else None)
+        self.log.event(
+            "look", target=target, direction=direction, seen=nearest is not None, dead=sorted(self._dead_directions)
+        )
+        return Action("explore", direction=direction) if direction else None
+
+    def _next_live_compass_direction(self) -> str | None:
+        """The live compass direction furthest from the dead ones, the rotation breaking ties."""
+        start = self._next_direction % len(DIRECTIONS)
+        rotation = DIRECTIONS[start:] + DIRECTIONS[:start]
+        dead = [DIRECTIONS.index(d) for d in self._dead_directions if d in DIRECTIONS]
+
+        def gap_to_dead(direction: str) -> int:
+            steps = [abs(DIRECTIONS.index(direction) - d) for d in dead]
+            return min((min(s, len(DIRECTIONS) - s) for s in steps), default=0)
+
+        live = [d for d in rotation if d not in self._dead_directions]
+        if not live:
+            return None
+        self._next_direction += 1
+        return max(live, key=gap_to_dead)
+
+    def _remember_explore(self, explore: Action, outcome: Outcome) -> None:
+        """An explore that got nowhere kills its direction; one that moved the bot far clears them all."""
+        if explore.direction not in DIRECTIONS:  # "up" is limited per target instead, and a blind explore has none
+            return
+        distance = outcome.travel.get("distance")
+        if not outcome.ok or (distance is not None and distance < MIN_EXPLORE_BLOCKS):
+            self._dead_directions.add(explore.direction)
+        elif distance is not None and distance >= NEW_PLACE_BLOCKS:
+            self._dead_directions.clear()
 
     def _act_once(self, action: Action, annotate: Annotator | None) -> Outcome:
         outcome = self.backend.act(action)

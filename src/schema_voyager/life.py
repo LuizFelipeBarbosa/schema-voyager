@@ -31,6 +31,8 @@ MIN_GOAL_BUDGET = 30
 BUDGET_PER_PLAN_STEP = 4
 MAX_CHAT_CHARS = 240
 EXPLORES_PER_ROUND = 3
+# A goal that fails with one of these is followed by an exploration round, to start the next one elsewhere.
+MISSING_RESOURCE_ERRORS = frozenset({"not_found", "unreachable"})
 # Blocks around the bot that no rule is worth asking about.
 AMBIENT_BLOCKS = frozenset({"air", "cave_air", "void_air", "water", "lava", "bedrock"})
 
@@ -271,7 +273,8 @@ class _Life:
                     continue
             except SpendCapReached:
                 return "spend_cap"
-            self._run_goal(goal)
+            if self._run_goal(goal):
+                self._run_exploration_round(reason="the resource was not found here", reset_skips=False)
 
     def summary(self, stop_reason: str) -> dict[str, Any]:
         return {
@@ -353,7 +356,8 @@ class _Life:
 
     # -- one goal ---------------------------------------------------------
 
-    def _run_goal(self, goal: Goal) -> None:
+    def _run_goal(self, goal: Goal) -> bool:
+        """Run one goal. Returns whether it failed for want of a resource that was not found or reachable."""
         index = self.goals_done + 1
         started_at = time.time()
         name = f"g{index:03d}"
@@ -390,10 +394,13 @@ class _Life:
         self._save(record)
         if self.hooks.after_goal is not None:
             self.hooks.after_goal(record)
+        steps = [event for event in log.events if event["kind"] == "step"]
+        return not result.success and not interrupted and bool(steps) and steps[-1]["error"] in MISSING_RESOURCE_ERRORS
 
-    def _run_exploration_round(self) -> None:
-        """Nothing left to learn here: walk a few compass directions (cycling on across
-        rounds) so the next `_learn_priors` sees new blocks, and give skipped goals another try."""
+    def _run_exploration_round(self, reason: str = "nothing left to learn here", reset_skips: bool = True) -> None:
+        """Walk a few compass directions (cycling on across rounds) so the next goal starts
+        somewhere new and the next `_learn_priors` sees new blocks. With `reset_skips`
+        (an empty frontier), skipped goals also get another try."""
         index = self.goals_done + 1
         started_at = time.time()
         name = f"g{index:03d}"
@@ -411,9 +418,9 @@ class _Life:
             backend=self.backend, llm=self.llm, log=log, inventory=dict(observation.inventory), natural=True,
             deadline=time.monotonic() + min(self.config.goal_wall_clock_s, max(self._remaining_s(), 0.0)),
         )
-        goal = Goal(EXPLORE_GOAL, 1, 0, (), "nothing left to learn here")
+        goal = Goal(EXPLORE_GOAL, 1, 0, (), reason)
         log.event("goal", index=index, item=goal.item, count=goal.count, reason=goal.reason, budget=task.budget)
-        self.backend.say("Nothing left to learn here; exploring for new blocks.")
+        self.backend.say("Nothing left to learn here; exploring for new blocks." if reset_skips else "Moving on to find new ground.")
 
         all_ok = True
         while episode.can_act and episode.actions < EXPLORES_PER_ROUND:
@@ -422,8 +429,9 @@ class _Life:
             all_ok &= episode.act(Action("explore", direction=direction)).ok
         result = episode.finish(success=all_ok)
 
-        self.curriculum.skipped.clear()
-        self.curriculum.failures.clear()
+        if reset_skips:
+            self.curriculum.skipped.clear()
+            self.curriculum.failures.clear()
         self.goals_done = index
         record = self._goal_record(index, goal, task.budget, result, started_at, interrupted=False)
         self._save(record)
