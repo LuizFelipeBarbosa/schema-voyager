@@ -49,7 +49,7 @@ pushed to `origin` until the user says so.
 | S12 home, storage, composite goals | done | a | Contract v3.5; 12 lanes merged (pytest 1326, bot 471); live `runs/v3-m5-live-final` ALL PASS (junk stored in the home chest, 8 torches withdrawing the stored coal, get ready for night as 3 ordered children each checked); not pushed |
 | S13 mine reach (`unreachable` ore) | done | b | v3.0g; 4 lanes merged (pytest 997, bot 313); live `runs/v3-reach-2024` 1/44 ore `unreachable`, 11/12 iron goals, `runs/v3-reach-31337` 0/13, 4/4; `v2_iron.js` GATE PASS; not pushed |
 | S14 polish | done | a | Contract v3.0h; 11 lanes merged (pytest 1106 at 77b4bd1, 1147 on fed3117; bot 338/356); live `runs/v3-polish-live`: bot killed mid-goal -> `interrupted` `bot`, requeued, `done`; panel by `live.json`; second house leaves no scaffold; guard live test ALL PASS; not pushed |
-| S15 polish, round 2 | running | a | From the review backlog round 2 and the S08/S12/S13/S14 reports; lanes station-dig, mobs-seen, bot-stuck, yard-reach, panel-pid, build-ring, hunt-bounds, explore-cap, ops |
+| S15 polish, round 2 | done | a | Contract v3.0i; 19 lanes merged (pytest 1404, bot 531); live: learn 30 min `runs/v3-polish2-learn2` (6 mob types, kill priors, 0 `used_furnace: false`), hunger `runs/v3-polish2-hunger5` PASS, home `runs/v3-polish2-home4` ALL PASS, niche PASS, stuck `runs/v3-polish2-stuck2` PASS; not pushed |
 
 ## Log
 
@@ -182,6 +182,11 @@ pushed to `origin` until the user says so.
 - S15 live hunger checks (`node mc/bot/test/v3_polish2_live.js --checks hunger`): `runs/v3-polish2-hunger` FAIL (cows summoned beside a bot mid-`/mine` were never polled: polls run only between steps), so 6aa436d merge `v3/mobs-seen-2` (the bot logs `mob_seen` from a 1 s sampler; the life records them; contract b6fb1f8). `runs/v3-polish2-hunger2` (learn): `kill_cow` 117 s after summoning, 9 more types seen naturally (sheep, pig, armadillo, creeper, skeleton, zombie, enderman, wolf), and the curriculum ran "3 cooked_mutton" as kill sheep then smelt; no hunger goal (the bot held food). `runs/v3-polish2-hunger3` (play): hunger goal s001 killed 6 cows but auto-eat ate each raw beef (food under `startAt` 14), so 8255b5e merge `v3/keep-food` (`/keep_food`; contract). `runs/v3-polish2-hunger4`: kill then smelt x4, delta exact, but the starving bot ate 2 of the 4 cooked beef and the goal failed, so a0ae537 merge `v3/keep-food-2` (the goal's own food is kept too). `runs/v3-polish2-hunger5` (13:31, play, easy, `effect give VoyagerBot hunger 30 255`): **PASS**, s003 "hunger: 4 cooked_beef" done in 143 s (tools, furnace, kill cow x2, smelt beef x4 ok {beef -4, cooked_beef +4}), then the bot ate.
 - S15 live home checks (`--checks unreachable`, `s12-houses`, peaceful, `BOT_OWNERS=Otopo,Tester`, play, resumed copies of `runs/v3-polish-live`): `-home` and `-home2` FAIL (the script's glass ring leaked: grass, then a way over it); script fixes e4a9e5d, 8edfdf9, 16cb667. `runs/v3-polish2-home4` (13:10) **ALL PASS**: u005 one `home_unreachable` chest [12,67,13] "moved" (its 19 stacks in the event; `bad_slots`, `moved`), then system goal s001 "a chest for my home" done, u006 furnished the new chest at [16,67,8] (reach checked first) and stored in it, never touched the walled-in chest; time to the first plan step 56.8 s (the stalled goal) vs 17 s.
 - S15 fae42bd `world-restore.sh`: an unseeded snapshot goes into the folder the server will start (after a seeded restore the properties name `world-<seed>`). pytest 1401 (1 skipped), bot 528, panel pass.
+- 13:34-14:05 S15 live `runs/v3-polish2-learn2` (final code a0ae537; `fresh-2024`, easy, daylight on, learn, 30 min): `wall_clock`, 38 goals, 37 ok, 1 interrupted, 0 deaths, $0.37. 16 smelts all ok (6 underground), 0 `used_furnace: false`. Mob types recorded: 6 (zombie, creeper, cow, sheep, wolf, pig), all asked; kill priors cow and pig certified, sheep, zombie, creeper, wolf hypotheses; 5 food goals (cooked_beef x2, cooked_porkchop x3) ran as kill then smelt, all ok.
+- S15 ad995e9 merge `v3/keep-food-reset` (a life sends `keep_food([])` at its start); c9bbf4e merge `v3/polish2-live-more` (live `niche` and `stuck` checks); e101f1b the stuck check retries its `/smelt` until it takes the lock. pytest 1404 (1 skipped), bot 531, panel pass.
+- 14:06 S15 live `--checks niche` (`logs/polish2-niche.log`): a 1x1 shaft at y 40, a held furnace: `/smelt` answered ok, `niche` [-48,40,33], `travel.dug` {stone: 1}, delta exactly {raw_iron -1, coal -1, iron_ingot +1}, furnace back. PASS.
+- 14:18-14:23 S15 live `runs/v3-polish2-stuck2` (`--checks stuck`, peaceful: on easy a zombie made the guard interrupt the 20-item smelt in `runs/v3-polish2-stuck`): the smelt held the lock 200 s; `bot_down`/`bot_back` (409 `/reset_episode`), again (409 `/observe`), then `bot_stuck` (losses 3, no wait) and "Life over: bot_stuck". PASS.
+- 14:24 S15 live seed: `world-snapshot.sh s15-seed-check` wrote `sv2-seed` 2024 (RCON `seed`); `world-restore.sh s15-seed-check` "using the snapshot's seed 2024 (overriding SV2_SEED=1001)"; server-a now names `world-2024`, level-seed 2024. Instance a down, no lock.
 
 ## S01 setup and baseline (done 2026-10-17)
 
@@ -730,3 +735,32 @@ pushed to `origin` until the user says so.
   - A human can bait the shield's hold-to-block-first with feints.
   - `/guard`'s `tactics` validation has no unit test (server.js routes aren't unit-tested).
   - The runner's `clear` wipes each fighter's inventory, the user's too in `--vs`.
+
+## S15 polish, round 2 (done 2026-10-18)
+
+- Contract v3.0i in `docs/v3-interfaces.md` and `contracts/bot_api.md`, plan S0.10. One advisor for the session (designs, two live redesigns, final review: nothing to block).
+- Musts:
+  - **A station underground**: recentre, then dig a hazard-checked niche; its drop is travel's.
+  - **Mobs seen**: every `/status`, plus `mob_seen` events from a 1 s bot sampler, because polls between steps missed a mob passed during one long action.
+  - **A stuck bot**: `bot_stuck` after 3 losses in 300 s with no action answered.
+  - **An unreachable home slot**: blamed only when the walk ended within 6 blocks of it; moved once, then dropped and retired; furnishing checks `reach` first.
+- Shoulds merged:
+  - 5 `_post` reads an unreadable error body as "";
+  - 6 `live.json` needs a python running `schema_voyager`;
+  - 7 the ring is scanned before gathering and kept per goal id;
+  - 8 kill goals search within 64 blocks, then "not found nearby";
+  - 9 `/attack` honours `protect`;
+  - 10 explore up 60 s;
+  - 11 snapshots record their seed, and an unseeded one restores into the folder the server will start;
+  - 12 the chest goal waits for a composite;
+  - 13 RUNBOOK and v2-infra.
+- Added from the live checks: `/keep_food`. A food goal keeps its raw ingredients and its own item from auto-eat until it ends, and a life resets it at its start. Without it a hunger goal never smelted: the hungry bot ate each raw beef, then the cooked beef.
+- Deferred: item 10's `#log` stalls (`runs/v3-reach-2024`): in every stalled attempt the bot didn't move at all (no route); no clear code cause.
+- Open:
+  - the 6-block blame is 3D, so a bot in a cave just under the yard can blame a good slot (one move, then the kind is retired);
+  - a moved chest's contents are abandoned (logged in the event), and a retired kind is never furnished again;
+  - the build ring across requeued attempts is unit-tested only;
+  - the `fresh-2024`, `fresh`, `fresh-22` and `s12-houses` snapshots have no `sv2-seed` (they restore as before, with a warning);
+  - `server-a/snapshots/s15-seed-check` is S15's;
+  - `runs/v3-polish2-hunger2..4` hold a store with a wrong 2:1 `smelt_cooked_beef` revision, learned before `/keep_food` (`-hunger4` contradicts and demotes it).
+
