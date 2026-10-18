@@ -43,7 +43,7 @@ pushed to `origin` until the user says so.
 | S06 goals you give it | done | a | M1: 9 lanes merged (pytest 715, bot 212, panel and goals pass); live `runs/v3-m1-live` 4 of 4 checks plus the panel box; not pushed |
 | S07 survival | running | b | Lanes: entities-bot, guard-core, survival-plugins, handler-abort, then guard-wire, smelt-abort, python-survival, sim-threats, then difficulty-env, whitelist, death-handling (after S06 life-queue), live |
 | S08 combat and hunting | not started | b | |
-| S09 building foundations | running | a | Contract v3.4a and bot API v3.4 (0d14636); lanes blueprint, build-bot, build-sim, build-backend, then place-live |
+| S09 building foundations | done | a | Contract v3.4a and bot API v3.4; 5 lanes merged (pytest 821, bot 258); `runs/s09-place-live` ALL PASS (16 checks) from `main`; not pushed |
 | S10 build goals | not started | a | |
 | S11 duels | not started | b | |
 | S12 home, storage, composite goals | not started | a | |
@@ -284,3 +284,44 @@ pushed to `origin` until the user says so.
   - Not clicked in a real browser (headless session): `goals.js` was driven by node with real fetch and the page's
     Origin against the live panel. Preemption by a system goal is sim-tested only (no system goal before S07's hunger).
   - The Tester client logs a mineflayer `PartialReadError` (armor-trim registry) on join; harmless.
+
+## S09 building foundations (done 2026-10-18)
+
+- Contract: 0d14636 v3.4a in `docs/v3-interfaces.md` (blueprint format, `place`/`clear`, `scan`, `set_keep_out`, the
+  simulator, ownership) and v3.4 in `contracts/bot_api.md` (`/place`, `/clear`, `/scan`, `keep_out`), after the
+  advisor's review (GO with changes: an asymmetric example, no `dirt` or scaffold blocks in `FULL_BLOCKS`, a
+  `keep_out` box so scaffold never lands in the build, doors last and placed from outside the box since pathfinder
+  never opens doors, `REPLACEABLE`/`is_full`/`carries` exported, one message per unconnected group, Claude's palette as
+  a list of `{key, block}` for structured output). Kept the plan's space for "any" (the advisor suggested `-`).
+- Stubs on `main` (0d14636): `place`/`clear` in `ActionKind`; `Action.pos` (coerced to a tuple of ints, in
+  `_V2_ACTION_FIELDS` so recorded LLM keys are unchanged); `LifeBackend.scan`/`set_keep_out`; `blueprint.py`
+  constants and signatures.
+- Merges: 4f036f4 `blueprint`, bee5841 `build-sim` (architect's merge fix: a cell with no open neighbour is
+  `unreachable`, the walks never dig), a685e52 `build-backend`, 4e68d4f `build-bot`, 6350e2d `place-live` (the live
+  test and three bot fixes it found). Suite on 6350e2d: pytest 821, bot unit 258, panel and goals pass.
+- Live (`runs/s09-place-live`, instance a, `fresh-2024`, peaceful): `node mc/bot/test/v3_place_live.js` ALL PASS
+  (16 checks) in runs 4-5 (worktree) and run 6 (`main` 6350e2d, `main`'s bot). Runs 1-3 found: the `overlapsBot`
+  margin refusing an off-centre bot; a door's upper half arriving ~0.5 s after `/place` answered; `GoalLookAtBlock`
+  unmeetable for blocks with no collision shape (torch, grass). Contract notes updated in bot API v3.4.
+- Ops: `screen -S sv2-<inst>-bot -X quit` leaves the node bot alive (orphaned under `login`); stop it by its pid in
+  `run/bot-<inst>.pid`. A bot run from a worktree used the `v2-up.sh` command line with `cd <worktree>/mc/bot`.
+- c0c4daa (advisor's final check): `Action.pos` must be three integers (`ValueError`), instead of `int()` truncating.
+- Instance a is down with no lock; no S09 worktrees or `v3/*` branches are left. Not pushed.
+- Advisor (one Opus `Plan`, three consultations): contract GO with changes (above); the live stance bugs diagnosed (the
+  `overlapsBot` margin, the unmeetable raycast goal for shapeless blocks); final check DONE.
+- Open, for S10 (build goals):
+  - A placed log can be chosen as a `#log` mine target (simulator `_candidates`, the bot's `findBlocks`), and a later
+    `dig_through` walk can tunnel through the build: M5 needs an `exclusionAreasBreak` around the home box.
+  - `set_keep_out` is backend state: set it when a build starts, clear it when the goal ends, and set it again from the
+    saved origin after `--resume` or a bot reconnect.
+  - Scan the site from one layer below the origin (`oy - 1`, height + 1): layer 0 assumes solid ground, and only a scan
+    shows the holes to fill under walls, the door and layer-0 torches.
+  - Order inside the house: torches before doors, doors last and placed from outside (`keep_out`); pathfinder can't
+    open doors.
+  - Count `build_progress` from scans or cell state, not `placed: true` (a retry answers `placed: false`).
+  - An `unreachable` costs up to about 5 s; retry it once at most. A roof 5 or more blocks up: with `canDig` off and
+    `maxDropDown` 4, the bot gets down only by its own scaffold; watch the descent live. `travel.placed` has scaffold
+    names, not positions.
+  - `/clear`'s `hazard` also fires next to flowing water (`hazardNear`). Planks dug by hand take ~3.6 s per cell.
+  - The plan's space for "any" is kept: `design_blueprint`'s prompt should say `.` for interior air. Claude's palette
+    goes over the wire as a list of `{key, block}` (v3.4a, "Claude's form").
