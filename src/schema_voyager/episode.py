@@ -49,6 +49,8 @@ class Episode:
     inventory: dict[str, int] = field(default_factory=dict)
     used_skills: list[str] = field(default_factory=list)
     revisions: int = 0
+    # v3: rule id -> the error that blocked it for the rest of this goal (see agent.py).
+    blocked_rules: dict[str, str] = field(default_factory=dict)
     # v2: a natural world (backend.look exists, rules use normalized names) and
     # the time.monotonic() moment after which the episode may not act.
     natural: bool = False
