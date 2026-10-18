@@ -44,7 +44,7 @@ test('pickThreat: an attacker that left the list is not a threat', () => {
   assert.equal(pickThreat([], origin, new Map([[1, 99]]), 100), null)
 })
 
-test('pickThreat: creeper under 5 blocks, then the most recent attacker, then the nearest', () => {
+test('pickThreat: a creeper first, then the most recent attacker, then the nearest', () => {
   const creeper = mob(1, 'creeper', 4)
   const skeleton = mob(2, 'skeleton', 12)
   const spider = mob(3, 'spider', 12)
@@ -55,7 +55,8 @@ test('pickThreat: creeper under 5 blocks, then the most recent attacker, then th
   assert.equal(pickThreat([zombie, skeleton, spider], origin, attackers, 100).id, 3)
   assert.equal(pickThreat([husk, zombie], origin, new Map(), 100).id, 4)
   const farCreeper = mob(6, 'creeper', 6, { closing: true })
-  assert.equal(pickThreat([farCreeper, zombie], origin, new Map(), 100).id, 4)
+  assert.equal(pickThreat([farCreeper, zombie], origin, new Map(), 100).id, 6)
+  assert.equal(pickThreat([zombie, skeleton, farCreeper], origin, attackers, 100).id, 6)
 })
 
 // ---- decide ----
@@ -75,7 +76,11 @@ test('decide: every mode against no threat, a creeper, low health and an ordinar
     assert.equal(decide(mode, zombie, 5.5), lowHealth, `${mode} low health`)
     assert.equal(decide(mode, zombie, 20), ordinary, `${mode} ordinary`)
   }
-  assert.equal(decide('defend', { mob: 'creeper', distance: 5 }, 20), 'fight')
+  for (const mode of ['passive', 'defend']) {
+    assert.equal(decide(mode, { mob: 'creeper', distance: 7 }, 20), 'back_off', `${mode} creeper at 7`)
+    assert.equal(decide(mode, { mob: 'creeper', distance: 7, reason: 'attacked' }, 20), 'back_off', `${mode} creeper that attacked`)
+  }
+  assert.equal(decide('off', { mob: 'creeper', distance: 2 }, 20), 'ignore')
 })
 
 // ---- fight ----
@@ -273,6 +278,43 @@ test('guard: a near zombie is a threat in defend, ignored in off, and a closing 
   target.position = new Vec3(7, 64, 0)
   assert.equal(guard.check().threat.id, 7)
   assert.equal(bot.entities[7], target)
+})
+
+test('guard: a mob that died is no threat while its body is in bot.entities, and its id is forgotten after entityGone', () => {
+  const { bot, target, guard } = guardFixture({ mode: 'defend' })
+  assert.equal(guard.check().threat.id, 7)
+  bot.emit('entityDead', target)
+  assert.equal(guard.check(), null)
+  assert.equal(guard.check(), null)
+  bot.emit('entityGone', target)
+  assert.equal(guard.check().threat.id, 7) // the id is back in use
+  guard.dispose()
+  assert.equal(bot.listenerCount('entityDead'), 0)
+  assert.equal(bot.listenerCount('entityGone'), 0)
+})
+
+test('guard: the id of a dead mob that left bot.entities without entityGone is pruned', () => {
+  const { bot, target, guard } = guardFixture({ mode: 'defend' })
+  bot.emit('entityDead', target)
+  assert.equal(guard.check(), null)
+  delete bot.entities[7]
+  assert.equal(guard.check(), null)
+  bot.entities[7] = target
+  assert.equal(guard.check().threat.id, 7)
+})
+
+test('guard: a creeper 7 blocks away and closing is a back_off in defend, and one that hit the bot too', () => {
+  const { bot, guard, advance } = guardFixture({ mode: 'defend' })
+  delete bot.entities[7]
+  bot.entities[8] = { id: 8, name: 'creeper', position: new Vec3(8, 64, 0) }
+  assert.equal(guard.check(), null)
+  advance(1)
+  bot.entities[8].position = new Vec3(7, 64, 0)
+  assert.equal(guard.check().decision, 'back_off')
+  bot.entities[8].position = new Vec3(12, 64, 0)
+  assert.equal(guard.check(), null)
+  bot.emit('entityHurt', bot.entity, bot.entities[8])
+  assert.equal(guard.check().decision, 'back_off')
 })
 
 test('guard: setMode rejects an unknown mode, and the default comes from BOT_GUARD', () => {

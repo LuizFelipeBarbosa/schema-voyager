@@ -12,7 +12,6 @@ const MODES = ['off', 'passive', 'defend']
 const NEAR_BLOCKS = 5
 const CLOSING_NEAR_BLOCKS = 8
 const ATTACKER_WINDOW_S = 3
-const CREEPER_BLOCKS = 5
 const LOW_HEALTH = 6
 const SCAN_BLOCKS = 16
 const EYE_HEIGHT = 1.62
@@ -48,7 +47,7 @@ function pickThreat (entities, botPos, recentAttackers, now, canSee = () => true
       candidates.push({ entity, mob: entity.name, id: entity.id, distance, reason: 'near' })
     }
   }
-  const rank = (c) => (c.mob === 'creeper' && c.distance < CREEPER_BLOCKS ? 0 : c.reason === 'attacked' ? 1 : 2)
+  const rank = (c) => (c.mob === 'creeper' ? 0 : c.reason === 'attacked' ? 1 : 2)
   candidates.sort((a, b) => {
     if (rank(a) !== rank(b)) return rank(a) - rank(b)
     return rank(a) === 1 ? b.hitAt - a.hitAt : a.distance - b.distance
@@ -61,7 +60,7 @@ function pickThreat (entities, botPos, recentAttackers, now, canSee = () => true
 // -> 'fight' | 'flee' | 'back_off' | 'ignore'
 function decide (mode, threat, health) {
   if (mode === 'off' || !threat) return 'ignore'
-  if (threat.mob === 'creeper' && threat.distance < CREEPER_BLOCKS) return 'back_off'
+  if (threat.mob === 'creeper') return 'back_off' // never fought: an explosion at point blank can take about 20 health
   if (health < LOW_HEALTH) return 'flee'
   return mode === 'passive' ? 'flee' : 'fight'
 }
@@ -203,6 +202,7 @@ function createGuard (bot, { eventLog, mode = process.env.BOT_GUARD || 'defend',
   const owners = parseOwners(process.env.BOT_OWNERS)
   const recentAttackers = new Map() // entity id -> seconds of its last hit on the bot
   const distanceSamples = new Map() // entity id -> [{t, distance}], oldest first
+  const deadIds = new Set() // entities that died but are still in bot.entities until entityGone
   let responding = false
   let fighting = null
 
@@ -211,7 +211,11 @@ function createGuard (bot, { eventLog, mode = process.env.BOT_GUARD || 'defend',
     if (source.type === 'player' && owners.includes(String(source.username).toLowerCase())) return // never fight an owner
     recentAttackers.set(source.id, now())
   }
+  const onEntityDead = (entity) => deadIds.add(entity.id)
+  const onEntityGone = (entity) => deadIds.delete(entity.id)
   bot.on('entityHurt', onEntityHurt)
+  bot.on('entityDead', onEntityDead)
+  bot.on('entityGone', onEntityGone)
 
   // Distance to `entity` fell by CLOSING_DROP_BLOCKS or more since a sample at least CLOSING_SAMPLE_AGE_S old.
   function sampleClosing (id, distance, t) {
@@ -226,8 +230,9 @@ function createGuard (bot, { eventLog, mode = process.env.BOT_GUARD || 'defend',
     const t = now()
     const botPos = bot.entity.position
     const list = []
+    for (const id of deadIds) if (!bot.entities[id]) deadIds.delete(id)
     for (const entity of Object.values(bot.entities)) {
-      if (entity === bot.entity || !entity.position) continue
+      if (entity === bot.entity || !entity.position || deadIds.has(entity.id)) continue
       const distance = botPos.distanceTo(entity.position)
       if (distance > SCAN_BLOCKS) continue
       const kind = entity.type === 'player' ? 'player' : bot.registry.entitiesByName[entity.name]?.type
@@ -310,7 +315,11 @@ function createGuard (bot, { eventLog, mode = process.env.BOT_GUARD || 'defend',
       }
     },
 
-    dispose () { bot.removeListener('entityHurt', onEntityHurt) }
+    dispose () {
+      bot.removeListener('entityHurt', onEntityHurt)
+      bot.removeListener('entityDead', onEntityDead)
+      bot.removeListener('entityGone', onEntityGone)
+    }
   }
 }
 

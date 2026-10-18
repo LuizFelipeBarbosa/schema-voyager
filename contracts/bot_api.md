@@ -559,10 +559,12 @@ action. A walk that falls short is not an error: `ok: true`,
   - any entity that damaged the bot in the last 3 s (mineflayer's `entityHurt(entity, source)`, where `source` is
     the cause: the skeleton, not its arrow). A hit from a player named in `BOT_OWNERS` never counts: the guard
     never fights an owner (and M3's `guard me` never targets the guarded owner).
-  - Several at once: a creeper closer than 5 blocks first, then the most recent attacker, then the nearest.
+  - A mob that died (`entityDead`) is never a threat while its body is still in `bot.entities`.
+  - Several at once: a creeper first (at any distance), then the most recent attacker, then the nearest.
 - **What the guard does** (`decide(mode, threat, health)` → `fight | flee | back_off | ignore`):
   - `off`: always `ignore`;
-  - a creeper closer than 5 blocks: `back_off`, to 8 blocks or more, in `passive` and `defend`;
+  - a creeper is never fought: any creeper threat is `back_off`, to 8 blocks or more, in `passive` and `defend`
+    (an explosion at point blank can take about 20 health on easy);
   - health below 6: `flee`, and eat if it holds food and its food is below 20 (with `bot.consume()`: auto-eat's
     `eat()` does nothing while the guard holds the plugins), in `passive` and `defend`;
   - otherwise `passive` flees and `defend` fights.
