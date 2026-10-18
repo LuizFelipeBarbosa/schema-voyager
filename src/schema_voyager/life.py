@@ -347,6 +347,11 @@ class _Life:
                 backend.stop_follow()  # a bot left following by an earlier life
             except BackendError as error:
                 print(f"[bot] could not stop following at the start: {error}")  # the first pass waits for the bot
+        if hasattr(backend, "keep_food"):
+            try:
+                backend.keep_food([])  # food kept by a life killed during a food goal
+            except BackendError as error:
+                print(f"[bot] could not clear keep_food at the start: {error}")  # the first pass waits for the bot
 
     # -- the loop ---------------------------------------------------------
 

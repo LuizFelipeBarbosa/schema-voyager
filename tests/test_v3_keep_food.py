@@ -36,9 +36,15 @@ class RecordingWorld(NaturalWorld):
             raise self.keep_food_error
 
 
-def make_life(tmp_path, world):
+def new_life(tmp_path, world, resume=False):
     config = LifeConfig(run_dir=tmp_path, world_id=WORLD)
-    return _Life(world, LLM(mode="fake", cache_path=tmp_path / "cache.jsonl"), config, LifeHooks(), resume=False)
+    return _Life(world, LLM(mode="fake", cache_path=tmp_path / "cache.jsonl"), config, LifeHooks(), resume=resume)
+
+
+def make_life(tmp_path, world):
+    life_ = new_life(tmp_path, world)
+    world.calls.clear()  # the start's own reset is tested apart
+    return life_
 
 
 def run_goal(life_, item, runner):
@@ -134,6 +140,28 @@ def test_a_failed_clear_is_only_printed(tmp_path, capsys):
     run_goal(life_, "cooked_beef", acting(world, True))
 
     assert "could not clear keep_food" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("resume", [False, True])
+def test_a_life_starts_by_clearing_what_an_earlier_life_kept(tmp_path, resume):
+    if resume:
+        first = new_life(tmp_path, RecordingWorld())  # the state to resume
+        first._save_state()
+        first.store.save(first.store_path)
+    world = RecordingWorld()
+
+    new_life(tmp_path, world, resume=resume)
+
+    assert world.calls == [("keep_food", [])]
+
+
+def test_a_failed_clear_at_the_start_is_only_printed(tmp_path, capsys):
+    world = RecordingWorld()
+    world.keep_food_error = BackendError("bot down")
+
+    new_life(tmp_path, world)
+
+    assert "could not clear keep_food at the start" in capsys.readouterr().out
 
 
 def test_the_backend_posts_the_items(monkeypatch):
