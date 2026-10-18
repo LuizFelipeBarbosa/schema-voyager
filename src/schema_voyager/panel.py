@@ -4,6 +4,10 @@ Serves the site, the episode traces, each run's life.jsonl, changes.jsonl and
 store.json, and results/ read-only, plus /episodes.json (every trace, newest
 first) and /runs.json (every run directory, newest first) so the panel can
 follow a run while it is being written. Run it from the repository root.
+
+It also steers the live life through that run's goals.jsonl (GoalQueue, v3.1f):
+POST /goals {"text", "run"?}, GET /goals.json?run=, POST /goals/<id>/cancel {"run"?}.
+POST accepts only application/json from the panel's own origin. It binds 127.0.0.1.
 """
 
 from __future__ import annotations
@@ -15,12 +19,26 @@ from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import unquote, urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
+
+from .goals import GoalQueue
 
 PANEL_PATH = "/site/dist/trace.html"
 _SERVED = re.compile(
     r"^(site/.+|results/.+|runs/[^/]+/episodes/[^/]+\.jsonl|runs/[^/]+/(life\.jsonl|changes\.jsonl|store\.json))$"
 )
+_RUN_NAME = re.compile(r"[A-Za-z0-9._-]+")
+_CANCEL_PATH = re.compile(r"^goals/([^/]+)/cancel$")
+_FINAL_STATUSES = {"done", "failed", "cancelled", "unsupported"}
+_MAX_BODY = 4096
+_MAX_GOAL_TEXT = 200
+
+
+class _ApiError(Exception):
+    def __init__(self, http_status: int, error: str, **fields: Any) -> None:
+        super().__init__(error)
+        self.status = http_status
+        self.payload = {"ok": False, "error": error, **fields}
 
 
 def serve_panel(port: int, root: Path = Path(".")) -> None:
@@ -54,6 +72,20 @@ def list_runs(root: Path) -> list[dict[str, Any]]:
     return sorted(runs, key=lambda run: -run["mtime"])
 
 
+def _find_run(root: Path, requested: Any) -> str | None:
+    """The run to steer: `requested`, else the run whose goals.jsonl changed last (None: there is none).
+
+    Raises no_live_run for a name that isn't a run directory under runs/.
+    """
+    if requested in (None, ""):
+        newest = max(root.glob("runs/*/goals.jsonl"), key=lambda path: path.stat().st_mtime, default=None)
+        return newest.parent.name if newest else None
+    valid = isinstance(requested, str) and _RUN_NAME.fullmatch(requested) and requested not in (".", "..")
+    if not valid or not (root / "runs" / requested).is_dir():
+        raise _ApiError(404, "no_live_run")
+    return requested
+
+
 class _PanelHandler(SimpleHTTPRequestHandler):
     extensions_map = {**SimpleHTTPRequestHandler.extensions_map, ".jsonl": "text/plain; charset=utf-8"}
 
@@ -67,14 +99,91 @@ class _PanelHandler(SimpleHTTPRequestHandler):
             self._send_json(list_episodes(Path(self.directory)))
         elif path == "runs.json":
             self._send_json(list_runs(Path(self.directory)))
+        elif path == "goals.json":
+            self._get_goals(parse_qs(urlsplit(self.path).query).get("run", [None])[0])
         elif _SERVED.match(path):
             super().do_GET()
         else:
             self.send_error(404)
 
-    def _send_json(self, payload: Any) -> None:
+    def _get_goals(self, requested_run: str | None) -> None:
+        try:
+            run = _find_run(Path(self.directory), requested_run)
+        except _ApiError as error:
+            self._send_json(error.payload, error.status)
+            return
+        goals = GoalQueue(Path(self.directory) / "runs" / run / "goals.jsonl").goals() if run else []
+        self._send_json({"run": run, "goals": [goal.to_json() for goal in goals]})
+
+    def do_POST(self) -> None:
+        path = posixpath.normpath(unquote(urlsplit(self.path).path)).lstrip("/")
+        cancel_match = _CANCEL_PATH.match(path)
+        try:
+            if path != "goals" and not cancel_match:
+                raise _ApiError(404, "not_found")
+            body = self._read_json_object()
+            if cancel_match:
+                payload, status = self._cancel_goal(cancel_match.group(1), body.get("run")), 200
+            else:
+                payload, status = self._submit_goal(body), 201
+        except _ApiError as error:
+            payload, status = error.payload, error.status
+        self._send_json(payload, status)
+
+    def _read_json_object(self) -> dict[str, Any]:
+        """The request body, after the origin, media type and size checks."""
+        own_port = self.server.server_address[1]
+        origin = self.headers.get("Origin")
+        if origin is not None and origin not in (f"http://127.0.0.1:{own_port}", f"http://localhost:{own_port}"):
+            raise _ApiError(403, "forbidden_origin")
+        if self.headers.get("Content-Type", "").split(";")[0].strip().lower() != "application/json":
+            raise _ApiError(415, "unsupported_media_type")
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            raise _ApiError(400, "bad_request", detail="invalid Content-Length") from None
+        if not 0 <= length <= _MAX_BODY:
+            raise _ApiError(400, "bad_request", detail="body too large")
+        try:
+            body = json.loads(self.rfile.read(length))
+        except ValueError:
+            raise _ApiError(400, "bad_request", detail="body is not valid JSON") from None
+        if not isinstance(body, dict):
+            raise _ApiError(400, "bad_request", detail="body must be a JSON object")
+        return body
+
+    def _submit_goal(self, body: dict[str, Any]) -> dict[str, Any]:
+        text = body.get("text")
+        if not isinstance(text, str):
+            raise _ApiError(400, "bad_request", detail="text must be a string")
+        text = text.strip()
+        if not 1 <= len(text) <= _MAX_GOAL_TEXT:
+            raise _ApiError(400, "bad_request", detail=f"text must be 1 to {_MAX_GOAL_TEXT} characters")
+        queue, run = self._live_queue(body.get("run"))
+        goal_id = queue.submit(text, "user")
+        return {"ok": True, "id": goal_id, "run": run, "status": "submitted"}
+
+    def _cancel_goal(self, goal_id: str, requested_run: Any) -> dict[str, Any]:
+        queue, _ = self._live_queue(requested_run)
+        goal = queue.get(goal_id)
+        if goal is None:
+            raise _ApiError(404, "unknown_goal")
+        if goal.status in _FINAL_STATUSES:
+            raise _ApiError(409, "not_cancellable", status=goal.status)
+        if not queue.cancel(goal_id):  # the life finished it meanwhile
+            raise _ApiError(409, "not_cancellable", status=queue.get(goal_id).status)
+        return {"ok": True, "id": goal_id, "status": "cancelled"}
+
+    def _live_queue(self, requested_run: Any) -> tuple[GoalQueue, str]:
+        root = Path(self.directory)
+        run = _find_run(root, requested_run)
+        if run is None:
+            raise _ApiError(404, "no_live_run")
+        return GoalQueue(root / "runs" / run / "goals.jsonl"), run
+
+    def _send_json(self, payload: Any, status: int = 200) -> None:
         body = json.dumps(payload).encode("utf-8")
-        self.send_response(200)
+        self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
