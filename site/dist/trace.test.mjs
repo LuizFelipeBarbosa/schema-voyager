@@ -285,6 +285,8 @@ assert.equal(logText({ kind: 'home_placed', station: 'crafting_table', pos: [5, 
 assert.equal(logText({ kind: 'home_placed', pos: [5, 76, 36] }), 'home station placed at 5 76 36');
 assert.match(logText({ kind: 'home_place_failed', station: 'chest', pos: [5, 76, 36], error: 'no_support' }), /home chest not placed at 5 76 36 · no_support/);
 assert.match(logText({ kind: 'home_lost', station: 'furnace', pos: [5, 76, 36] }), /home furnace lost at 5 76 36/);
+assert.match(logText({ kind: 'home_unreachable', station: 'chest', pos: [5, 76, 36], action: 'moved' }), /chest at 5 76 36 can't be reached: moved/);
+assert.match(logText({ kind: 'home_slot_bad', station: 'furnace', pos: [5, 76, 36] }), /5 76 36 can't be reached/);
 assert.match(logText({ kind: 'bot_stuck', goal_id: 'u001', losses: 3, window_s: 12.5, error: 'busy' }), /life stopped: the bot was stuck \(busy\) after 3 losses in 12.5 s/);
 assert.equal(logText({ kind: 'goal_children', goal_id: 'u004', children: [{ id: 'u005', label: '8 torches' }, { id: 'u006', label: '4 cooked beef' }] }), 'u004 split into u005 8 torches, u006 4 cooked beef');
 assert.match(logText({ kind: 'goal_replanned', goal_id: 'u004', failed: 'u005', reason: 'no coal', children: [{ id: 'u007', label: 'x' }] }), /u004 replanned after u005 failed \(no coal\) · 1 new children/);

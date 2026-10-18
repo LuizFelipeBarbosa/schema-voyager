@@ -28,12 +28,14 @@ def test_places_round_trip_of_the_contract_example():
     assert loaded.stations == {"chest": (5, 76, 36), "crafting_table": (7, 76, 36)}
     assert loaded.stored == {"coal": 64, "dirt": 120}
     assert loaded.chest_goal == "u004"
-    assert loaded.to_json() == {**EXAMPLE, "chest_goal": "u004"}
+    assert loaded.to_json() == {**EXAMPLE, "chest_goal": "u004", "bad_slots": [], "moved": [], "retired": []}
 
 
 def test_places_without_a_home_or_a_door_round_trip():
     empty = Places()
-    assert empty.to_json() == {"home": None, "stations": {}, "stored": {}, "chest_goal": None}
+    assert empty.to_json() == {
+        "home": None, "stations": {}, "stored": {}, "chest_goal": None, "bad_slots": [], "moved": [], "retired": [],
+    }
     assert Places.from_json(empty.to_json()) == empty
     doorless = Places(home=Home("u1", "hut", ORIGIN, SIZE, None))
     assert doorless.to_json()["home"]["door"] is None

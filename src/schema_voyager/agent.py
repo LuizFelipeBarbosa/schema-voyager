@@ -16,6 +16,7 @@ from . import normalize
 from .episode import Episode
 from .goals import goal_label
 from .llm import LLM, LLMError
+from .places import blames_slot
 from .models import Action, EpisodeResult, GoalSpec, Outcome, Rule, Skill
 from .planner import PlanningError, PlanStep, make_plan, make_plan_for, withdrawals
 from .schema_store import MIN_CONFIRMATIONS, MIN_EPISODES, SchemaStore, Transition, applies
@@ -201,6 +202,8 @@ def _withdraw_from_chest(episode: Episode, to_withdraw: dict[str, int], refused_
                 home = replace(home, lost=home.lost | {"chest"})
             elif outcome.error in ("unreachable", "interrupted", "timeout"):
                 home = replace(home, skipped=home.skipped | {"chest"})
+                if outcome.error == "unreachable" and blames_slot(home.chest, outcome.detail.get("position")):
+                    home = replace(home, unreachable=home.unreachable | {"chest"})
             episode.home = home
             if not outcome.ok:
                 refused_raw_ids.add(raw_id)
@@ -217,7 +220,11 @@ def _note_unusable_station(episode: Episode, action: Action, outcome: Outcome) -
     if outcome.detail.get("station_gone"):
         episode.home = replace(episode.home, lost=episode.home.lost | {kind})
     elif outcome.detail.get("station_unreachable"):
-        episode.home = replace(episode.home, skipped=episode.home.skipped | {kind})
+        home = replace(episode.home, skipped=episode.home.skipped | {kind})
+        cell = home.stations.get(kind)
+        if cell is not None and blames_slot(cell, outcome.detail.get("position")):
+            home = replace(home, unreachable=home.unreachable | {kind})
+        episode.home = home
 
 
 def _visible(episode: Episode, observation=None) -> dict[str, int]:

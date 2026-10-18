@@ -31,7 +31,7 @@ from .inventory import SCAFFOLD_BLOCKS, junk_to_store, junk_to_toss
 from .llm import LLM, LLMError, SpendCapReached, vanilla_foods, vanilla_items
 from .mineflayer_backend import BackendError
 from .models import HOME_RANGE, Action, EpisodeResult, GoalSpec, HomeStock, Observation, Rule, Task, Unsupported
-from .places import HOME_STATION_KINDS, Home, Places, home_box, home_from_build, home_from_protected, yard_scan_box, yard_slots
+from .places import HOME_STATION_KINDS, Home, Places, blames_slot, home_box, home_from_build, home_from_protected, yard_scan_box, yard_slots
 from .planner import PlanningError, PlanStep, make_plan
 from .schema_store import TRAIN_WORLD, SchemaStore
 from .trace import EpisodeLog
@@ -916,6 +916,7 @@ class _Life:
 
     def _end_parent(self, parent: GoalEntry, status: str, reason: str) -> None:
         self._log_event("goal_parent_end", goal_id=parent.id, status=status)
+        self._queue_chest_goal()  # a cancelled parent settles outside any goal's end
         if status == "done":
             self._say(f"Done {parent.id}: {parent.text}.")
         elif status == "failed":
@@ -1428,6 +1429,8 @@ class _Life:
         result = self.backend.deposit(chest, items)
         if result.error == "not_found":
             self._drop_station("chest")
+        elif result.error == "unreachable" and blames_slot(chest, result.detail.get("position")):
+            self._home_unreachable("chest")
         elif result.error is None:
             self.places.stored = dict(result.contents)
             self._save_state()
@@ -1555,14 +1558,27 @@ class _Life:
         Returns the observation to go on from (a new one if anything was scanned or placed)."""
         home = self.places.home
         stations = self.places.stations
-        unplaced = [kind for kind in HOME_STATION_KINDS if observation.inventory.get(kind, 0) >= 1 and kind not in stations]
+        unplaced = [
+            kind for kind in HOME_STATION_KINDS
+            if observation.inventory.get(kind, 0) >= 1 and kind not in stations and kind not in self.places.retired
+        ]
         if home is None or not unplaced or math.dist(observation.position, home.origin) > HOME_RANGE:
             return observation
 
         scan = self.backend.scan(*yard_scan_box(home))
         for kind in unplaced:
             failure = None
-            for cell in yard_slots(home, scan, stations.values())[:SLOTS_TRIED_PER_STATION]:
+            for cell in yard_slots(home, scan, stations.values(), self.places.bad_slots)[:SLOTS_TRIED_PER_STATION]:
+                if hasattr(self.backend, "reach"):  # v2's scripted test backends have none
+                    walk = self.backend.reach(cell)
+                    if not walk.ok and blames_slot(cell, walk.detail.get("position")):
+                        self.places.bad_slots.append(cell)
+                        self._save_state()
+                        self._log_event("home_slot_bad", station=kind, pos=list(cell))
+                        continue
+                    if not walk.ok:
+                        self._log_event("home_place_failed", station=kind, pos=list(cell), error="unreachable")
+                        return self._after_furnishing()
                 outcome = self.backend.act(Action("place", target=kind, pos=cell, scaffold=False))
                 if outcome.ok:
                     stations[kind] = cell
@@ -1579,6 +1595,9 @@ class _Life:
                     break
             if failure is not None:
                 self._log_event("home_place_failed", **failure)
+        return self._after_furnishing()
+
+    def _after_furnishing(self) -> Observation:
         observation = self.backend.observe()
         self._inventory_seen = observation.inventory
         return observation
@@ -1592,6 +1611,8 @@ class _Life:
         for kind in HOME_STATION_KINDS:
             if kind in home.lost and kind in self.places.stations:
                 self._drop_station(kind)
+            elif kind in home.unreachable and kind in self.places.stations:
+                self._home_unreachable(kind)
 
     def _drop_station(self, kind: str) -> None:
         """A station or chest found gone is forgotten (a lost chest empties `stored`)."""
@@ -1602,11 +1623,39 @@ class _Life:
         self._send_places()
         self._log_event("home_lost", station=kind, pos=list(pos))
 
+    def _home_unreachable(self, kind: str) -> None:
+        """A station or chest whose slot the bot can't walk to (v3.0i): the cell is a bad slot. The first time the kind
+        is moved (forgotten, so furnishing puts one elsewhere; a chest's contents are abandoned and one more chest
+        goal is allowed), the second time it is dropped for good."""
+        places = self.places
+        cell = places.stations[kind]
+        moving = kind not in places.moved
+        self._log_event(
+            "home_unreachable", station=kind, pos=list(cell), action="moved" if moving else "dropped",
+            stored=dict(places.stored) if kind == "chest" else {},
+        )
+        places.bad_slots.append(cell)
+        if moving:
+            places.moved.add(kind)
+            del places.stations[kind]
+            if kind == "chest":
+                places.stored = {}
+                places.chest_goal = None
+            self._save_state()
+            self._send_places()
+        else:
+            places.retired.add(kind)
+            self._drop_station(kind)
+
     def _queue_chest_goal(self) -> None:
         """When a goal ends and the home has no chest, none is held and none was ever asked for, queue one system
-        goal to get one, once per home (v3.5c)."""
+        goal to get one, once per home (v3.5c). Not while a composite parent is open, nor once the chest is retired."""
         places = self.places
         if places.home is None or "chest" in places.stations or self._inventory_seen.get("chest", 0) > 0 or places.chest_goal:
+            return
+        if "chest" in places.retired or any(
+            entry.children and entry.status not in FINAL_GOAL_STATUSES for entry in self.queue.goals()
+        ):
             return
         text = "a chest for my home"
         goal_id = self.queue.submit(text, "system")
