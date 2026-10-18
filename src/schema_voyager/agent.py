@@ -36,8 +36,8 @@ MAX_PREDICTS_CHARS = 120
 BeforeStep = Callable[[Episode, PlanStep, list[PlanStep]], None]
 
 # Search and travel failures are handled by Episode.act and the life's exploration round, never by blocking,
-# and a fight (interrupted, v3.2) says nothing about the rule.
-_NEVER_BLOCKED_ERRORS = frozenset({"not_found", "unreachable", "hazard", "timeout", "not_connected", "interrupted"})
+# a fight (interrupted, v3.2) says nothing about the rule, and a mob that ran away (escaped, v3.3) neither.
+_NEVER_BLOCKED_ERRORS = frozenset({"not_found", "unreachable", "hazard", "timeout", "not_connected", "interrupted", "escaped"})
 
 
 def run_schemavoyager(
@@ -98,7 +98,7 @@ def pursue(
 
     while not _all_held(episode, needs) and episode.can_act:
         try:
-            visible = normalize.counts(episode.backend.observe().nearby) if episode.natural else None
+            visible = _visible(episode) if episode.natural else None
             rules = [
                 rule for rule in store.usable_rules(episode.world_id)
                 if rule.id not in excluded and rule.id not in episode.blocked_rules
@@ -154,6 +154,13 @@ def pursue(
             if _deviates(episode, outcome, step, plan[position + 1:]):
                 break  # a drop rolled out of reach; replan without revising anything
     return completed
+
+
+def _visible(episode: Episode) -> dict[str, int]:
+    """Counts in view now: block families, and mobs by name (v3.3)."""
+    observation = episode.backend.observe()
+    mobs = {mob: info["count"] for mob, info in observation.entities.items()}
+    return normalize.counts(observation.nearby) | mobs
 
 
 def _all_held(episode: Episode, needs: dict[str, int]) -> bool:
@@ -250,6 +257,8 @@ def _revision_description(rule: Rule) -> str:
         else:
             tool_text = f"{tools[0]} (+{len(tools) - 1} more)"
         return f"{rule.subject} needs {tool_text}"
+    if rule.kind == "kill":
+        return f"kill {rule.subject}"
     return f"craft {rule.subject}"
 
 
@@ -353,7 +362,7 @@ def _goal_line(task: Task, plan: list[PlanStep]) -> str:
     if untested is None:
         return f"{goal} (all rules known)"
     action = untested.action
-    tested = f"{_plain(action.target or '')} with {action.tool}" if action.kind == "mine" and action.tool else _plain(action.describe())
+    tested = f"{_plain(action.target or '')} with {action.tool}" if action.kind == "mine" and action.tool else _plain(action.describe())  # a kill reads "kill cow"
     return f"{goal}, to test {tested}"
 
 
@@ -370,6 +379,8 @@ def _rule_story(store: SchemaStore, step: PlanStep) -> dict:
 def _predicts(rule: Rule, action: Action | None = None) -> str:
     """One line for what a rule predicts: `2 planks -> 4 stick`, `coal_ore with wooden_pickaxe -> 1 coal`."""
     gains = _counts_text(rule.yields())
+    if rule.kind == "kill":
+        return f"{rule.subject} -> drops within {_drop_ranges(rule)}"
     if rule.kind == "mine":
         tools = [action.tool] if action is not None and action.tool else rule.preconditions.get("tool_any", [])
         return f"{_plain(rule.subject)} with {' / '.join(tools)} -> {gains}" if tools else f"{_plain(rule.subject)} -> {gains}"
@@ -379,6 +390,12 @@ def _predicts(rule: Rule, action: Action | None = None) -> str:
     station = rule.preconditions.get("station")
     where = {"furnace": " in a furnace", "crafting_table": " at a crafting_table"}.get(station, f" at a {station}" if station else "")
     return f"{' + '.join(inputs)}{where} -> {gains}"
+
+
+def _drop_ranges(rule: Rule) -> str:
+    """A kill rule's allowed drops as `beef 1-3, leather 0-2`."""
+    allowed = predict(rule, Action("kill", rule.subject))["allowed"]
+    return ", ".join(f"{item} {low}-{high}" for item, (low, high) in allowed.items())
 
 
 def _plain(item: str) -> str:
@@ -444,7 +461,7 @@ def _revise(episode: Episode, store: SchemaStore, step: PlanStep, result: Check,
 
 
 def _hypothesis_text(rule: Rule) -> str:
-    return _revision_description(rule) if rule.kind == "mine" else _predicts(rule)
+    return _revision_description(rule) if rule.kind in ("mine", "kill") else _predicts(rule)
 
 
 def _summarize(rule: Rule) -> str:
@@ -454,5 +471,7 @@ def _summarize(rule: Rule) -> str:
         what = ", ".join(f"{n} {item}" for item, n in drops.items()) or "nothing"
         how = f"with {' / '.join(tools)}" if tools else "with any tool or bare hand"
         return f"mine {rule.subject} {how} -> drops {what}. {rule.rationale}"
+    if rule.kind == "kill":
+        return f"kill {rule.subject} -> drops within {_drop_ranges(rule)}. {rule.rationale}"
     gains = ", ".join(f"{n} {item}" for item, n in rule.yields().items())
     return f"craft {rule.subject} -> {gains}. {rule.rationale}"
