@@ -30,8 +30,10 @@ function fixture ({ mode = 'defend', owners = 'Otopo' } = {}) {
   bot.pathfinder = {
     goal: null,
     setGoal (goal) { this.goal = goal; bot.setGoals.push(goal) },
-    setMovements: (movements) => bot.movementsSet.push(movements)
+    setMovements: (movements) => bot.movementsSet.push(movements),
+    isMoving: () => bot.pathMoving
   }
+  bot.pathMoving = false
   const pvpCalls = []
   bot.pvp = Object.assign(new EventEmitter(), {
     attack (entity) { pvpCalls.push({ entity, movements: this.movements }) },
@@ -119,11 +121,37 @@ test('follow: the goal is set when free, not set again, not set while busy, and 
   assert.equal(f.bot.pathfinder.goal.entity, tester)
   assert.equal(f.bot.pathfinder.goal.rangeSq, 16)
   assert.deepEqual(f.bot.movementsSet, [f.movements])
+  f.bot.pathMoving = true
   f.follow.tick()
   assert.equal(f.bot.setGoals.length, 1)
+  f.bot.pathMoving = false
   f.bot.pathfinder.setGoal(null) // a fight ends and clears the goal
   f.follow.tick()
   assert.equal(f.bot.setGoals.length, 3)
+  assert.equal(f.bot.pathfinder.goal.entity, tester)
+})
+
+test('follow: a free bot resting more than distance + 1.5 from the player gets a fresh goal, unless moving or within', () => {
+  const f = fixture()
+  const tester = f.addPlayer(player(5, 'Tester', 5.5))
+  f.follow.start('Tester', 3)
+  f.follow.tick()
+  assert.equal(f.bot.setGoals.length, 1)
+  f.bot.pathMoving = true
+  f.follow.tick()
+  assert.equal(f.bot.setGoals.length, 1)
+  f.bot.pathMoving = false
+  tester.position = new Vec3(4, 64, 0) // within distance + 1.5
+  f.follow.tick()
+  assert.equal(f.bot.setGoals.length, 1)
+  tester.position = new Vec3(5.5, 64, 0)
+  f.setFree(false)
+  f.follow.tick()
+  assert.equal(f.bot.setGoals.length, 1)
+  f.setFree(true)
+  f.follow.tick()
+  assert.equal(f.bot.setGoals.length, 2)
+  assert.notEqual(f.bot.setGoals[1], f.bot.setGoals[0])
   assert.equal(f.bot.pathfinder.goal.entity, tester)
 })
 
