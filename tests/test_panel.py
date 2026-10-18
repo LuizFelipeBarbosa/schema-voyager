@@ -11,6 +11,7 @@ from http.server import ThreadingHTTPServer
 from schema_voyager import blueprint
 from schema_voyager.goals import GoalQueue, GoalSpec
 from schema_voyager.llm import FAKE_HUT
+from schema_voyager import panel
 from schema_voyager.panel import _PanelHandler
 
 
@@ -379,6 +380,18 @@ def test_goals_json_previews_build_goals(tmp_path):
         server.server_close()
 
 
+LIFE_COMMAND = "/repo/.venv/bin/python -m schema_voyager.demo life --llm fake"
+
+
+def _ps_prints(monkeypatch, stdout="", returncode=0, raises=None):
+    def fake_run(*args, **kwargs):
+        if raises:
+            raise raises
+        return subprocess.CompletedProcess(args[0], returncode, stdout, "")
+
+    monkeypatch.setattr(panel.subprocess, "run", fake_run)
+
+
 def _live(root, run, pid, started="2026-10-18T09:00:00"):
     (root / "runs" / run / "live.json").write_text(json.dumps({"pid": pid, "started": started, "mode": "play"}))
 
@@ -389,7 +402,8 @@ def _dead_pid():
     return process.pid
 
 
-def test_live_run_beats_newer_goals_file(tmp_path):
+def test_live_run_beats_newer_goals_file(tmp_path, monkeypatch):
+    monkeypatch.setattr(panel, "_is_life_process", lambda pid: True)
     _two_runs(tmp_path)
     _live(tmp_path, "old", os.getpid())
     server = _start_panel(tmp_path)
@@ -417,7 +431,50 @@ def test_dead_or_malformed_live_json_falls_back_to_newest_goals_file(tmp_path):
         server.server_close()
 
 
-def test_several_live_runs_are_ambiguous(tmp_path):
+def test_live_pid_running_another_program_is_stale(tmp_path, monkeypatch):
+    _two_runs(tmp_path)
+    _live(tmp_path, "old", os.getpid())
+    _ps_prints(monkeypatch, "/usr/bin/vim notes.txt\n")
+    assert panel._live_runs(tmp_path) == []
+    server = _start_panel(tmp_path)
+    try:
+        assert _request(server.server_address[1], "GET", "/goals.json")[1]["run"] == "new"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_live_pid_running_the_life_is_live(tmp_path, monkeypatch):
+    _two_runs(tmp_path)
+    _live(tmp_path, "old", os.getpid())
+    _ps_prints(monkeypatch, LIFE_COMMAND + "\n")
+    assert panel._live_runs(tmp_path) == ["old"]
+
+
+def test_failing_or_timed_out_ps_is_stale(tmp_path, monkeypatch):
+    _two_runs(tmp_path)
+    _live(tmp_path, "old", os.getpid())
+    _ps_prints(monkeypatch, LIFE_COMMAND, returncode=1)
+    assert panel._live_runs(tmp_path) == []
+    _ps_prints(monkeypatch, raises=subprocess.TimeoutExpired("ps", 2))
+    assert panel._live_runs(tmp_path) == []
+    _ps_prints(monkeypatch, raises=FileNotFoundError("ps"))
+    assert panel._live_runs(tmp_path) == []
+
+
+def test_is_life_process_with_real_ps():
+    sleep = "import time; time.sleep(30)"
+    for argv, expected in (([sys.executable, "-c", sleep], False), ([sys.executable, "-c", sleep, "schema_voyager"], True)):
+        process = subprocess.Popen(argv)
+        try:
+            assert panel._is_life_process(process.pid) is expected
+        finally:
+            process.kill()
+            process.wait()
+
+
+def test_several_live_runs_are_ambiguous(tmp_path, monkeypatch):
+    monkeypatch.setattr(panel, "_is_life_process", lambda pid: True)
     _two_runs(tmp_path)
     _live(tmp_path, "old", os.getpid(), started="2026-10-18T10:00:00")
     _live(tmp_path, "new", os.getpid(), started="2026-10-18T09:00:00")
